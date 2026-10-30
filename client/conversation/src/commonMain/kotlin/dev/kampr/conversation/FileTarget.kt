@@ -18,9 +18,11 @@ import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
+import dev.kampr.shared.ui.filePlace
 import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.wire.Attachment
 import kotlinx.coroutines.launch
@@ -92,9 +94,9 @@ fun diffTarget(path: String): Attachment = Attachment(
     name = fileName(path),
 )
 
-// One press: fetch, then show what came back. Absent for a read-only device, which the route
-// refuses outright — the whole security argument for this form of id is that a device that may
-// type into a terminal can already `cat` the file, and a device that may not is exactly the one
+// One press opens the file viewer over the whole window. Absent for a read-only device, which the
+// route refuses outright — the whole security argument for this form of id is that a device that
+// may type into a terminal can already `cat` the file, and a device that may not is exactly the one
 // that must not reach `~/.ssh/id_rsa`.
 @Composable
 fun FileAffordance(path: String, attachments: AttachmentStore, modifier: Modifier = Modifier) {
@@ -102,13 +104,14 @@ fun FileAffordance(path: String, attachments: AttachmentStore, modifier: Modifie
     if (io.readOnly) return
     val tokens = Kampr.tokens
     val scope = rememberCoroutineScope()
+    val openPlace = LocalOpenPlace.current
     val att = remember(path) { fileTarget(path) }
     val state = attachments.state(att.id)
     val name = att.name ?: path
 
-    // A recording that arrived becomes the player in place. It is not sent to a viewer over the
-    // whole pane the way a picture and a file are: there is nothing to look at, and a sound the
-    // reader started has to keep running while they go on reading the transcript under it.
+    // A recording that arrived becomes the player in place. It is not sent to the viewer the way a
+    // picture and a file are: there is nothing to look at, and a sound the reader started has to
+    // keep running while they go on reading the transcript under it.
     if (state is AttachmentState.Sound) {
         SoundBar(att, state, attachments, modifier)
         return
@@ -116,20 +119,16 @@ fun FileAffordance(path: String, attachments: AttachmentStore, modifier: Modifie
 
     val audible = offerOn(att, LocalVoices.current, path) == AttachmentOffer.Audio
     val verb = if (audible) "Play" else "Open"
+    val act: () -> Unit = if (audible) {
+        { scope.launch { attachments.open(io, att) } }
+    } else {
+        { openPlace(filePlace(attachments.pane, path)) }
+    }
     val (word, tone, press) = when (state) {
         AttachmentState.Fetching -> Triple("fetching", tokens.color.working, null)
-
-        is AttachmentState.Failed -> Triple(state.reason, tokens.color.blocked, {
-            scope.launch { attachments.reveal(io, att) }
-            Unit
-        })
-
+        is AttachmentState.Failed -> Triple(state.reason, tokens.color.blocked, act)
         is AttachmentState.Saved -> Triple("saved to ${state.where}", tokens.color.done, null)
-
-        else -> Triple(verb.lowercase(), tokens.color.dim, {
-            scope.launch { attachments.reveal(io, att) }
-            Unit
-        })
+        else -> Triple(verb.lowercase(), tokens.color.dim, act)
     }
 
     DisableSelection {

@@ -85,6 +85,7 @@ impl Node {
     /// retries for as long as the process lives, so `kampr serve` binds its port whether or not
     /// a herd is running and can serve its own "herdr is not running" state.
     pub async fn start(config: Config, state_dir: &Path) -> Result<Arc<Self>> {
+        crate::upload::sweep(state_dir);
         let sessions = Sessions::open(&config);
         let auth = Arc::new(build_auth(&config, state_dir).await?);
         // A hub is told its own node id so a peer cannot advertise the machine the operator is

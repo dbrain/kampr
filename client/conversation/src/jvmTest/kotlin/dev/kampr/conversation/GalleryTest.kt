@@ -21,7 +21,10 @@ import dev.kampr.shared.net.fileAttachmentId
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.FilesPlace
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.recordPlace
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Turn
 import kotlin.test.Test
@@ -47,11 +50,13 @@ class GalleryTest {
     @Test
     fun eightSentPicturesAreEightNamedTilesThatStayAcrossALeaveAndAReturn() = runComposeUiTest {
         val store = AttachmentStore(PANE_ID)
+        val opened = mutableListOf<FilesPlace>()
         var here by mutableStateOf(true)
         setContent {
             CompositionLocalProvider(
                 LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
                 LocalPaneIo provides node,
+                LocalOpenPlace provides { opened += it },
             ) {
                 if (here) {
                     Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -72,7 +77,7 @@ class GalleryTest {
         assertEquals(8, node.asked.size, "a tile fetched again: ${node.asked}")
 
         onNodeWithContentDescription("Open shot-6.png").performClick()
-        waitUntil(timeoutMillis = 5_000) { store.viewing?.name == "shot-6.png" }
-        assertEquals(AttachmentState.Shown::class, store.state(fileAttachmentId(SHOTS[5]))::class)
+        assertEquals(listOf<FilesPlace>(recordPlace(PANE_ID, fileTarget(SHOTS[5]))), opened)
+        assertEquals(8, node.asked.size, "opening a tile fetched the picture in the transcript as well")
     }
 }

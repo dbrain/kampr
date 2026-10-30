@@ -95,6 +95,10 @@ object KamprIcons {
         d("M5 5V1.4h9.6V11h-3.6"),
     )
     val plus = icon(16f, 1.8f, d("M8 2.2v11.6M2.2 8h11.6"))
+    val folder = icon(16f, 1.6f, d("M1.8 4.2a1.4 1.4 0 0 1 1.4-1.4h3l1.6 1.8h5a1.4 1.4 0 0 1 1.4 1.4v6.6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4Z"))
+    val machine = icon(16f, 1.5f, Glyph.Frame(1.8f, 2.5f, 12.4f, 8.5f, 1.4f), d("M5.5 13.8h5M8 11v2.8"))
+    val pulse = icon(16f, 1.5f, d("M1.2 8.6h3l1.7-4.2 3.1 7.6 1.8-3.4h4"))
+    val keyboard = icon(16f, 1.4f, Glyph.Frame(1.2f, 3.8f, 13.6f, 8.4f, 1.4f), d("M3.8 6.6h1M7.5 6.6h1M11.2 6.6h1M5 9.6h6"))
     val cross = icon(20f, 1.9f, d("M5 5l10 10M15 5 5 15"))
     val pencil = icon(16f, 1.6f, d("M10.6 2.6 13.4 5.4 5.4 13.4H2.6v-2.8z"))
     val ellipsis = icon(

@@ -31,9 +31,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Measurable
@@ -100,7 +98,6 @@ private const val ASK_AFTER_MS = 260L
 private const val MOST_PAGES_TO_REACH = 26
 private const val PAGE_WITHIN_MS = 6_000L
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun ConversationView(
     pane: PaneState,
@@ -390,48 +387,6 @@ fun ConversationView(
     var footPx by remember { mutableStateOf(0) }
     val foot = if (pane.facets.running.isEmpty()) 0 else footPx
     val density = LocalDensity.current
-    // Over the whole pane and outside the transcript's own column, because that is what a picture
-    // opened to be looked at needs — and because the card that opened it is inside a lazy list,
-    // which composes it away the moment it scrolls off.
-    attachments.viewing?.let { att ->
-        // Registered after the app's own back, so it is asked first: a viewer covers the pane, and
-        // back that left the pane would take the reader two screens back for one press.
-        BackHandler { attachments.close() }
-        when (val open = attachments.state(att.id)) {
-            is AttachmentState.Shown -> {
-                ImageViewer(
-                    image = open.image,
-                    headline = headlineOf(att),
-                    detail = detailOf(att),
-                    onSave = { scope.launch { attachments.save(att) } },
-                    onClose = { attachments.close() },
-                    saved = attachments.saved(att.id),
-                    modifier = modifier,
-                )
-                return
-            }
-
-            is AttachmentState.Text -> {
-                FileViewer(
-                    att = att,
-                    text = open.text,
-                    attachments = attachments,
-                    saved = attachments.saved(att.id),
-                    onSave = { scope.launch { attachments.save(att) } },
-                    onClose = { attachments.close() },
-                    modifier = modifier,
-                )
-                return
-            }
-
-            // Dropped out of the held set while it was open. Nothing reaches this today — the only
-            // thing that evicts is another picture being opened, and none can be while this one is
-            // — but the alternative to saying so is a blank pane with no way off it. Cleared in an
-            // effect rather than here: writing state during composition is a loop, not a fix.
-            else -> LaunchedEffect(att.id) { attachments.close() }
-        }
-    }
-
     // A stack, not a flag: `depth` says a launched conversation can launch one of its own, so
     // going in twice and coming back once has to mean something. Dropped with the pane.
     val opened = remember(pane.id) { mutableStateListOf<Block.Sub>() }

@@ -2,6 +2,7 @@ package dev.kampr.shared.platform
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import dev.kampr.shared.net.UploadSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -21,6 +22,24 @@ actual suspend fun pickFile(): PickedFile? = withContext(Dispatchers.IO) {
         val bytes = file.readBytes().takeIf { it.isNotEmpty() } ?: return@runCatching null
         PickedFile(file.name, URLConnection.guessContentTypeFromName(file.name), bytes)
     }.getOrNull()
+}
+
+actual suspend fun pickUpload(): UploadSource? = withContext(Dispatchers.IO) {
+    runCatching {
+        val chooser = JFileChooser()
+        if (chooser.showOpenDialog(null) != JFileChooser.APPROVE_OPTION) return@runCatching null
+        chooser.selectedFile?.takeIf { it.isFile }?.let(::FileSource)
+    }.getOrNull()
+}
+
+private class FileSource(file: File) : UploadSource {
+    override val name: String = file.name
+    override val size: Long = file.length()
+    private val stream = file.inputStream()
+    override suspend fun read(into: ByteArray): Int = withContext(Dispatchers.IO) { stream.read(into) }
+    override suspend fun close() {
+        withContext(Dispatchers.IO) { runCatching { stream.close() } }
+    }
 }
 
 // AWT has no paste event: a desktop's clipboard can only be read when something asks, and nothing

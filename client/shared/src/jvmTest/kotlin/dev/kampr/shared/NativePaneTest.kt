@@ -19,18 +19,19 @@ private val KILLED = DETACHED.copy(exited = NativeExit(signal = 9))
 
 class NativePaneTest {
     @Test
-    fun theFactsNameTheProviderAndOnlyWhatIsTrue() {
+    fun aKamprSessionIsTheDefaultSoOnlyItsEndIsWorthSaying() {
         val cases = listOf(
             HERDR to emptyList(),
-            LIVE to listOf("kampr"),
-            DETACHED to listOf("kampr", "not on desk"),
-            EXITED to listOf("kampr", "exited 0"),
-            KILLED to listOf("kampr", "killed by signal 9"),
-            DETACHED.copy(exited = NativeExit()) to listOf("kampr", "exited"),
+            LIVE to emptyList(),
+            DETACHED to emptyList(),
+            EXITED to listOf("exited 0"),
+            KILLED to listOf("killed by signal 9"),
+            DETACHED.copy(exited = NativeExit()) to listOf("exited"),
         )
         for ((pane, facts) in cases) assertEquals(facts, nativeFacts(pane), "$pane")
         assertEquals(null, nativeSpoken(HERDR))
-        assertEquals("Kampr session, killed by signal 9", nativeSpoken(KILLED))
+        assertEquals(null, nativeSpoken(DETACHED))
+        assertEquals("killed by signal 9", nativeSpoken(KILLED))
     }
 
     @Test

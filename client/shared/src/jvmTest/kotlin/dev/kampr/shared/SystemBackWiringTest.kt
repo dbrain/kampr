@@ -24,6 +24,7 @@ import dev.kampr.shared.ui.NoMosaic
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.Screen
 import dev.kampr.shared.ui.Sheet
+import dev.kampr.shared.ui.filePlace
 import dev.kampr.shared.wire.Wire
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -185,6 +186,56 @@ class SystemBackWiringTest {
                 }
                 waitForIdle()
                 assertEquals(Screen.Pane(PANE, PaneView.Terminal), app.screen)
+            }
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun backClosesTheOpenFileAndLeavesThePaneItWasOpenedFrom() {
+        val (app, scope) = state()
+        try {
+            runComposeUiTest {
+                app.openPane(PANE, PaneView.Terminal)
+                app.openSheet(Sheet.Actions(PANE))
+                app.open(filePlace(PANE, "/home/u/notes.md"))
+                app.open(filePlace(PANE, "/home/u/shot.png"))
+                val window = app(app)
+
+                window.press()
+                waitForIdle()
+                assertEquals(listOf(filePlace(PANE, "/home/u/notes.md")), app.files, "back pops one file")
+                assertNotNull(app.sheet, "a file covers the sheet, so the sheet waits for it")
+
+                window.press()
+                waitForIdle()
+                assertEquals(emptyList(), app.files)
+                assertEquals(Screen.Pane(PANE, PaneView.Terminal), app.screen, "back with a file open left the pane")
+
+                window.press()
+                waitForIdle()
+                assertNull(app.sheet)
+                assertEquals(Screen.Pane(PANE, PaneView.Terminal), app.screen)
+            }
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun aFileOpenOnTheHerdStillClaimsBack() {
+        val (app, scope) = state()
+        try {
+            runComposeUiTest {
+                val window = app(app)
+                app.open(filePlace(PANE, "/home/u/notes.md"))
+                waitForIdle()
+                assertEquals(true, window.claimed, "back from a file on the herd would leave the app")
+                window.press()
+                waitForIdle()
+                assertEquals(emptyList(), app.files)
+                assertEquals(false, window.claimed)
             }
         } finally {
             scope.cancel()

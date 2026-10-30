@@ -14,11 +14,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import dev.kampr.shared.net.KamprHost
+import dev.kampr.shared.net.UploadSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import java.io.InputStream
 import kotlin.coroutines.resume
 
 actual val filePickAvailable: Boolean = true
@@ -31,19 +33,44 @@ private var pickers = 0
 
 actual suspend fun pickFile(): PickedFile? {
     val activity = KamprHost.activity as? ComponentActivity ?: return null
-    val uri = suspendCancellableCoroutine<Uri?> { waiting ->
-        var launcher: ActivityResultLauncher<String>? = null
-        launcher = activity.activityResultRegistry.register(
-            "kampr-pick-${pickers++}",
-            ActivityResultContracts.GetContent(),
-        ) { picked ->
-            launcher?.unregister()
-            waiting.resume(picked)
-        }
-        waiting.invokeOnCancellation { launcher?.unregister() }
-        launcher?.launch("*/*")
-    } ?: return null
+    val uri = chosen(activity) ?: return null
     return withContext(Dispatchers.IO) { read(activity, uri) }
+}
+
+private suspend fun chosen(activity: ComponentActivity): Uri? = suspendCancellableCoroutine { waiting ->
+    var launcher: ActivityResultLauncher<String>? = null
+    launcher = activity.activityResultRegistry.register(
+        "kampr-pick-${pickers++}",
+        ActivityResultContracts.GetContent(),
+    ) { picked ->
+        launcher?.unregister()
+        waiting.resume(picked)
+    }
+    waiting.invokeOnCancellation { launcher?.unregister() }
+    launcher?.launch("*/*")
+}
+
+actual suspend fun pickUpload(): UploadSource? {
+    val activity = KamprHost.activity as? ComponentActivity ?: return null
+    val uri = chosen(activity) ?: return null
+    return withContext(Dispatchers.IO) {
+        val resolver = activity.contentResolver
+        val (name, size) = runCatching {
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { row ->
+                if (!row.moveToFirst()) return@use null
+                (if (row.isNull(0)) null else row.getString(0)) to (if (row.isNull(1)) null else row.getLong(1))
+            }
+        }.getOrNull() ?: (null to null)
+        val stream = runCatching { resolver.openInputStream(uri) }.getOrNull() ?: return@withContext null
+        StreamSource(name ?: uri.lastPathSegment ?: "upload", size, stream)
+    }
+}
+
+private class StreamSource(override val name: String, override val size: Long?, private val stream: InputStream) : UploadSource {
+    override suspend fun read(into: ByteArray): Int = withContext(Dispatchers.IO) { stream.read(into) }
+    override suspend fun close() {
+        withContext(Dispatchers.IO) { runCatching { stream.close() } }
+    }
 }
 
 private fun read(context: Context, uri: Uri): PickedFile? {

@@ -1058,10 +1058,10 @@ fn fetching(peers: &Arc<Peers>, pane: &str) -> tokio::task::JoinHandle<Result<(u
     let pane = pane.to_string();
     tokio::spawn(async move {
         let mut transfer = peers
-            .fetch_attachment(&pane, "an-id", CEILING)
+            .fetch_attachment(&pane, "an-id", CEILING, None)
             .await
             .map_err(|e| e.to_string())?;
-        let bytes = transfer.header().bytes;
+        let bytes = transfer.header().bytes.unwrap_or_default();
         let mut body = Vec::new();
         while let Some(chunk) = transfer.next_chunk().await {
             body.extend_from_slice(&chunk.map_err(|e| e.to_string())?);
@@ -1202,7 +1202,7 @@ async fn a_client_that_walks_away_stops_the_peer_sending() {
     let transfer = {
         let asked = tokio::spawn({
             let peers = peers.clone();
-            async move { peers.fetch_attachment("01JA/w1:p1", "an-id", CEILING).await }
+            async move { peers.fetch_attachment("01JA/w1:p1", "an-id", CEILING, None).await }
         });
         let rid = peer.request_but_ping().await["rid"].as_u64().expect("an rid");
         peer.send(json!({ "t": "att.open", "rid": rid, "bytes": 3, "kind": "image" }))
@@ -1361,7 +1361,7 @@ async fn a_peer_with_no_attachment_route_is_refused_rather_than_asked() {
     }
 
     let refusal = peers
-        .fetch_attachment("01JA/w1:p1", "an-id", CEILING)
+        .fetch_attachment("01JA/w1:p1", "an-id", CEILING, None)
         .await
         .err()
         .expect("a refusal");

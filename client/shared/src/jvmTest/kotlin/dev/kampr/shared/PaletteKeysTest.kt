@@ -52,7 +52,7 @@ private const val SEARCH = "Search every pane and place"
 private fun ComposeUiTest.host(picked: MutableList<PaletteTarget>) {
     setContent {
         CompositionLocalProvider(LocalTokens provides phoneTokens()) {
-            PaletteHost({ paletteItems(KEY_HERD, mosaic = false, canCreate = false) }, { picked += it }, Modifier.size(800.dp, 600.dp)) {
+            PaletteHost({ paletteItems(KEY_HERD, mosaic = false, canCreate = false, canBrowse = false) }, { picked += it }, Modifier.size(800.dp, 600.dp)) {
                 Box(Modifier.size(800.dp, 600.dp)) { KField(BEHIND, "", onText = {}) }
             }
         }
@@ -154,7 +154,7 @@ class PaletteKeysTest {
             runComposeUiTest {
                 setContent {
                     CompositionLocalProvider(LocalTokens provides phoneTokens()) {
-                        PaletteHost({ paletteItems(KEY_HERD, mosaic = false, canCreate = false) }, {}, Modifier.size(900.dp, 700.dp)) {
+                        PaletteHost({ paletteItems(KEY_HERD, mosaic = false, canCreate = false, canBrowse = false) }, {}, Modifier.size(900.dp, 700.dp)) {
                             Box(Modifier.size(900.dp, 700.dp)) { list() }
                         }
                     }

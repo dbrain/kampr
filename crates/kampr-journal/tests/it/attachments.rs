@@ -775,3 +775,131 @@ fn a_diff_id_is_told_from_a_file_id_by_its_tag_and_neither_disturbs_a_record_id(
     // And the id an already-installed client mints still means what it meant.
     assert_eq!(attach::FileRef::new(path).encode(), as_file);
 }
+
+fn raw_id(fields: &[&str]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(fields.join("\u{1f}"))
+}
+
+#[test]
+fn the_browsing_forms_round_trip_through_the_shared_decoder() {
+    let dir = attach::FileRef::new("/home/u/demo");
+    for source in [
+        attach::Source::Ls(dir.clone()),
+        attach::Source::Repo(dir.clone()),
+        attach::Source::Zip(dir.clone()),
+        attach::Source::Staged(attach::FileRef::new("/home/u/demo/notes.md")),
+        attach::Source::Unstaged(attach::FileRef::new("/home/u/demo/notes.md")),
+        attach::Source::Show {
+            file: attach::FileRef::new("/home/u/demo/notes.md"),
+            rev: "HEAD~2".into(),
+        },
+        attach::Source::Commit {
+            repo: dir.clone(),
+            sha: "8a50ea5".into(),
+        },
+    ] {
+        assert_eq!(
+            attach::Source::decode(&source.encode()).expect("our own id"),
+            source
+        );
+    }
+    assert_eq!(
+        attach::Source::decode(&raw_id(&["show", "/x/y.md", "main@{1}"])).expect("a client-built id"),
+        attach::Source::Show {
+            file: attach::FileRef::new("/x/y.md"),
+            rev: "main@{1}".into(),
+        }
+    );
+    assert_eq!(
+        attach::Source::decode(&raw_id(&["ls", "~"])).expect("a client-built id"),
+        attach::Source::Ls(attach::FileRef::new("~"))
+    );
+    for (tag, want) in [
+        ("staged", attach::Source::Staged(attach::FileRef::new("/x/y.md"))),
+        (
+            "unstaged",
+            attach::Source::Unstaged(attach::FileRef::new("/x/y.md")),
+        ),
+        ("zip", attach::Source::Zip(attach::FileRef::new("/x/y.md"))),
+    ] {
+        assert_eq!(
+            attach::Source::decode(&raw_id(&[tag, "/x/y.md"])).expect("a client-built id"),
+            want
+        );
+    }
+}
+
+/// The rev and the sha reach `git`'s argv, so anything that could be read as an option or as a
+/// second revision is refused before a process is ever spawned.
+#[test]
+fn a_rev_or_sha_git_could_read_as_anything_else_is_refused_at_decode() {
+    for rev in [
+        "",
+        "-p",
+        "--output=/tmp/x",
+        "HEAD:other",
+        "HEAD other",
+        "HEAD\nx",
+        &"a".repeat(101),
+    ] {
+        assert!(
+            attach::Source::decode(&raw_id(&["show", "/x/y.md", rev])).is_err(),
+            "{rev:?} was accepted as a rev"
+        );
+    }
+    for sha in [
+        "",
+        "abc",
+        "8A50EA5",
+        "-8a50ea5",
+        "8a50ea5g",
+        "HEAD",
+        &"a".repeat(65),
+    ] {
+        assert!(
+            attach::Source::decode(&raw_id(&["commit", "/x", sha])).is_err(),
+            "{sha:?} was accepted as a sha"
+        );
+    }
+    for empty in [
+        &["ls", ""][..],
+        &["repo", ""],
+        &["staged", ""],
+        &["unstaged", ""],
+        &["zip", ""],
+        &["show", "", "HEAD"],
+        &["commit", "", "abcd"],
+    ] {
+        assert!(attach::Source::decode(&raw_id(empty)).is_err(), "{empty:?}");
+    }
+}
+
+/// One predicate both gates ask, so a seventh path form cannot slip past one of them.
+#[test]
+fn every_form_that_names_a_path_is_a_path_form_and_nothing_else_is() {
+    let path = attach::FileRef::new("/etc/hosts");
+    for source in [
+        attach::Source::File(path.clone()),
+        attach::Source::Diff(path.clone()),
+        attach::Source::Staged(path.clone()),
+        attach::Source::Unstaged(path.clone()),
+        attach::Source::Zip(path.clone()),
+        attach::Source::Ls(path.clone()),
+        attach::Source::Repo(path.clone()),
+        attach::Source::Show {
+            file: path.clone(),
+            rev: "HEAD".into(),
+        },
+        attach::Source::Commit {
+            repo: path.clone(),
+            sha: "abcd".into(),
+        },
+    ] {
+        assert!(source.is_path_form(), "{source:?}");
+    }
+    assert!(!attach::Source::Paste(path).is_path_form());
+    let record = attach::Source::decode(&raw_id(&["claude", "projects/x.jsonl", "0", "0", "70"]))
+        .expect("a record id");
+    assert!(!record.is_path_form());
+}

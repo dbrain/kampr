@@ -29,13 +29,18 @@ import dev.kampr.shared.model.groups
 import dev.kampr.shared.model.saidOutLoud
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.withoutReadDone
+import dev.kampr.shared.net.AttachmentBytes
+import dev.kampr.shared.net.AttachmentSlice
 import dev.kampr.shared.net.AuthApi
 import dev.kampr.shared.net.DeviceRecord
 import dev.kampr.shared.net.SetupStatus
+import dev.kampr.shared.net.UploadResult
+import dev.kampr.shared.net.UploadSource
 import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.platform.hardKeyboardAttached
+import dev.kampr.shared.platform.openDownload
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.KamprTheme
 import dev.kampr.shared.theme.ThemeId
@@ -171,7 +176,7 @@ fun KamprApp(
                 },
                 LocalFleet provides remember(state) { { state.go(Screen.Fleet) } },
                 LocalKeystrokeMs provides state.store.keystrokeMs.collectAsState().value,
-                LocalCovered provides (state.sheet != null),
+                LocalCovered provides (state.sheet != null || state.files.isNotEmpty()),
             ) {
                 PaletteHost(
                     items = {
@@ -179,6 +184,7 @@ fun KamprApp(
                             state.store.herd.value.withoutReadDone(state.seenDone),
                             mosaic = mosaic.available,
                             canCreate = state.store.canManage,
+                            canBrowse = !state.store.readOnly,
                         )
                     },
                     onPick = { target ->
@@ -186,6 +192,7 @@ fun KamprApp(
                             is PaletteTarget.OpenPane -> state.openPane(target.paneId)
                             is PaletteTarget.Go -> state.go(target.screen)
                             is PaletteTarget.NewOn -> state.openSheet(Sheet.New(target.nodeId, null))
+                            is PaletteTarget.Files -> state.open(target.place)
                         }
                     },
                     modifier = Modifier.fillMaxSize(),
@@ -224,8 +231,16 @@ internal class AppPaneIo(private val state: AppState) : PaneIo {
     override val growsPanes: Boolean get() = state.store.hello.value?.caps?.paneGrow == true
     override fun releaseMatch(paneId: String, linger: Boolean) = state.releaseMatch(paneId, linger)
     override fun reflow(paneId: String, cols: Int?) = state.connection.reflow(paneId, cols)
-    override suspend fun attachment(paneId: String, id: String) = state.fetchAttachment(paneId, id)
+    override suspend fun attachment(paneId: String, id: String) = state.attachments(AttachmentBytes.Failed(UNCONNECTED)) { fetch(paneId, id) }
+
+    override suspend fun range(paneId: String, id: String, start: Long, endInclusive: Long) = state.attachments(AttachmentSlice.Failed(UNCONNECTED)) { range(paneId, id, start, endInclusive) }
+
+    override suspend fun download(paneId: String, id: String, name: String) = state.attachments<String?>(null) { download(paneId, id) { mime -> openDownload(name, mime) } }
+
+    override suspend fun upload(paneId: String, dir: String, name: String, source: UploadSource, progress: (Long) -> Unit) = state.attachments<UploadResult>(UploadResult.Failed(UNCONNECTED)) { upload(paneId, dir, name, source, progress) }
 }
+
+private const val UNCONNECTED = "This device is not connected to a node."
 
 @Composable
 internal fun AppScaffold(
@@ -320,7 +335,7 @@ internal fun AppScaffold(
     // A sheet is modal, and a screen reader has no idea unless the screen behind it stops being
     // readable. Clearing the subtree is what a focus trap buys, without turning a sheet that is
     // deliberately part of the same window into a platform dialog.
-    val modal = state.sheet != null
+    val modal = state.sheet != null || state.files.isNotEmpty()
     fun Modifier.behindSheet(): Modifier = if (modal) clearAndSetSemantics { } else this
 
     // Paid for once, at the root, because the keyboard covers the window rather than resizing it:
@@ -332,52 +347,126 @@ internal fun AppScaffold(
     // bottom navigation, a sheet's fields, the pane's own key row — is measured against a window
     // that already stops at the keyboard, and against system furniture the keys have already
     // taken.
-    KeyboardFloor(Modifier.fillMaxSize().background(tokens.color.bg)) {
-        // The mosaic is the window, not a detail pane inside it: the sidebar picks one pane,
-        // and this screen is about four.
-        if (state.screen is Screen.Mosaic) {
-            mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize().behindSheet())
-            // Every pane at once, so there is no pane here the operator is not on.
-            failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
-            refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
-            state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
-            ManageLayer(state, herd, breakpoint, surfaces)
-            return@KeyboardFloor
-        }
-        Box(Modifier.fillMaxSize().behindSheet()) {
-            when (breakpoint) {
-                Breakpoint.Desktop -> Row(Modifier.fillMaxSize().screenInset(state.screen)) {
-                    HerdSidebar(
-                        herd = herd,
-                        connection = connectionStatus,
-                        now = now,
-                        localRtt = localRtt,
-                        triage = triage,
-                        activePaneId = (state.screen as? Screen.Pane)?.paneId,
-                        deviceName = auth.devices.firstOrNull { it.id == auth.currentDeviceId }?.name ?: "this device",
-                        // The role off the store, not off the greeting: this caption is the
-                        // only place the desktop says what this device may do.
-                        deviceDetail = hello?.let { "${state.store.role} access · ${it.build}" } ?: "not connected",
-                        onOpenPane = { state.openPane(it) },
-                        onSettings = { state.go(Screen.Setup) },
-                        onResync = { state.connection.send(ClientMsg.Resync) },
-                        collapsed = state.sidebarCollapsed,
-                        onCollapsed = state::collapseSidebar,
-                        scroll = state.herdScroll,
-                    )
-                    ScreenBody(
-                        Modifier.weight(1f).fillMaxSize(),
-                        bottomChrome(breakpoint, state.screen),
-                        screenSelects(state.screen),
-                    ) {
+    val filesNav = remember(state) { AppFilesNav(state) }
+    CompositionLocalProvider(LocalOpenPlace provides remember(state) { state::open }) {
+        KeyboardFloor(Modifier.fillMaxSize().background(tokens.color.bg)) {
+            // The mosaic is the window, not a detail pane inside it: the sidebar picks one pane,
+            // and this screen is about four.
+            if (state.screen is Screen.Mosaic) {
+                mosaic.Mosaic(state, breakpoint, surfaces, Modifier.fillMaxSize().behindSheet())
+                // Every pane at once, so there is no pane here the operator is not on.
+                failure?.let { ErrorStrip(it.message, it.code, state.store::dismissFailure) }
+                refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
+                state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
+                ManageLayer(state, herd, breakpoint, surfaces)
+                FilesLayer(state, surfaces, filesNav)
+                return@KeyboardFloor
+            }
+            Box(Modifier.fillMaxSize().behindSheet()) {
+                when (breakpoint) {
+                    Breakpoint.Desktop -> Row(Modifier.fillMaxSize().screenInset(state.screen)) {
+                        HerdSidebar(
+                            herd = herd,
+                            connection = connectionStatus,
+                            now = now,
+                            localRtt = localRtt,
+                            triage = triage,
+                            activePaneId = (state.screen as? Screen.Pane)?.paneId,
+                            deviceName = auth.devices.firstOrNull { it.id == auth.currentDeviceId }?.name ?: "this device",
+                            // The role off the store, not off the greeting: this caption is the
+                            // only place the desktop says what this device may do.
+                            deviceDetail = hello?.let { "${state.store.role} access · ${it.build}" } ?: "not connected",
+                            onOpenPane = { state.openPane(it) },
+                            onSettings = { state.go(Screen.Setup) },
+                            onResync = { state.connection.send(ClientMsg.Resync) },
+                            collapsed = state.sidebarCollapsed,
+                            onCollapsed = state::collapseSidebar,
+                            scroll = state.herdScroll,
+                        )
+                        ScreenBody(
+                            Modifier.weight(1f).fillMaxSize(),
+                            bottomChrome(breakpoint, state.screen),
+                            screenSelects(state.screen),
+                        ) {
+                            when (val screen = state.screen) {
+                                is Screen.Pane -> PaneScreenDesktop(
+                                    pane = state.store.pane(screen.paneId),
+                                    info = state.store.paneInfo(screen.paneId),
+                                    gone = herd.gone(screen.paneId),
+                                    view = screen.view,
+                                    surfaces = surfaces,
+                                    readOnly = readOnly,
+                                    onView = state::setPaneView,
+                                )
+
+                                Screen.Setup -> SetupScreen(
+                                    status = auth.setup,
+                                    security = security,
+                                    running = connectionStatus is ConnectionStatus.Live,
+                                    endpoint = state.endpoint,
+                                    nodes = herd.nodes,
+                                    pairingCode = auth.pairingCode,
+                                    pairingError = state.pairingError,
+                                    onConnect = state::useEndpoint,
+                                    onPairingCode = auth.onPairingCode,
+                                    onDevices = { state.go(Screen.Devices) },
+                                    onAppearance = { state.go(Screen.Appearance) },
+                                    onNotifications = { state.go(Screen.Notifications) },
+                                    confirmRisky = state.confirmRisky,
+                                    onConfirmRisky = state::confirmRisky,
+                                    onPasskeys = passkeys,
+                                    onPasskeySignIn = passkeySignIn,
+                                    onInstall = install,
+                                    recentAddresses = state.recentAddresses,
+                                    offeredCode = deepLink?.pair,
+                                    wide = true,
+                                )
+
+                                Screen.Devices -> DevicesScreen(
+                                    auth.devices,
+                                    auth.currentDeviceId,
+                                    now,
+                                    { state.go(Screen.Setup) },
+                                    auth.onRevoke,
+                                    auth.onRenew,
+                                )
+
+                                Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+
+                                Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+
+                                Screen.Fleet -> FleetScreen(
+                                    herd = herd,
+                                    breakpoint = breakpoint,
+                                    onOpenPane = state::openPane,
+                                    onAnswer = state::answerFleet,
+                                    onStop = { state.manage(ManageOp.FleetStop(it)) },
+                                    onRun = { state.runFleet(it) },
+                                    canRun = !readOnly && state.store.canManage,
+                                    book = book,
+                                    onBook = state::manage,
+                                )
+
+                                Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
+                            }
+                        }
+                    }
+
+                    // The nav lived in the Portrait branch alone, so a phone held sideways — a
+                    // first-class layout — could reach Setup, Devices, Appearance and Notifications
+                    // from nowhere at all. It stays off a pane, where every row of height is the
+                    // terminal's and `onBack` already leads out.
+                    Breakpoint.Landscape -> PhoneScaffold(breakpoint, state.screen, state::selectTab) {
                         when (val screen = state.screen) {
-                            is Screen.Pane -> PaneScreenDesktop(
+                            is Screen.Pane -> PaneScreenMobile(
                                 pane = state.store.pane(screen.paneId),
                                 info = state.store.paneInfo(screen.paneId),
                                 gone = herd.gone(screen.paneId),
                                 view = screen.view,
                                 surfaces = surfaces,
+                                landscape = true,
                                 readOnly = readOnly,
+                                onBack = state::back,
                                 onView = state::setPaneView,
                             )
 
@@ -401,7 +490,7 @@ internal fun AppScaffold(
                                 onInstall = install,
                                 recentAddresses = state.recentAddresses,
                                 offeredCode = deepLink?.pair,
-                                wide = true,
+                                wide = false,
                             )
 
                             Screen.Devices -> DevicesScreen(
@@ -429,192 +518,123 @@ internal fun AppScaffold(
                                 onBook = state::manage,
                             )
 
-                            Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
+                            Screen.Herd, Screen.Mosaic -> HerdLandscape(
+                                herd, connectionStatus, now, localRtt, triage, state::openPane, null,
+                                onResync = { state.connection.send(ClientMsg.Resync) },
+                                scroll = state.herdScroll,
+                            )
+                        }
+                    }
+
+                    Breakpoint.Portrait -> PhoneScaffold(breakpoint, state.screen, state::selectTab) {
+                        when (val screen = state.screen) {
+                            is Screen.Pane -> PaneScreenMobile(
+                                pane = state.store.pane(screen.paneId),
+                                info = state.store.paneInfo(screen.paneId),
+                                gone = herd.gone(screen.paneId),
+                                view = screen.view,
+                                surfaces = surfaces,
+                                landscape = false,
+                                readOnly = readOnly,
+                                onBack = state::back,
+                                onView = state::setPaneView,
+                            )
+
+                            Screen.Setup -> SetupScreen(
+                                status = auth.setup,
+                                security = security,
+                                running = connectionStatus is ConnectionStatus.Live,
+                                endpoint = state.endpoint,
+                                nodes = herd.nodes,
+                                pairingCode = auth.pairingCode,
+                                pairingError = state.pairingError,
+                                onConnect = state::useEndpoint,
+                                onPairingCode = auth.onPairingCode,
+                                onDevices = { state.go(Screen.Devices) },
+                                onAppearance = { state.go(Screen.Appearance) },
+                                onNotifications = { state.go(Screen.Notifications) },
+                                confirmRisky = state.confirmRisky,
+                                onConfirmRisky = state::confirmRisky,
+                                onPasskeys = passkeys,
+                                onPasskeySignIn = passkeySignIn,
+                                onInstall = install,
+                                recentAddresses = state.recentAddresses,
+                                offeredCode = deepLink?.pair,
+                                wide = false,
+                            )
+
+                            Screen.Devices -> DevicesScreen(
+                                auth.devices,
+                                auth.currentDeviceId,
+                                now,
+                                { state.go(Screen.Setup) },
+                                auth.onRevoke,
+                                auth.onRenew,
+                            )
+
+                            Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
+
+                            Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
+
+                            Screen.Fleet -> FleetScreen(
+                                herd = herd,
+                                breakpoint = breakpoint,
+                                onOpenPane = state::openPane,
+                                onAnswer = state::answerFleet,
+                                onStop = { state.manage(ManageOp.FleetStop(it)) },
+                                onRun = { state.runFleet(it) },
+                                canRun = !readOnly && state.store.canManage,
+                                book = book,
+                                onBook = state::manage,
+                            )
+
+                            Screen.Herd, Screen.Mosaic -> HerdPortrait(
+                                herd, connectionStatus, now, localRtt, triage,
+                                state::openPane,
+                                if (readOnly) null else { paneId: String -> answer(paneId, "1") },
+                                onResync = { state.connection.send(ClientMsg.Resync) },
+                                scroll = state.herdScroll,
+                            )
                         }
                     }
                 }
+            }
 
-                // The nav lived in the Portrait branch alone, so a phone held sideways — a
-                // first-class layout — could reach Setup, Devices, Appearance and Notifications
-                // from nowhere at all. It stays off a pane, where every row of height is the
-                // terminal's and `onBack` already leads out.
-                Breakpoint.Landscape -> PhoneScaffold(breakpoint, state.screen, state::selectTab) {
-                    when (val screen = state.screen) {
-                        is Screen.Pane -> PaneScreenMobile(
-                            pane = state.store.pane(screen.paneId),
-                            info = state.store.paneInfo(screen.paneId),
-                            gone = herd.gone(screen.paneId),
-                            view = screen.view,
-                            surfaces = surfaces,
-                            landscape = true,
-                            readOnly = readOnly,
-                            onBack = state::back,
-                            onView = state::setPaneView,
-                        )
-
-                        Screen.Setup -> SetupScreen(
-                            status = auth.setup,
-                            security = security,
-                            running = connectionStatus is ConnectionStatus.Live,
-                            endpoint = state.endpoint,
-                            nodes = herd.nodes,
-                            pairingCode = auth.pairingCode,
-                            pairingError = state.pairingError,
-                            onConnect = state::useEndpoint,
-                            onPairingCode = auth.onPairingCode,
-                            onDevices = { state.go(Screen.Devices) },
-                            onAppearance = { state.go(Screen.Appearance) },
-                            onNotifications = { state.go(Screen.Notifications) },
-                            confirmRisky = state.confirmRisky,
-                            onConfirmRisky = state::confirmRisky,
-                            onPasskeys = passkeys,
-                            onPasskeySignIn = passkeySignIn,
-                            onInstall = install,
-                            recentAddresses = state.recentAddresses,
-                            offeredCode = deepLink?.pair,
-                            wide = false,
-                        )
-
-                        Screen.Devices -> DevicesScreen(
-                            auth.devices,
-                            auth.currentDeviceId,
-                            now,
-                            { state.go(Screen.Setup) },
-                            auth.onRevoke,
-                            auth.onRenew,
-                        )
-
-                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
-
-                        Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-
-                        Screen.Fleet -> FleetScreen(
-                            herd = herd,
-                            breakpoint = breakpoint,
-                            onOpenPane = state::openPane,
-                            onAnswer = state::answerFleet,
-                            onStop = { state.manage(ManageOp.FleetStop(it)) },
-                            onRun = { state.runFleet(it) },
-                            canRun = !readOnly && state.store.canManage,
-                            book = book,
-                            onBook = state::manage,
-                        )
-
-                        Screen.Herd, Screen.Mosaic -> HerdLandscape(
-                            herd, connectionStatus, now, localRtt, triage, state::openPane, null,
-                            onResync = { state.connection.send(ClientMsg.Resync) },
-                            scroll = state.herdScroll,
-                        )
-                    }
-                }
-
-                Breakpoint.Portrait -> PhoneScaffold(breakpoint, state.screen, state::selectTab) {
-                    when (val screen = state.screen) {
-                        is Screen.Pane -> PaneScreenMobile(
-                            pane = state.store.pane(screen.paneId),
-                            info = state.store.paneInfo(screen.paneId),
-                            gone = herd.gone(screen.paneId),
-                            view = screen.view,
-                            surfaces = surfaces,
-                            landscape = false,
-                            readOnly = readOnly,
-                            onBack = state::back,
-                            onView = state::setPaneView,
-                        )
-
-                        Screen.Setup -> SetupScreen(
-                            status = auth.setup,
-                            security = security,
-                            running = connectionStatus is ConnectionStatus.Live,
-                            endpoint = state.endpoint,
-                            nodes = herd.nodes,
-                            pairingCode = auth.pairingCode,
-                            pairingError = state.pairingError,
-                            onConnect = state::useEndpoint,
-                            onPairingCode = auth.onPairingCode,
-                            onDevices = { state.go(Screen.Devices) },
-                            onAppearance = { state.go(Screen.Appearance) },
-                            onNotifications = { state.go(Screen.Notifications) },
-                            confirmRisky = state.confirmRisky,
-                            onConfirmRisky = state::confirmRisky,
-                            onPasskeys = passkeys,
-                            onPasskeySignIn = passkeySignIn,
-                            onInstall = install,
-                            recentAddresses = state.recentAddresses,
-                            offeredCode = deepLink?.pair,
-                            wide = false,
-                        )
-
-                        Screen.Devices -> DevicesScreen(
-                            auth.devices,
-                            auth.currentDeviceId,
-                            now,
-                            { state.go(Screen.Setup) },
-                            auth.onRevoke,
-                            auth.onRenew,
-                        )
-
-                        Screen.Appearance -> AppearanceScreen(state.theme.id, state.themeMode, state::selectTheme, state::selectMode, onBack = { state.go(Screen.Setup) })
-
-                        Screen.Notifications -> NotificationsScreen(state, herd.panes, onBack = { state.go(Screen.Setup) })
-
-                        Screen.Fleet -> FleetScreen(
-                            herd = herd,
-                            breakpoint = breakpoint,
-                            onOpenPane = state::openPane,
-                            onAnswer = state::answerFleet,
-                            onStop = { state.manage(ManageOp.FleetStop(it)) },
-                            onRun = { state.runFleet(it) },
-                            canRun = !readOnly && state.store.canManage,
-                            book = book,
-                            onBook = state::manage,
-                        )
-
-                        Screen.Herd, Screen.Mosaic -> HerdPortrait(
-                            herd, connectionStatus, now, localRtt, triage,
-                            state::openPane,
-                            if (readOnly) null else { paneId: String -> answer(paneId, "1") },
-                            onResync = { state.connection.send(ClientMsg.Resync) },
-                            scroll = state.herdScroll,
-                        )
-                    }
+            // Loud only about the pane in hand or the node it is on. Everything else is said quietly
+            // where it belongs — the herd screen's offline dot, or the pane's own surface when the
+            // operator opens it — rather than over whatever they are doing on another machine.
+            failure?.takeIf { saidOutLoud(it, (state.screen as? Screen.Pane)?.paneId) }?.let {
+                // `pane` on this one carries the workspace the close named, which is the only place
+                // the target survives — the sheet that sent it is long gone by the time it is refused.
+                val target = it.takeIf { f -> f.code == "workspace_group_close_required" }?.pane
+                if (target != null) {
+                    GroupCloseNotice(
+                        it.message,
+                        onCloseGroup = {
+                            state.manage(ManageOp.Close(target, group = true))
+                            state.store.dismissFailure()
+                        },
+                        onDismiss = state.store::dismissFailure,
+                    )
+                } else {
+                    ErrorStrip(it.message, it.code, state.store::dismissFailure)
                 }
             }
-        }
-
-        // Loud only about the pane in hand or the node it is on. Everything else is said quietly
-        // where it belongs — the herd screen's offline dot, or the pane's own surface when the
-        // operator opens it — rather than over whatever they are doing on another machine.
-        failure?.takeIf { saidOutLoud(it, (state.screen as? Screen.Pane)?.paneId) }?.let {
-            // `pane` on this one carries the workspace the close named, which is the only place
-            // the target survives — the sheet that sent it is long gone by the time it is refused.
-            val target = it.takeIf { f -> f.code == "workspace_group_close_required" }?.pane
-            if (target != null) {
-                GroupCloseNotice(
-                    it.message,
-                    onCloseGroup = {
-                        state.manage(ManageOp.Close(target, group = true))
-                        state.store.dismissFailure()
-                    },
-                    onDismiss = state.store::dismissFailure,
-                )
-            } else {
-                ErrorStrip(it.message, it.code, state.store::dismissFailure)
+            refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
+            auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
+            state.passkeyNote?.let {
+                if (it.refused) {
+                    ErrorStrip(it.message, "passkey", state::dismissPasskeyNote)
+                } else {
+                    NoteStrip(it.message, state::dismissPasskeyNote)
+                }
             }
+            // A demotion or a promotion that landed on this socket. Nothing the operator did caused
+            // it, so it is said here rather than discovered by pressing a control that has gone.
+            state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
+            ManageLayer(state, herd, breakpoint, surfaces)
+            FilesLayer(state, surfaces, filesNav)
         }
-        refused?.let { RefusedNotice(it.reason) { state.go(Screen.Setup) } }
-        auth.failure?.let { ErrorStrip(it, "auth", auth.onDismissFailure) }
-        state.passkeyNote?.let {
-            if (it.refused) {
-                ErrorStrip(it.message, "passkey", state::dismissPasskeyNote)
-            } else {
-                NoteStrip(it.message, state::dismissPasskeyNote)
-            }
-        }
-        // A demotion or a promotion that landed on this socket. Nothing the operator did caused
-        // it, so it is said here rather than discovered by pressing a control that has gone.
-        state.store.roleNote?.let { RoleNotice(it, state.store::dismissRoleNote) }
-        ManageLayer(state, herd, breakpoint, surfaces)
     }
 }
 

@@ -239,6 +239,7 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
         held: HashMap::new(),
         matched: HashMap::new(),
         sending: HashMap::new(),
+        receiving: HashMap::new(),
         boot_holds: HashMap::new(),
         lines: HashMap::new(),
         origin: ulid::Ulid::generate().to_string(),
@@ -517,6 +518,9 @@ struct Session {
     /// send. See [ADR 0013](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
     matched: HashMap<String, MatchLease>,
     sending: HashMap<u64, Sending>,
+    /// Uploads a hub is pushing into this node, by rid. Dropping one is the cancellation: its task
+    /// sees the channel close and removes what it had written.
+    receiving: HashMap<u64, mpsc::Sender<crate::upload_peer::Up>>,
     /// The pane's boot episode, by global id: the inputs it is holding and the task flushing
     /// them. Dropped with the session, which is what aborts the task.
     boot_holds: HashMap<String, BootHoldEntry>,
@@ -701,7 +705,7 @@ impl Session {
         // an arbitrary read.
         if matches!(
             tag.as_deref(),
-            Some("manage" | "input" | "paste" | "answer" | "att.fetch")
+            Some("manage" | "input" | "paste" | "answer" | "att.fetch" | "up.open")
         ) && !self.refresh().await
         {
             return false;
@@ -718,6 +722,9 @@ impl Session {
             // which is the same thing it does with any other `t` it does not know.
             Some("att.fetch" | "att.more" | "att.stop") if self.caller == Caller::Hub => {
                 self.attachment(&value);
+            }
+            Some("up.open" | "up.chunk" | "up.done" | "up.stop") if self.caller == Caller::Hub => {
+                self.upload(&value);
             }
             Some(known) if CLIENT_VERBS.contains(&known) => {
                 match serde_json::from_value::<ClientMsg>(value) {
@@ -1287,16 +1294,10 @@ impl Session {
         //
         // **Every path-shaped variant, not the one that existed first.** This is #304's shape: a
         // verb that reaches the filesystem while the gate in front of it enumerates one case.
-        let decoded = kampr_journal::Source::decode(id);
-        let file = match &decoded {
-            Ok(kampr_journal::Source::File(file)) => Some(file.clone()),
-            _ => None,
-        };
-        let path_form = matches!(
-            decoded,
-            Ok(kampr_journal::Source::File(_) | kampr_journal::Source::Diff(_))
-        );
-        if path_form && !self.device.role.writes() {
+        let path_form = kampr_journal::Source::decode(id)
+            .ok()
+            .filter(kampr_journal::Source::is_path_form);
+        if path_form.is_some() && !self.device.role.writes() {
             self.audit_refused(
                 "att.fetch",
                 Some(pane),
@@ -1321,6 +1322,12 @@ impl Session {
             .as_u64()
             .unwrap_or(1)
             .clamp(1, u64::from(kampr_mesh::ATT_WINDOW)) as u32;
+        let span = message["start"]
+            .as_u64()
+            .and_then(|start| match message["end"].as_u64() {
+                Some(end) if end < start => None,
+                end => Some(kampr_mesh::Span { start, end }),
+            });
         let (credit, granted) = mpsc::channel(kampr_mesh::ATT_WINDOW as usize);
         let task = tokio::spawn(pump_attachment(AttachmentCtx {
             node: self.node.clone(),
@@ -1328,7 +1335,8 @@ impl Session {
             rid,
             pane: pane.to_string(),
             id: id.to_string(),
-            file,
+            path_form,
+            span,
             window,
             granted,
         }));
@@ -1339,6 +1347,67 @@ impl Session {
                 _task: crate::mesh::AbortOnDrop(task.abort_handle()),
             },
         );
+    }
+
+    /// The hub pushing a file into this node: open, chunks against credit, done or stop.
+    ///
+    /// **Gated here against the hub's own device row**, re-read for `up.open` like every verb
+    /// that writes — the hub has already held the same line against its client's row, and this is
+    /// the second, independent one.
+    fn upload(&mut self, message: &Value) {
+        let Some(rid) = message["rid"].as_u64() else {
+            return;
+        };
+        match message["t"].as_str().unwrap_or_default() {
+            "up.open" => self.open_upload(rid, message),
+            "up.chunk" => {
+                let data = message["b64"]
+                    .as_str()
+                    .and_then(|b64| base64::engine::general_purpose::STANDARD.decode(b64).ok());
+                let delivered = match (data, self.receiving.get(&rid)) {
+                    (Some(data), Some(sink)) => sink.try_send(crate::upload_peer::Up::Chunk(data)).is_ok(),
+                    _ => false,
+                };
+                if !delivered && self.receiving.remove(&rid).is_some() {
+                    self.wire
+                        .send_json(&json!({ "t": "up.error", "rid": rid, "code": "overrun" }));
+                }
+            }
+            "up.done" => {
+                if let Some(sink) = self.receiving.remove(&rid) {
+                    let _ = sink.try_send(crate::upload_peer::Up::Done);
+                }
+            }
+            _ => {
+                self.receiving.remove(&rid);
+            }
+        }
+    }
+
+    fn open_upload(&mut self, rid: u64, message: &Value) {
+        let refuse = |wire: &Wire, code: &str| {
+            wire.send_json(&json!({ "t": "up.error", "rid": rid, "code": code }));
+        };
+        if !self.device.role.writes() {
+            self.audit_refused("up.open", None, ErrorCode::NotWriter, json!({ "rid": rid }));
+            return refuse(&self.wire, "read_only");
+        }
+        self.receiving.retain(|_, sink| !sink.is_closed());
+        if self.receiving.len() >= kampr_mesh::ATT_TRANSFERS {
+            return refuse(&self.wire, "busy");
+        }
+        let (sink, chunks) = mpsc::channel(kampr_mesh::ATT_WINDOW as usize + 1);
+        tokio::spawn(crate::upload_peer::receive(crate::upload_peer::Receiving {
+            node: self.node.clone(),
+            device: self.device.clone(),
+            peer: self.peer.clone(),
+            outbox: self.wire.outbox().clone(),
+            rid,
+            dir: message["dir"].as_str().unwrap_or_default().to_string(),
+            name: message["name"].as_str().unwrap_or_default().to_string(),
+            chunks,
+        }));
+        self.receiving.insert(rid, sink);
     }
 
     fn unwatch(&mut self, pane: &str) {
@@ -2474,6 +2543,7 @@ fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     // and the point of that route is that bytes never share a queue with terminal frames.
     if caller == Caller::Hub {
         value["caps"]["attachments"] = json!(true);
+        value["caps"]["upload"] = json!(true);
     }
     let tier = node.auth.tier();
     // A browser needs the application server key before it may call `pushManager.subscribe`, and
@@ -2568,21 +2638,26 @@ struct AttachmentCtx {
     id: String,
     /// Set when the id named a path rather than a record, and already gated on the hub's role by
     /// the session that decoded it.
-    file: Option<kampr_journal::FileRef>,
+    path_form: Option<kampr_journal::Source>,
+    span: Option<kampr_mesh::Span>,
     window: u32,
     granted: mpsc::Receiver<u32>,
 }
 
 /// One attachment, chunked towards a hub at the rate the hub asks for it.
 ///
-/// **The ceiling is the transcript's own.** `attach::fetch` reads the decoded length off the
-/// record's base64 and refuses past 8 MiB *before* decoding, so a record claiming a gigabyte costs
-/// a comparison here exactly as it does on the local HTTP route — this path adds no second
-/// judgement about size and inherits that one.
+/// **A record keeps the transcript's own ceiling.** `attach::fetch` reads the decoded length off
+/// the record's base64 and refuses past 8 MiB *before* decoding, so a record claiming a gigabyte
+/// costs a comparison here exactly as it does on the local HTTP route. **A file or a zip is never
+/// held at all**: its body is read a chunk at a time, and only when the hub has granted credit
+/// for it — so what this pump holds is one chunk, plus the read-ahead a zip keeps, whatever the
+/// file's size.
 ///
 /// **Chunks go down the bulk lane and everything else does not.** A frame enqueued while this is
 /// running overtakes every chunk already queued, so a pane on this link repaints during a transfer
-/// rather than after it. `att.end` rides the same lane as the chunks, or it would arrive first.
+/// rather than after it. `att.end` rides the same lane as the chunks, or it would arrive first —
+/// and so does an `att.error` that ends a body part way, so the hub cannot mistake a zip that
+/// stopped for one that finished.
 async fn pump_attachment(ctx: AttachmentCtx) {
     let AttachmentCtx {
         node,
@@ -2590,7 +2665,8 @@ async fn pump_attachment(ctx: AttachmentCtx) {
         rid,
         pane,
         id,
-        file,
+        path_form,
+        span,
         window,
         mut granted,
     } = ctx;
@@ -2599,66 +2675,90 @@ async fn pump_attachment(ctx: AttachmentCtx) {
             json!({ "t": "att.error", "rid": rid, "code": code }).to_string(),
         ));
     };
-    // The same two file reads the local route makes, on the same blocking pool and for the same
+    // The same file reads the local route makes, on the same blocking pool and for the same
     // reason: a miss walks every project directory and reads both ends of up to 64 transcripts.
     let read = tokio::task::spawn_blocking({
         let node = node.clone();
         move || {
             // A path has no transcript behind it, so the lookup that resolves one is skipped
             // rather than made and ignored — a pane with no agent on it can still serve a file.
-            if let Some(file) = file {
-                return Some(file.fetch(&node.config.journal_home()));
+            if let Some(source) = path_form {
+                return crate::attach::open_path_form(&source, &node.config.journal_home(), span);
             }
-            let transcript = crate::http::transcript_of(&node, &pane)?;
-            Some(kampr_journal::attach::fetch(&node.journals(), &id, &transcript))
+            let transcript =
+                crate::http::transcript_of(&node, &pane).ok_or(crate::served::Refused::Missing)?;
+            Ok(crate::served::Served::whole(kampr_journal::attach::fetch(
+                &node.journals(),
+                &id,
+                &transcript,
+            )?))
         }
     })
     .await;
-    let found = match read {
-        Ok(Some(Ok(found))) => found,
-        Ok(Some(Err(kampr_journal::JournalError::TooLarge(bytes)))) => {
+    let mut served = match read {
+        Ok(Ok(served)) => served,
+        Ok(Err(crate::served::Refused::TooLarge(bytes))) => {
             debug!(rid, bytes, "refusing a relayed attachment past the ceiling");
             return refuse("too_large");
         }
+        Ok(Err(crate::served::Refused::Unsatisfiable(total))) => {
+            outbox.push(Frame::plain(
+                json!({ "t": "att.error", "rid": rid, "code": "unsatisfiable", "total": total }).to_string(),
+            ));
+            return;
+        }
         // Every other refusal is one answer here for the same reason it is one answer over HTTP:
         // an escape, a stale id and an id for somebody else's transcript are the same sentence.
-        Ok(other) => {
-            debug!(rid, found = other.is_some(), "refusing a relayed attachment");
+        Ok(Err(crate::served::Refused::Missing)) | Err(_) => {
+            debug!(rid, "refusing a relayed attachment");
             return refuse("not_found");
         }
-        Err(_) => return refuse("not_found"),
     };
 
     let mut open = json!({
-        "t": "att.open", "rid": rid, "bytes": found.data.len(), "kind": found.kind,
+        "t": "att.open", "rid": rid, "bytes": served.length, "kind": served.kind,
     });
-    if let Some(mime) = &found.mime {
+    if let Some(mime) = &served.mime {
         open["mime"] = json!(mime);
     }
-    if let Some(name) = &found.name {
+    if let Some(name) = &served.name {
         open["name"] = json!(name);
+    }
+    if let Some(slice) = served.slice {
+        open["total"] = json!(slice.total);
     }
     if !outbox.push(Frame::plain(open.to_string())) {
         return;
     }
     let mut credit = window;
-    for (seq, chunk) in found.data.chunks(kampr_mesh::ATT_CHUNK_BYTES).enumerate() {
+    let mut seq = 0u64;
+    loop {
         while credit == 0 {
             // `None` is the hub cancelling or the session ending. Either way nobody wants the
             // rest of these bytes.
             let Some(more) = granted.recv().await else { return };
             credit += more;
         }
-        credit -= 1;
-        let frame = json!({
-            "t": "att.chunk", "rid": rid, "seq": seq,
-            "b64": base64::engine::general_purpose::STANDARD.encode(chunk),
-        });
-        if !outbox.push_bulk(Frame::plain(frame.to_string())) {
+        let frame = match futures_util::StreamExt::next(&mut served.body).await {
+            None => json!({ "t": "att.end", "rid": rid }),
+            Some(Err(e)) => {
+                debug!(rid, error = %e, "a relayed attachment stopped part way");
+                json!({ "t": "att.error", "rid": rid, "code": "not_found" })
+            }
+            Some(Ok(chunk)) => {
+                credit -= 1;
+                seq += 1;
+                json!({
+                    "t": "att.chunk", "rid": rid, "seq": seq - 1,
+                    "b64": base64::engine::general_purpose::STANDARD.encode(&chunk),
+                })
+            }
+        };
+        let last = frame["t"] != "att.chunk";
+        if !outbox.push_bulk(Frame::plain(frame.to_string())) || last {
             return;
         }
     }
-    outbox.push_bulk(Frame::plain(json!({ "t": "att.end", "rid": rid }).to_string()));
 }
 
 /// Everything one pane's stream needs, and nothing else — so the pump can be driven in a test

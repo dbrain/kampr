@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{debug, info, warn};
 
+mod upload;
+pub use upload::Upload;
+
 /// Per-pane fan-out depth on the hub. Overflowing it costs a client one `grid.reset` out of the
 /// hub's own shadow — never a stall, and never a round trip to the peer. Only grid frames are
 /// spent that way; see [`crate::fanout`].
@@ -45,11 +48,12 @@ pub const ATT_CHUNK_BYTES: usize = 64 * 1024;
 /// in-flight window that keeps a WAN round trip from costing a chunk of throughput.
 pub const ATT_WINDOW: u32 = 4;
 
-/// Attachments a peer will be chunking towards one hub at a time.
+/// Attachments a peer will be chunking towards one hub at a time, and uploads it will be writing.
 ///
-/// Each holds one decoded record until the hub has read it, and the ceiling on one is 8 MiB, so
-/// this is the memory a hub can make a peer hold. The peer refuses past it as `busy`, so the hub
-/// queues its own asks to the same number rather than turning a refusal into a 404.
+/// A record transfer holds one decoded record (at most 8 MiB) until the hub has read it; a file
+/// or a zip holds the window and a read-ahead, never the file. So this bounds the memory a hub
+/// can make a peer hold. The peer refuses past it as `busy`, so the hub queues its own asks to the
+/// same number rather than turning a refusal into a 404.
 pub const ATT_TRANSFERS: usize = 4;
 
 /// Keepalive rounds a peer may leave unanswered before the link is dropped. At the default five
@@ -97,17 +101,31 @@ pub enum FetchError {
     Refused(String),
     #[error("that node stopped sending the attachment")]
     Truncated,
+    #[error("the range asked for starts past the end of a {0}-byte file")]
+    Unsatisfiable(u64),
 }
 
 /// What the peer says its attachment is. Every field is the peer's own claim and none of it
 /// decides what this hub serves: the media type is run through the same allowlist a local one is,
 /// and `bytes` is checked against the ceiling before a byte is pulled and again as they arrive.
+///
+/// `bytes` is `None` for a body whose length nobody knows until it ends — a zip built as it is
+/// sent — and the ceiling is then held against the running count instead. `total` is the whole
+/// file's size, present only when the peer answered a range.
 #[derive(Debug, Clone, Default)]
 pub struct AttHeader {
     pub kind: String,
     pub mime: Option<String>,
     pub name: Option<String>,
-    pub bytes: u64,
+    pub bytes: Option<u64>,
+    pub total: Option<u64>,
+}
+
+/// The slice of a file a hub asks a peer for: `start` and an inclusive `end`, as HTTP has it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub start: u64,
+    pub end: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -116,6 +134,7 @@ enum AttEvent {
     Chunk(Vec<u8>),
     End,
     Refused(String),
+    Unsatisfiable(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -353,7 +372,13 @@ impl Peers {
     /// `ceiling` is the caller's own decoded-bytes limit, enforced *before* anything is pulled —
     /// the peer's header is a claim, so it is refused on the claim and then again on the arithmetic
     /// as chunks arrive, because a peer that lied about the size would otherwise stream for ever.
-    pub async fn fetch_attachment(&self, pane: &str, id: &str, ceiling: u64) -> Result<Transfer, FetchError> {
+    pub async fn fetch_attachment(
+        &self,
+        pane: &str,
+        id: &str,
+        ceiling: u64,
+        span: Option<Span>,
+    ) -> Result<Transfer, FetchError> {
         let link = self.resolve(pane)?;
         // The same fact the promise is keyed on, asked again at the moment it is relied on: a
         // build with no `att.fetch` would leave this request waiting out its deadline for an
@@ -361,7 +386,7 @@ impl Peers {
         if !link.serves_attachments() {
             return Err(FetchError::Refused("that node has no attachment route".into()));
         }
-        link.fetch_attachment(pane, id, ceiling).await
+        link.fetch_attachment(pane, id, ceiling, span).await
     }
 
     fn resolve(&self, id: &str) -> Result<Arc<PeerLink>, RelayError> {
@@ -410,6 +435,7 @@ impl Peers {
             panes: Mutex::new(HashMap::new()),
             manages: Mutex::new(HashMap::new()),
             transfers: Mutex::new(HashMap::new()),
+            uploads: Mutex::new(HashMap::new()),
             transfer_slots: Arc::new(tokio::sync::Semaphore::new(ATT_TRANSFERS)),
             next_request: AtomicU64::new(1),
             closed: Arc::new(tokio::sync::Notify::new()),
@@ -496,6 +522,7 @@ impl Peers {
         // A half-served attachment ends with the link rather than waiting out its own deadline:
         // the request behind it is a client holding a socket open for bytes that cannot arrive.
         link.transfers.lock().unwrap().clear();
+        link.uploads.lock().unwrap().clear();
         // And a manage op in flight, for the same reason and one more: it is a control the
         // operator is watching a spinner on. Dropping its waiter answers it now instead of after
         // `MANAGE_TIMEOUT`, and the flag is what makes that answer *"that node is not connected"*
@@ -569,6 +596,7 @@ impl Peers {
             "error" => link.error(&message),
             "managed" => link.managed(message),
             "att.open" | "att.chunk" | "att.end" | "att.error" => link.attachment(&message),
+            "up.more" | "up.ok" | "up.error" => link.upload_event(&message),
             // The one thing in `hello` the handshake did not already establish: whether this
             // peer's build answers `att.fetch`. A hub that guessed would advertise an attachment
             // button an older peer cannot serve, which is the bug this whole path exists to fix.
@@ -706,6 +734,7 @@ struct LinkState {
     rtt_ms: Option<f64>,
     pings: HashMap<u64, Instant>,
     attachments: bool,
+    uploads: bool,
     find: bool,
     convo_find: bool,
     grow: bool,
@@ -743,6 +772,7 @@ pub struct PeerLink {
     panes: Mutex<HashMap<String, Weak<RemotePane>>>,
     manages: Mutex<HashMap<u64, oneshot::Sender<Value>>>,
     transfers: Mutex<HashMap<u64, mpsc::Sender<AttEvent>>>,
+    uploads: Mutex<HashMap<u64, mpsc::Sender<upload::UpEvent>>>,
     transfer_slots: Arc<tokio::sync::Semaphore>,
     next_request: AtomicU64,
     closed: Arc<tokio::sync::Notify>,
@@ -836,6 +866,7 @@ impl PeerLink {
     fn absorb_hello(&self, message: &Value) {
         let mut state = self.state.lock().unwrap();
         state.attachments = message["caps"]["attachments"].as_bool().unwrap_or(false);
+        state.uploads = message["caps"]["upload"].as_bool().unwrap_or(false);
         state.find = message["caps"]["find"].as_bool().unwrap_or(false);
         state.convo_find = message["caps"]["convo.find"].as_bool().unwrap_or(false);
         state.grow = message["caps"]["pane.grow"].as_bool().unwrap_or(false);
@@ -863,6 +894,7 @@ impl PeerLink {
         pane: &str,
         id: &str,
         ceiling: u64,
+        span: Option<Span>,
     ) -> Result<Transfer, FetchError> {
         let slot = self
             .transfer_slots
@@ -876,9 +908,16 @@ impl PeerLink {
         // way this queue can grow and the reason the transfer ends rather than buffering.
         let (tx, rx) = mpsc::channel(ATT_WINDOW as usize + 2);
         self.transfers.lock().unwrap().insert(rid, tx);
-        let asked = self.request(json!({
+        let mut ask = json!({
             "t": "att.fetch", "rid": rid, "pane": pane, "id": id, "window": ATT_WINDOW
-        }));
+        });
+        if let Some(span) = span {
+            ask["start"] = json!(span.start);
+            if let Some(end) = span.end {
+                ask["end"] = json!(end);
+            }
+        }
+        let asked = self.request(ask);
         if let Err(e) = asked {
             self.transfers.lock().unwrap().remove(&rid);
             return Err(e.into());
@@ -889,21 +928,24 @@ impl PeerLink {
             rid,
             header: AttHeader::default(),
             rx,
-            remaining: 0,
+            remaining: None,
+            ceiling,
+            received: 0,
             done: false,
         };
         match tokio::time::timeout(MANAGE_TIMEOUT, transfer.rx.recv()).await {
             Ok(Some(AttEvent::Open(header))) => {
                 // The ceiling is checked on the peer's claim, before a chunk is asked for, so a
                 // record naming a gigabyte costs a comparison here exactly as it does locally.
-                if header.bytes > ceiling {
-                    return Err(FetchError::TooLarge(header.bytes));
+                if let Some(bytes) = header.bytes.filter(|bytes| *bytes > ceiling) {
+                    return Err(FetchError::TooLarge(bytes));
                 }
                 transfer.remaining = header.bytes;
                 transfer.header = header;
                 Ok(transfer)
             }
             Ok(Some(AttEvent::Refused(code))) => Err(FetchError::Refused(code)),
+            Ok(Some(AttEvent::Unsatisfiable(total))) => Err(FetchError::Unsatisfiable(total)),
             Ok(Some(_)) => Err(FetchError::Refused("out of order".into())),
             Ok(None) => Err(RelayError::Offline("that node left the herd".into()).into()),
             Err(_) => Err(RelayError::NoAnswer.into()),
@@ -920,7 +962,8 @@ impl PeerLink {
                 kind: message["kind"].as_str().unwrap_or_default().to_string(),
                 mime: message["mime"].as_str().map(str::to_string),
                 name: message["name"].as_str().map(str::to_string),
-                bytes: message["bytes"].as_u64().unwrap_or_default(),
+                bytes: message["bytes"].as_u64(),
+                total: message["total"].as_u64(),
             }),
             "att.chunk" => match message["b64"]
                 .as_str()
@@ -930,6 +973,9 @@ impl PeerLink {
                 None => AttEvent::Refused("unreadable chunk".into()),
             },
             "att.end" => AttEvent::End,
+            _ if message["code"] == "unsatisfiable" => {
+                AttEvent::Unsatisfiable(message["total"].as_u64().unwrap_or_default())
+            }
             _ => AttEvent::Refused(message["code"].as_str().unwrap_or("refused").to_string()),
         };
         let sink = self.transfers.lock().unwrap().get(&rid).cloned();
@@ -1205,7 +1251,9 @@ pub struct Transfer {
     rid: u64,
     header: AttHeader,
     rx: mpsc::Receiver<AttEvent>,
-    remaining: u64,
+    remaining: Option<u64>,
+    ceiling: u64,
+    received: u64,
     done: bool,
 }
 
@@ -1229,10 +1277,16 @@ impl Transfer {
             AttEvent::Chunk(data) => {
                 // The peer's header was a claim and this is the arithmetic. A peer that keeps
                 // sending past the size it announced is one this hub stops reading from.
-                let Some(left) = self.remaining.checked_sub(data.len() as u64) else {
-                    return Some(self.fail(FetchError::Refused("more bytes than it announced".into())));
-                };
-                self.remaining = left;
+                self.received += data.len() as u64;
+                if self.received > self.ceiling {
+                    return Some(self.fail(FetchError::TooLarge(self.received)));
+                }
+                if let Some(remaining) = self.remaining {
+                    let Some(left) = remaining.checked_sub(data.len() as u64) else {
+                        return Some(self.fail(FetchError::Refused("more bytes than it announced".into())));
+                    };
+                    self.remaining = Some(left);
+                }
                 if let Err(e) = self
                     .link
                     .request(json!({ "t": "att.more", "rid": self.rid, "n": 1 }))
@@ -1245,11 +1299,12 @@ impl Transfer {
                 self.done = true;
                 self.link.end_transfer(self.rid, false);
                 match self.remaining {
-                    0 => None,
-                    _ => Some(Err(FetchError::Truncated)),
+                    None | Some(0) => None,
+                    Some(_) => Some(Err(FetchError::Truncated)),
                 }
             }
             AttEvent::Refused(code) => Some(self.fail(FetchError::Refused(code))),
+            AttEvent::Unsatisfiable(_) => Some(self.fail(FetchError::Refused("out of order".into()))),
             AttEvent::Open(_) => Some(self.fail(FetchError::Refused("out of order".into()))),
         }
     }
@@ -1459,6 +1514,7 @@ mod tests {
             panes: Mutex::new(HashMap::new()),
             manages: Mutex::new(HashMap::new()),
             transfers: Mutex::new(HashMap::new()),
+            uploads: Mutex::new(HashMap::new()),
             transfer_slots: Arc::new(tokio::sync::Semaphore::new(ATT_TRANSFERS)),
             next_request: AtomicU64::new(1),
             closed: Arc::new(tokio::sync::Notify::new()),

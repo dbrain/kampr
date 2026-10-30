@@ -2,12 +2,11 @@ package dev.kampr.conversation
 
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
+import dev.kampr.conversation.files.HeldBytes
+import dev.kampr.conversation.files.LocalHeldBytes
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.platform.attachmentFileName
 import dev.kampr.shared.platform.decodeImage
@@ -82,14 +81,6 @@ sealed interface AttachmentState {
         override fun hashCode(): Int = image.hashCode()
     }
 
-    // Held beside the text for the same reason a picture's are: the viewer hands the file to the
-    // device afterwards, and re-fetching bytes that never left is a second authorised round trip
-    // for nothing.
-    data class Text(val text: String, val bytes: ByteArray, val mime: String?) : AttachmentState {
-        override fun equals(other: Any?): Boolean = this === other
-        override fun hashCode(): Int = text.hashCode()
-    }
-
     // The bytes and nothing made of them. A [Voice] is a decoder and, on two of the three targets,
     // a hardware line: it is opened by the card that draws the button and released when that card
     // leaves the composition, so nothing this store evicts can leave one running.
@@ -150,19 +141,15 @@ private const val THUMBNAILS_AT_ONCE = 2
 
 @Stable
 class AttachmentStore(
-    private val pane: String,
+    val pane: String,
     private val voices: Voices = deviceVoices,
+    private val heldBytes: HeldBytes? = null,
     private val mostImagesHeld: Int = MOST_IMAGES_HELD,
     private val mostPixelBytesHeld: Long = MOST_PIXEL_BYTES_HELD,
 ) {
     private val states = mutableStateMapOf<String, AttachmentState>()
     private val savedTo = mutableStateMapOf<String, String>()
 
-    // Which picture is open over the transcript, if any. Held here rather than in the card that
-    // opened it: the viewer covers the whole pane, and a card inside a lazy list is composed away
-    // the moment the thing it opened scrolls off.
-    var viewing: Attachment? by mutableStateOf(null)
-        private set
     private val held = ArrayDeque<String>()
     private val pixelBytes = HashMap<String, Long>()
     private val thumbnails = mutableStateMapOf<String, Thumbnail>()
@@ -198,18 +185,11 @@ class AttachmentStore(
             is AttachmentBytes.Failed -> Thumbnail.Failed(got.reason)
 
             is AttachmentBytes.Ok -> withContext(Dispatchers.Default) {
+                heldBytes?.put(pane, att.id, got)
                 decodeImage(got.bytes)?.let { Thumbnail.Shown(it.within(THUMBNAIL_PX)) }
                     ?: Thumbnail.Failed("Those bytes are not a picture this device can read.")
             }
         }
-    }
-
-    fun view(att: Attachment) {
-        viewing = att
-    }
-
-    fun close() {
-        viewing = null
     }
 
     // Only what is already in hand. A picture that has fallen out of the held set is a button
@@ -222,7 +202,6 @@ class AttachmentStore(
     suspend fun save(att: Attachment) {
         val (bytes, mime) = when (val held = states[att.id]) {
             is AttachmentState.Shown -> held.bytes to held.mime
-            is AttachmentState.Text -> held.bytes to held.mime
             is AttachmentState.Sound -> held.bytes to held.mime
             else -> return
         }
@@ -231,23 +210,19 @@ class AttachmentStore(
         savedTo[att.id] = where
     }
 
-    // One press for a target the reader named themselves: they asked for the file, so the fetch
-    // and the opening of it are one action rather than two.
-    suspend fun reveal(io: PaneIo, att: Attachment) {
-        open(io, att)
-        if (state(att.id).let { it is AttachmentState.Shown || it is AttachmentState.Text }) view(att)
-    }
-
     suspend fun open(io: PaneIo, att: Attachment) {
         if (state(att.id) == AttachmentState.Fetching) return
         states[att.id] = AttachmentState.Fetching
         val landed = when (val got = io.attachment(pane, att.id)) {
             is AttachmentBytes.Failed -> AttachmentState.Failed(got.reason)
-            is AttachmentBytes.Ok -> withContext(Dispatchers.Default) { received(att, got) }
+
+            is AttachmentBytes.Ok -> {
+                heldBytes?.put(pane, att.id, got)
+                withContext(Dispatchers.Default) { received(att, got) }
+            }
         }
         when (landed) {
             is AttachmentState.Shown -> hold(att.id, landed, landed.image.width.toLong() * landed.image.height * 4)
-            is AttachmentState.Text -> hold(att.id, landed, landed.bytes.size.toLong())
             is AttachmentState.Sound -> hold(att.id, landed, landed.bytes.size.toLong())
             else -> states[att.id] = landed
         }
@@ -272,10 +247,6 @@ class AttachmentStore(
         if (offer == AttachmentOffer.Audio && voices.canPlay(mime)) {
             return AttachmentState.Sound(got.bytes, mime)
         }
-        if (offer == AttachmentOffer.Text) {
-            runCatching { got.bytes.decodeToString(throwOnInvalidSequence = true) }.getOrNull()
-                ?.let { return AttachmentState.Text(it, got.bytes, mime) }
-        }
         val where = saveToDevice(attachmentFileName(att.name, mime, att.id), mime, got.bytes)
             ?: return AttachmentState.Failed("This device would not take the file.")
         return AttachmentState.Saved(where)
@@ -297,5 +268,6 @@ class AttachmentStore(
 @Composable
 fun rememberAttachmentStore(pane: String): AttachmentStore {
     val voices = LocalVoices.current
-    return remember(pane, voices) { AttachmentStore(pane, voices) }
+    val held = LocalHeldBytes.current
+    return remember(pane, voices, held) { AttachmentStore(pane, voices, heldBytes = held) }
 }

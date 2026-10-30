@@ -4,7 +4,6 @@ import dev.kampr.terminal.render.TargetKind
 import dev.kampr.terminal.render.detectTarget
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 
 private fun at(line: String, inside: String): Int {
@@ -49,15 +48,22 @@ class FileTargetTest {
         assertEquals("/tmp/kampr/notes.md", detectTarget(line, at(line, "/tmp"))?.text)
     }
 
-    // The whole reason this is safe is that the operator can dispute nothing about it. A bare
-    // `foo.rs` in prose is a guess about English; the existing reference target still copies it,
-    // and it must never become a control that fetches a file.
+    // A relative path on the grid is the shell's, so with the pane's directory to hand it opens
+    // like any other; without one there is nothing to resolve it against and it is only copied.
     @Test
-    fun aBarePathInProseIsNotAFile() {
+    fun aRelativePathOpensAgainstThePanesDirectory() {
         val line = "look at src/main.rs:12 for the call"
-        val found = detectTarget(line, at(line, "src/"))
-        assertNotEquals(TargetKind.File, found?.kind, "a relative path was offered as a file")
-        assertEquals(TargetKind.Path, found?.kind)
+        val found = detectTarget(line, at(line, "src/"), cwd = "/home/u/dev/kampr")
+        assertEquals(TargetKind.File, found?.kind)
+        assertEquals("/home/u/dev/kampr/src/main.rs", found?.text)
+        assertEquals(at(line, "src/") until at(line, ":12"), found?.range)
+        assertEquals(TargetKind.Path, detectTarget(line, at(line, "src/"))?.kind)
+    }
+
+    @Test
+    fun proseWithASlashIsNotAPathEvenWithADirectory() {
+        val line = "pass --all and/or --release"
+        assertNull(detectTarget(line, at(line, "and/or"), cwd = "/home/u"))
     }
 
     @Test
@@ -66,12 +72,13 @@ class FileTargetTest {
         assertNull(detectTarget(line, at(line, "and/or")), "'/or' was read as a path")
     }
 
-    // A directory is refused by the route with the same 404 as everything else, so offering one
-    // is a button that can only ever fail.
+    // A folder opens in the file browser, so a path written with its trailing slash is offered too.
     @Test
-    fun aDirectoryIsNotAFile() {
+    fun aDirectoryOpensAsTheFolderItIs() {
         val line = "cd /home/dbrain/dev/kampr/"
-        assertNull(detectTarget(line, at(line, "/home"))?.takeIf { it.kind == TargetKind.File })
+        val found = detectTarget(line, at(line, "/home"))
+        assertEquals(TargetKind.File, found?.kind)
+        assertEquals("/home/dbrain/dev/kampr", found?.text)
     }
 
     // A URL is still a URL: `file://` and `https://` both hold a slash, and whichever wins has to

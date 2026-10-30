@@ -3,7 +3,9 @@ package dev.kampr.terminal.render
 import dev.kampr.shared.model.BLANK
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.appendGlyph
+import dev.kampr.shared.model.asPath
 import dev.kampr.shared.model.glyphUnits
+import dev.kampr.shared.model.resolvePath
 import dev.kampr.shared.net.filePathOf
 
 data class GridPoint(val row: Int, val col: Int) : Comparable<GridPoint> {
@@ -205,9 +207,9 @@ private const val BREAKS = "\"'`<>()[]{},;|"
 // `main.rs:412:9` is a path and a place in it. The place is the compiler's; the node opens the path.
 private val LOCATION = Regex(""":\d+(?::\d+)?$""")
 
-// `File` is a path the route can fetch — absolute or `~/`-rooted, which is all `filePathOf`
-// accepts. `Path` is the weaker thing beside it: a `file.rs:12` reference a reader can copy but
-// nothing can resolve, because a relative path has no directory to be relative to from here.
+// `File` is a path the route can fetch — absolute, `~/`-rooted, or relative to a pane directory
+// that is known. `Path` is the weaker thing beside it: a `file.rs:12` reference a reader can copy
+// but nothing can resolve, because without the pane's directory it has nothing to be relative to.
 enum class TargetKind { Link, Url, Path, File }
 
 // `range` is the target's own place in the logical line `detectTarget` was handed, and it is what
@@ -219,30 +221,29 @@ data class Target(val text: String, val kind: TargetKind, val range: IntRange = 
 private fun breaks(c: Char): Boolean = c.isWhitespace() || c in BREAKS
 
 // The token under the finger, with the compiler's location and the sentence's punctuation taken
-// off it, and only if `filePathOf` — the same arbiter the conversation surface uses — will have it.
-// Deliberately not a search through prose: a bare `foo.rs` is a guess about English, and a guess
-// that offers to fetch a file is worse than not offering one.
-// The path *and* where it starts, because the two readers want different halves: opening it wants
-// the string, washing it on the grid wants the columns. `filePathOf` only ever trims, so the
-// returned text is a prefix of the token and `start until start + length` is its place in the line.
-private fun pathAt(line: String, offset: Int): Target? {
+// off it. An anchored path is taken as `filePathOf` has it; a relative one only by the same rule
+// the conversation applies to prose, and only with the pane's directory to resolve it against.
+// `range` covers what the grid shows rather than the resolved text, which is longer.
+private fun pathAt(line: String, offset: Int, cwd: String?): Target? {
     if (offset !in line.indices || breaks(line[offset])) return null
     var start = offset
     while (start > 0 && !breaks(line[start - 1])) start--
     var end = offset + 1
     while (end < line.length && !breaks(line[end])) end++
-    val token = line.substring(start, end).trimEnd('.', ',', ';', ':', '!', '?')
-    val path = filePathOf(LOCATION.replace(token, "")) ?: return null
-    return Target(path, TargetKind.File, start until start + path.length)
+    val token = LOCATION.replace(line.substring(start, end).trimEnd('.', ',', ';', ':', '!', '?'), "")
+    filePathOf(token.trimEnd('/').ifEmpty { token })?.let { return Target(it, TargetKind.File, start until start + token.length) }
+    if (cwd == null) return null
+    val relative = asPath(token, bare = true) ?: return null
+    return Target(resolvePath(relative, cwd), TargetKind.File, start until start + token.length)
 }
 
-fun detectTarget(line: String, offset: Int): Target? {
+fun detectTarget(line: String, offset: Int, cwd: String? = null): Target? {
     for (match in URL.findAll(line)) {
         if (offset !in match.range) continue
         val text = match.value.trimEnd('.', ',', ';', ':', '!', '?')
         return Target(text, TargetKind.Url, match.range.first until match.range.first + text.length)
     }
-    pathAt(line, offset)?.let { return it }
+    pathAt(line, offset, cwd)?.let { return it }
     for (match in PATH.findAll(line)) {
         if (offset in match.range) return Target(match.value, TargetKind.Path, match.range)
     }

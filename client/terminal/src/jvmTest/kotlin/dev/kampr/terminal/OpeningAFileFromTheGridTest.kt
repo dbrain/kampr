@@ -2,13 +2,11 @@ package dev.kampr.terminal
 
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
-import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
-import dev.kampr.shared.net.AttachmentBytes
-import dev.kampr.shared.net.fileAttachmentId
+import dev.kampr.shared.ui.FilesPlace
+import dev.kampr.shared.ui.filePlace
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -26,33 +24,24 @@ class OpeningAFileFromTheGridTest {
         onNodeWithContentDescription("Open $NOTES").assertExists()
     }
 
+    // The grid fetches nothing itself: the path goes onto the app's files stack, whose viewer
+    // fetches it, covers the window, and is what the phone's back button closes first.
     @Test
-    fun openingItAsksTheRouteForThatPathAndShowsWhatCameBack() = runComposeUiTest {
+    fun openingItHandsThatPathOnThisPanesNodeToTheFileViewer() = runComposeUiTest {
         val session = PaneSession(Phone.PANE)
         val route = Route(words("the whole file\nand its second line"))
-        gridTerminal(paneShowing(SHOWN), session, route)
+        val opened = mutableListOf<FilesPlace>()
+        gridTerminal(paneShowing(SHOWN), session, route, opened = opened)
         tapCell(session, 0, SHOWN.indexOf(NOTES) + 2)
         onNodeWithContentDescription("Open $NOTES").performClick()
-        waitUntil(timeoutMillis = 5_000) { route.asked.isNotEmpty() }
-        assertEquals(listOf(fileAttachmentId(NOTES)), route.asked)
-        waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithContentDescription("Close $NOTES").fetchSemanticsNodes().isNotEmpty()
-        }
-        onNodeWithText("the whole file\nand its second line", substring = true).assertExists()
-    }
-
-    // #233's lesson: a refusal that reads as a plausible success is the expensive kind. The route
-    // gives one uniform 404 for missing, unreadable and escaped, and that is what has to be shown.
-    @Test
-    fun aRouteThatRefusesSaysSoRatherThanShowingAnEmptyFile() = runComposeUiTest {
-        val session = PaneSession(Phone.PANE)
-        val route = Route(AttachmentBytes.Failed("The node no longer has this attachment."))
-        gridTerminal(paneShowing(SHOWN), session, route)
-        tapCell(session, 0, SHOWN.indexOf(NOTES) + 2)
-        onNodeWithContentDescription("Open $NOTES").performClick()
-        waitUntil(timeoutMillis = 5_000) {
-            onAllNodesWithText("The node no longer has this attachment.").fetchSemanticsNodes().isNotEmpty()
-        }
+        waitForIdle()
+        assertEquals(listOf<FilesPlace>(filePlace(Phone.PANE, NOTES)), opened)
+        assertEquals(Phone.PANE.substringBefore('/'), opened.single().nodeId)
+        assertTrue(route.asked.isEmpty(), "the grid fetched the file as well as handing it over")
+        assertTrue(
+            onAllNodesWithContentDescription("Open $NOTES").fetchSemanticsNodes().isEmpty(),
+            "the strip offering the path stayed up after it was opened",
+        )
     }
 
     // The route is gated on a device that may send input, and the whole security argument for this

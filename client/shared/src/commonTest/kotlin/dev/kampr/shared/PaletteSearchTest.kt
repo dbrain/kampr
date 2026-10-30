@@ -1,6 +1,8 @@
 package dev.kampr.shared
 
 import dev.kampr.shared.model.Herd
+import dev.kampr.shared.net.anchorPane
+import dev.kampr.shared.ui.FilesPlace
 import dev.kampr.shared.ui.PaletteItem
 import dev.kampr.shared.ui.PaletteTarget
 import dev.kampr.shared.ui.Screen
@@ -17,6 +19,7 @@ private val HERD = Herd(
         NodeInfo("01JLAP", "comingclean", kind = "local"),
         NodeInfo("01JHUB", "giftofthemagi2"),
         NodeInfo("01JNAS", "threnody"),
+        NodeInfo("01JOFF", "attic", reachable = false),
     ),
     panes = listOf(
         PaneInfo("01JLAP/w1:p1", "01JLAP", workspace = "kampr", tab = "1", cwd = "/home/dbrain/dev/kampr", agent = "claude"),
@@ -26,7 +29,7 @@ private val HERD = Herd(
     ),
 )
 
-private fun search(query: String, mosaic: Boolean = true, canCreate: Boolean = true): List<PaletteItem> = paletteSearch(paletteItems(HERD, mosaic, canCreate), query)
+private fun search(query: String, mosaic: Boolean = true, canCreate: Boolean = true, canBrowse: Boolean = true): List<PaletteItem> = paletteSearch(paletteItems(HERD, mosaic, canCreate, canBrowse), query)
 
 private fun PaletteItem.paneId() = (target as? PaletteTarget.OpenPane)?.paneId
 
@@ -65,5 +68,14 @@ class PaletteSearchTest {
         assertTrue(search("mosaic", mosaic = false).none { it.target == PaletteTarget.Go(Screen.Mosaic) })
         assertEquals(PaletteTarget.NewOn("01JNAS"), search("new threnody").first().target)
         assertTrue(search("new", canCreate = false).none { it.target is PaletteTarget.NewOn })
+    }
+
+    // Browsing needs the node process and nothing else: herdr being down leaves the disk there.
+    @Test
+    fun everyReachableNodeOffersItsFilesFromHome() {
+        assertEquals(PaletteTarget.Files(FilesPlace.Dir("01JNAS", anchorPane("01JNAS"), "~")), search("files threnody").first().target)
+        val offered = search("files").mapNotNull { (it.target as? PaletteTarget.Files)?.place?.nodeId }
+        assertEquals(listOf("01JLAP", "01JHUB", "01JNAS"), offered)
+        assertTrue(search("files", canBrowse = false).none { it.target is PaletteTarget.Files })
     }
 }

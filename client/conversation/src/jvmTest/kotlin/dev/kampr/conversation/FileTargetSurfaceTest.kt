@@ -1,9 +1,7 @@
 package dev.kampr.conversation
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
@@ -15,16 +13,18 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
 import androidx.compose.ui.test.waitUntilExactlyOneExists
+import dev.kampr.conversation.files.Stack
+import dev.kampr.conversation.files.Stage
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.diffAttachmentId
 import dev.kampr.shared.net.fileAttachmentId
-import dev.kampr.shared.theme.LocalTokens
-import dev.kampr.shared.theme.SoftTheme
-import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.net.stagedAttachmentId
+import dev.kampr.shared.net.unstagedAttachmentId
+import dev.kampr.shared.ui.FilesPlace
 import dev.kampr.shared.ui.PaneIo
+import dev.kampr.shared.ui.filePlace
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
@@ -72,13 +72,8 @@ private fun node(readOnly: Boolean = false) = object : PaneIo {
 }
 
 @Composable
-private fun Screen(pane: PaneState, io: PaneIo) {
-    CompositionLocalProvider(
-        LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
-        LocalPaneIo provides io,
-    ) {
-        Box(Modifier.fillMaxSize()) { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) }
-    }
+private fun Screen(pane: PaneState, io: PaneIo, nav: Stack = Stack()) {
+    Stage(io, nav) { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) }
 }
 
 // The node half of file retrieval was complete, tested, and minted by nothing in the client — the
@@ -88,11 +83,12 @@ class FileTargetSurfaceTest {
     @Test
     fun aToolCardNamingAFileOffersToFetchItAtTheIdTheRouteReads() = runComposeUiTest {
         val io = node()
-        setContent { Screen(paneOf(READ_CARD), io) }
+        val nav = Stack()
+        setContent { Screen(paneOf(READ_CARD), io, nav) }
         onNodeWithContentDescription("Open notes.md").performClick()
-        waitForIdle()
-        assertEquals(listOf(PANE_ID to fileAttachmentId(PATH)), io.asked)
-        onNodeWithText("the fourth hop drops it", substring = true).assertExists()
+        assertEquals(listOf<FilesPlace>(filePlace(PANE_ID, PATH)), nav.places.toList())
+        waitUntilAtLeastOneExists(hasText("the fourth hop drops it", substring = true), 5_000)
+        assertEquals(PANE_ID to fileAttachmentId(PATH), io.asked.first())
     }
 
     // A summary that is not a path is not a target. Detecting one inside prose is a guess about
@@ -125,13 +121,14 @@ class FileTargetSurfaceTest {
         setContent { Screen(paneOf(READ_CARD), io) }
         onNodeWithContentDescription("Open notes.md").performClick()
         // The viewer's controls arrive with the fetch, which runs off the test clock.
-        waitUntilExactlyOneExists(hasContentDescription("Show what has changed in notes.md since HEAD"), 5_000)
-        onNodeWithContentDescription("Show what has changed in notes.md since HEAD").performClick()
+        waitUntilExactlyOneExists(hasContentDescription("Changes +1 −1 tab"), 5_000)
+        onNodeWithContentDescription("Changes +1 −1 tab").performClick()
         waitUntilAtLeastOneExists(hasText("+the fourth hop drops it", substring = true), 5_000)
         assertEquals(
-            listOf(PANE_ID to fileAttachmentId(PATH), PANE_ID to diffAttachmentId(PATH)),
-            io.asked,
+            setOf(fileAttachmentId(PATH), diffAttachmentId(PATH), stagedAttachmentId(PATH), unstagedAttachmentId(PATH)),
+            io.asked.map { it.second }.toSet(),
         )
+        assertEquals(setOf(PANE_ID), io.asked.map { it.first }.toSet())
         onNodeWithText("+the fourth hop drops it", substring = true).assertExists()
     }
 }

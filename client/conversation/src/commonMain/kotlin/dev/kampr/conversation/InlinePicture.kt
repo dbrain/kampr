@@ -12,9 +12,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
+import dev.kampr.shared.ui.recordPlace
 import dev.kampr.shared.wire.Attachment
 
 // The transcript is a lazy list, and a row that measures against the picture inside it rather than
@@ -39,12 +41,13 @@ private val TALLEST = 260.dp
 // and it will fail, because the path resolves on the pane's machine at read time and the file is
 // only there while it is still there.
 //
-// Pressing it opens [ImageViewer], which is where the panning and the zooming live. Not here: this
+// Pressing it opens the file viewer over the whole window, which is where the panning and the zooming live. Not here: this
 // row is inside a vertically scrolling list, and a drag handler on it would take the scroll.
 @Composable
 fun InlinePicture(att: Attachment, attachments: AttachmentStore, modifier: Modifier = Modifier) {
     val io = LocalPaneIo.current
     if (io.readOnly) return
+    val openPlace = LocalOpenPlace.current
     val tokens = Kampr.tokens
     val headline = headlineOf(att)
     LaunchedEffect(att.id) {
@@ -57,7 +60,7 @@ fun InlinePicture(att: Attachment, attachments: AttachmentStore, modifier: Modif
             modifier = modifier
                 .heightIn(max = TALLEST)
                 .clip(RoundedCornerShape(tokens.radii.md))
-                .action("Open $headline", { attachments.view(att) }),
+                .action("Open $headline", { openPlace(recordPlace(attachments.pane, att)) }),
             contentScale = ContentScale.Fit,
             alignment = Alignment.CenterStart,
         )

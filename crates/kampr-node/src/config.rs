@@ -437,6 +437,8 @@ pub struct Limits {
     /// How often a client socket is pinged, and — times the missed-pong count — how long a client
     /// that has stopped answering is served before it is dropped (#284).
     pub client_keepalive_secs: u64,
+    /// How long an upload may go without a byte before it is dropped and its temp file removed.
+    pub upload_idle_secs: u64,
 }
 
 impl Default for Herdr {
@@ -457,6 +459,7 @@ impl Default for Limits {
             sockets: 64,
             mesh_handshakes: 4,
             client_keepalive_secs: 15,
+            upload_idle_secs: 60,
         }
     }
 }

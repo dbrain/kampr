@@ -55,6 +55,7 @@ fun DiffCard(
     query: String,
     modifier: Modifier = Modifier,
     attachments: AttachmentStore = rememberAttachmentStore(""),
+    title: String? = null,
 ) {
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
@@ -72,7 +73,7 @@ fun DiffCard(
             ) {
                 IconGlyph(ConversationIcons.diff, 12.dp, tokens.color.dim)
                 KText(
-                    path?.substringAfterLast('/') ?: "diff",
+                    title ?: path?.substringAfterLast('/') ?: "diff",
                     tokens.type.meta,
                     tokens.color.dim,
                     Modifier.weight(1f),
@@ -95,7 +96,7 @@ fun DiffCard(
 }
 
 @Composable
-private fun DiffRow(line: DiffLine, query: String, palette: ConversationPalette) {
+internal fun DiffRow(line: DiffLine, query: String, palette: ConversationPalette, wrap: Boolean = false) {
     val tokens = Kampr.tokens
     val ground: Color? = when (line.kind) {
         DiffKind.Added -> palette.addedGround
@@ -123,6 +124,6 @@ private fun DiffRow(line: DiffLine, query: String, palette: ConversationPalette)
             .let { if (ground != null) it.background(ground) else it }
             .padding(horizontal = 11.dp, vertical = 1.dp),
         style = style,
-        softWrap = false,
+        softWrap = wrap,
     )
 }

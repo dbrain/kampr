@@ -320,11 +320,26 @@ val LocalKeystrokeMs = compositionLocalOf<Map<String, Double>> { emptyMap() }
 // pane that visibly halted).
 fun nodeLatency(node: NodeInfo, keystrokes: Map<String, Double>, ping: Double?): String = keystrokes[node.id]?.let { "key ${formatLatency(it)}" } ?: "ping ${formatLatency(ping)}"
 
+// Drawn as a glyph beside the figure, the words being what is spoken: "local · key 41 ms" was a
+// third of a 260 dp sidebar row.
+@Composable
+private fun NodeReachMarks(node: NodeInfo, keystrokes: Map<String, Double>, ping: Double?) {
+    val tokens = Kampr.tokens
+    val key = keystrokes[node.id]
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (node.kind == "local") IconGlyph(KamprIcons.machine, 12.dp, tokens.color.mute, Modifier.padding(end = 4.dp))
+        IconGlyph(if (key != null) KamprIcons.keyboard else KamprIcons.pulse, 12.dp, tokens.color.mute)
+        KText(formatLatency(key ?: ping), tokens.type.meta, tokens.color.mute)
+    }
+}
+
 @Composable
 fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
     val tokens = Kampr.tokens
     val reach = nodeReach(node)
-    val latency = nodeLatency(node, LocalKeystrokeMs.current, node.rttMs ?: measuredRtt)
+    val keystrokes = LocalKeystrokeMs.current
+    val ping = node.rttMs ?: measuredRtt
+    val latency = nodeLatency(node, keystrokes, ping)
     Row(
         Modifier
             .fillMaxWidth()
@@ -341,7 +356,8 @@ fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            KText("$reach · $latency", tokens.type.meta, tokens.color.mute)
+            NodeReachMarks(node, keystrokes, ping)
+            NodeFilesAction(node, LANDSCAPE_TOUCH)
             QuickSessionAction(node, LANDSCAPE_TOUCH)
         }
     }

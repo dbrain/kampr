@@ -10,6 +10,10 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
+import dev.kampr.shared.net.AttachmentSlice
+import dev.kampr.shared.net.UploadResult
+import dev.kampr.shared.net.UploadSource
+import dev.kampr.shared.net.sliceOfWhole
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
@@ -34,6 +38,9 @@ interface PaneSurfaces {
     // the sheet, which has to be out of the way of whatever the chip starts.
     @Composable
     fun Tools(paneId: String, onUsed: () -> Unit) = Unit
+
+    @Composable
+    fun Files(place: FilesPlace, nav: FilesNav, modifier: Modifier) = Unit
 }
 
 // A surface is handed a PaneState, not the connection, so this is how a renderer answers back:
@@ -99,6 +106,18 @@ interface PaneIo {
     // socket: the socket is carrying live terminal frames and a screenshot on it head-of-lines
     // every pane for seconds on a phone link.
     suspend fun attachment(paneId: String, id: String): AttachmentBytes = AttachmentBytes.Failed("This device has no node to fetch it from.")
+
+    // `endInclusive` like HTTP's Range. A surface with no ranged route behind it cuts the slice out
+    // of the whole, so a viewer reads in slices whatever it is talking to.
+    suspend fun range(paneId: String, id: String, start: Long, endInclusive: Long): AttachmentSlice = when (val got = attachment(paneId, id)) {
+        is AttachmentBytes.Ok -> sliceOfWhole(got.bytes, got.mime, start, endInclusive)
+        is AttachmentBytes.Failed -> AttachmentSlice.Failed(got.reason, got.missing)
+    }
+
+    // Streamed from the node to the device's downloads; where it landed, or null if either refused.
+    suspend fun download(paneId: String, id: String, name: String): String? = null
+
+    suspend fun upload(paneId: String, dir: String, name: String, source: UploadSource, progress: (Long) -> Unit): UploadResult = UploadResult.Failed("This device has no node to send it to.")
 }
 
 private object NoPaneIo : PaneIo {

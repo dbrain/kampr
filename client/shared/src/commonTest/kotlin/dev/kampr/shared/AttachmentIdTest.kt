@@ -1,9 +1,14 @@
 package dev.kampr.shared
 
+import dev.kampr.shared.net.commitAttachmentId
 import dev.kampr.shared.net.diffAttachmentId
 import dev.kampr.shared.net.fileAttachmentId
 import dev.kampr.shared.net.filePathOf
+import dev.kampr.shared.net.lsAttachmentId
 import dev.kampr.shared.net.pathOfAttachmentId
+import dev.kampr.shared.net.repoAttachmentId
+import dev.kampr.shared.net.showAttachmentId
+import kotlin.io.encoding.Base64
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -60,4 +65,30 @@ class AttachmentIdTest {
         assertNull(filePathOf("/home/u/dev/"), "a directory is a 404 and never a file")
         assertNull(filePathOf(null))
     }
+
+    @Test
+    fun theBrowsingFormsAreTheirTagAndFieldsJoinedByTheSeparator() {
+        val cases = mapOf(
+            lsAttachmentId("~/dev") to "ls\u001F~/dev",
+            repoAttachmentId("/home/u/dev/kampr") to "repo\u001F/home/u/dev/kampr",
+            showAttachmentId("/home/u/dev/kampr/a.kt", "HEAD~1") to "show\u001F/home/u/dev/kampr/a.kt\u001FHEAD~1",
+            commitAttachmentId("/home/u/dev/kampr", "8a50ea5") to "commit\u001F/home/u/dev/kampr\u001F8a50ea5",
+        )
+        for ((id, text) in cases) {
+            assertTrue('=' !in id && '/' !in id && '+' !in id, "not base64url-no-pad: $id")
+            assertEquals(text, unmint(id))
+        }
+    }
+
+    // The file viewer reads a path out of an id to ask for the diff beside it; a listing or a commit
+    // is not a file, and offering one a diff would be a 404 dressed as a feature.
+    @Test
+    fun onlyTheFileAndDiffFormsAnswerWithAPath() {
+        assertNull(pathOfAttachmentId(lsAttachmentId("~/dev")))
+        assertNull(pathOfAttachmentId(repoAttachmentId("~/dev")))
+        assertNull(pathOfAttachmentId(showAttachmentId("~/dev/a.kt", "HEAD")))
+        assertNull(pathOfAttachmentId(commitAttachmentId("~/dev", "abcd")))
+    }
+
+    private fun unmint(id: String): String = Base64.UrlSafe.decode(id + "=".repeat((4 - id.length % 4) % 4)).decodeToString()
 }

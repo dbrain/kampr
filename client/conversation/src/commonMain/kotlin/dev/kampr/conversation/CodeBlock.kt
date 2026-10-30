@@ -20,6 +20,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.unit.dp
+import dev.kampr.conversation.md.markPaths
 import dev.kampr.conversation.md.markUrls
 import dev.kampr.conversation.syntax.langSpec
 import dev.kampr.conversation.syntax.scan
@@ -34,7 +35,7 @@ fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Mo
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
     val body = remember(code, lang, palette) { highlight(code, lang, palette) }
-    val marked = remember(body, query, palette) { body.markUrls(CODE_LINK).markMatches(query, palette.match) }
+    val marked = remember(body, query, palette) { body.markUrls(CODE_LINK).markPaths(CODE_LINK).markMatches(query, palette.match) }
 
     // The card is the width of its longest line, capped by the frame — a one-line fence drawn a
     // metre wide is a box with nothing in it, and a wide one keeps its own scroller either way.

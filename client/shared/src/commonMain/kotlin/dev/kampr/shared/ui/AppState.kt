@@ -16,7 +16,6 @@ import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.readDone
 import dev.kampr.shared.model.unreadDone
 import dev.kampr.shared.net.AttachmentApi
-import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.AuthApi
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.Enrolment
@@ -395,11 +394,11 @@ class AppState(
     // A one-shot client for a one-shot fetch, the same shape the pairing and warm calls use: an
     // attachment is asked for by a press, and holding a connection open between presses buys
     // nothing on a link this is deliberately kept off.
-    suspend fun fetchAttachment(paneId: String, id: String): AttachmentBytes {
-        val target = endpoint ?: return AttachmentBytes.Failed("This device is not connected to a node.")
+    suspend fun <T> attachments(unconnected: T, call: suspend AttachmentApi.() -> T): T {
+        val target = endpoint ?: return unconnected
         val client = createHttpClient()
         return try {
-            AttachmentApi(client, target).fetch(paneId, id)
+            AttachmentApi(client, target).call()
         } finally {
             client.close()
         }
@@ -466,6 +465,25 @@ class AppState(
 
     fun closeSheet() {
         sheet = null
+    }
+
+    var files: List<FilesPlace> by mutableStateOf(emptyList())
+        private set
+
+    fun open(place: FilesPlace) {
+        if (files.lastOrNull() != place) files = files + place
+    }
+
+    fun replaceFile(place: FilesPlace) {
+        files = files.dropLast(1) + place
+    }
+
+    fun backFiles() {
+        files = files.dropLast(1)
+    }
+
+    fun closeFiles() {
+        files = emptyList()
     }
 
     fun manage(op: ManageOp) {
@@ -564,6 +582,7 @@ class AppState(
     // exactly the thing the mosaic's observer count would then be lying about.
     fun go(target: Screen) {
         sheet = null
+        files = emptyList()
         val leaving = (screen as? Screen.Pane)?.paneId
         if (target is Screen.Pane) connection.watch(target.paneId)
         if (leaving != null && leaving != (target as? Screen.Pane)?.paneId) connection.unwatch(leaving)

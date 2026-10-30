@@ -705,19 +705,154 @@ must already handle.
   in. Expansion is never what makes a path absolute: `foo/bar`, `./x` and `../x` are refused
   whatever the home is. A directory, a path that is not there, a fifo, and a file this user cannot
   read are all the same `404`, so the route cannot be used to map the filesystem by response code.
-- **The pane in the URL still says which node serves it**, and nothing else. A file id on a peer's
-  pane is carried over the mesh link exactly as a record id is, and the peer applies the same gate
-  to the hub's own device before it reads anything.
+- **Only the node half of the pane in the URL is read**, and it says which node serves the path.
+  The local half is ignored, so a client with no pane on a node anchors the request on
+  `<node>/_` — `GET /api/attachment/01JNODE/_/<id>`. An id for a node this one does not serve is
+  carried over the mesh link exactly as a record id is, and the peer applies the same gate to the
+  hub's own device before it reads anything.
 - **`kind` and `mime` come off the extension and nowhere else.** A known image extension is
   `kind: "image"` with that type; anything else — including `.svg` and `.html` — is `kind: "file"`
   with no type, which is a download. A file with no extension has its `Content-Type` answered by
   the same sniff a record with no recorded media type gets, so a screenshot written without one
   still renders. `name` is the file's own name.
-- **The ceiling is the same 8 MiB**, read off `stat` before a byte is allocated, and the route
-  answers it whole rather than streaming: an 8 MiB body costs about **5 ms and 11 MiB of peak RSS**
-  on the machine the file is already on (#258). It is not raised for this form either — the same
-  `Fetched` crosses the mesh lane, and a peer buffers the whole body before it chunks it (#247,
-  #257), so raising it is a measurement on that lane rather than on this route.
+- **A file is streamed, never held.** It is read off disk a 64 KiB chunk at a time as the response
+  body is polled — locally, on the peer's mesh pump as the hub grants credit, and through the hub —
+  so no hop holds more than a few chunks whatever the file's size. The only ceiling is a sanity
+  bound of **16 GiB** (`413` past it); the record form keeps its 8 MiB.
+- **Ranges.** A `file` answer always carries `Accept-Ranges: bytes` and a `Content-Length`.
+  `Range: bytes=START-END` (inclusive) or `bytes=START-` is answered `206` with
+  `Content-Range: bytes START-END/TOTAL` and the slice's `Content-Length`; an end past the file is
+  clamped. A start at or past the end is `416` with `Content-Range: bytes */TOTAL`. Anything else —
+  a suffix range, several ranges, an end before the start — is ignored and the whole file is a
+  `200`, as RFC 9110 allows. The type is still decided from the file's own head, never from the
+  slice. Only `file` honours a range; every other form ignores the header.
+- **Never compressed.** A response carrying `Accept-Ranges`/`Content-Range`, and a zip, is exempt
+  from the node's gzip/brotli layer: compressing it would make `Content-Range` count bytes the
+  client never sees and drop the `Content-Length` a download's progress is drawn from.
+
+#### The other path forms: `diff`, `staged`, `unstaged`, `zip`, `ls`, `repo`, `show`, `commit`
+
+The same encoding with a different tag, and every one of them is a path form: gated as typing on
+the route and on the mesh peer (one predicate, `Source::is_path_form`), routed by node id alone,
+`~` expanded the same way, and every refusal — not there, not a directory, not a repository, a
+rev that names nothing, an id that does not decode — is the one `404`. Past the ceiling is `413`.
+`git` runs as `git -C <dir> --no-optional-locks`, with no pager and no prompt, abandoned after
+5 s, its stdout capped at 64 MiB (git's answers are held whole to be typed; a file is not).
+
+| id fields | answer | `Content-Type` |
+|---|---|---|
+| `diff` ␟ path | `git diff --no-color --no-ext-diff HEAD -- <name>` in the file's directory; no change is `404` | `text/plain; charset=utf-8` |
+| `staged` ␟ path | `git diff --no-color --no-ext-diff --cached HEAD -- <name>` — index against HEAD; nothing staged is `404` | `text/plain; charset=utf-8` |
+| `unstaged` ␟ path | `git diff --no-color --no-ext-diff -- <name>` — worktree against the index; nothing unstaged is `404` | `text/plain; charset=utf-8` |
+| `zip` ␟ dir | the directory as a zip, built while it is sent (below) | `application/zip`, `Content-Disposition: attachment; filename="<dir>.zip"` |
+| `ls` ␟ dir | the directory listing below | `application/json` |
+| `repo` ␟ path in a repo | the repository summary below | `application/json` |
+| `show` ␟ path ␟ rev | `git show --no-textconv <rev>:./<name>` in the file's directory — the file as it was | an image by extension, else `text/plain; charset=utf-8` when UTF-8 with no NUL, else bytes to download |
+| `commit` ␟ repo path ␟ sha | `git show --no-color --no-ext-diff --stat --patch --format=fuller <sha>^{commit}` | `text/plain; charset=utf-8` |
+
+- **`rev` is `[0-9A-Za-z_.~^/@{}-]{1,100}` not starting with `-`, `sha` is `[0-9a-f]{4,64}`**, and an
+  id with anything else does not decode at all, so neither ever reaches `git`'s argv as an option, a
+  pathspec or a second revision. `^{commit}` keeps a sha naming a tree or a blob a refusal.
+- `show`'s path need not exist in the worktree, only its directory: a deleted file is still there at
+  `HEAD`.
+- The `Content-Type`s in the `text/plain` and `application/json` rows are the node's own words for
+  answers it composed. On the mesh they travel as `att.open`'s `kind: "text"` and `mime`, and the
+  hub serves exactly those two types for that kind and nothing else a peer claims.
+
+```jsonc
+// ls
+{ "path": "/home/u/dev/kampr",   // ~ expanded, trailing / and . dropped, not canonicalised
+  "parent": "/home/u/dev",       // null at /
+  "home": "/home/u",
+  "entries": [
+    { "name": "src", "kind": "dir", "bytes": null, "mtime": 1730000000, "git": "M" },
+    { "name": "link", "kind": "link", "target_kind": "dir", "bytes": null, "mtime": 1730000000, "git": null },
+    { "name": "README.md", "kind": "file", "bytes": 4123, "mtime": 1730000000, "git": null }
+  ],
+  "truncated": false,
+  "repo": { "root": "/home/u/dev/kampr", "branch": "main", "head": "8a50ea5",
+            "upstream": "origin/main", "ahead": 0, "behind": 2, "changed": 3 } }
+```
+
+- `kind` is `dir`, `file`, `link` or `other` (a fifo, a socket, a device), read with `lstat` — nothing
+  listed is opened. `target_kind` is on links only: `dir`, `file`, `other`, or `null` when dangling.
+- Sorted directories (and links to them) first, then by name ignoring case. Hidden entries are
+  included. Past **5000** entries the first 5000 of that order are sent and `truncated` is `true`.
+- `git` is one `git status --porcelain=v2 --branch -z -unormal` for the whole repository, matched
+  against the listed directory. A file's letter is the worst of its two columns, in the order
+  `U D A R C M ?` (a type change is `M`); a directory is `M` when anything beneath it changed, and
+  every entry inside an untracked directory is `?`. Ignored files are `null`, and so is everything
+  outside a repository, where `repo` is `null` too.
+- `repo.changed` counts that status's entries, so an untracked directory is one. `branch` is `null`
+  when detached, `head` when there are no commits, `upstream` when none is set; `ahead` and
+  `behind` are then `0`.
+
+```jsonc
+// repo
+{ "root": "/home/u/dev/kampr", "branch": "main", "head": "8a50ea5", "upstream": "origin/main",
+  "ahead": 0, "behind": 2,
+  "changes": [
+    { "path": "client/x.kt", "abs": "/home/u/dev/kampr/client/x.kt", "staged": "M", "unstaged": " ", "orig": null },
+    { "path": "b.rs", "abs": "/home/u/dev/kampr/b.rs", "staged": "R", "unstaged": " ", "orig": "a.rs" },
+    { "path": "new.txt", "abs": "/home/u/dev/kampr/new.txt", "staged": "?", "unstaged": "?", "orig": null }
+  ],
+  "log": [
+    { "sha": "8a50ea5…", "short": "8a50ea5", "subject": "kobup: 0.1.127", "author": "Danny", "when": 1730000000 }
+  ] }
+```
+
+- `changes` is `git status -uall` (every untracked file named), paths relative to `root`, at most
+  2000. `staged`/`unstaged` are porcelain v1's X and Y columns: a space for unchanged, `??` for
+  untracked, `U` on both for a conflict.
+- `log` is the last 50 commits, newest first; empty for a repository with none.
+
+```
+200  Content-Type: application/zip
+     Content-Disposition: attachment; filename="kampr.zip"
+     Transfer-Encoding: chunked                          // no Content-Length: nobody knows it yet
+```
+
+- `zip` streams: entries are deflated and written as they are read, each followed by a data
+  descriptor (`ZipWriter::new_stream`, which never seeks), so nothing is staged on disk and the
+  node holds a chunk and a two-chunk read-ahead whatever the directory's size. There is no size
+  cap and no `Content-Length`; a failure part way ends the body short rather than finishing it.
+- Entries are named relative to the directory, depth first in name order; directories appear as
+  `name/` entries, so an empty one survives. **No symlink is followed** — not out of the directory
+  and not within it. Fifos, sockets, devices and anything this user cannot open are left out.
+  A path that is not a directory is the one `404`.
+
+#### `POST /api/upload/{node}/{local}?dir=<dir>&name=<name>` — a file into a directory
+
+```
+POST /api/upload/01JNODE/_?dir=~/Downloads&name=shot.png
+     Content-Length: 52831
+     <the raw bytes>
+
+201  { "path": "/home/u/Downloads/shot (1).png", "bytes": 52831 }
+400  { "error": "that is not a file name" }
+403  { "error": "this device is read-only" }
+404  { "error": "no such directory" }
+```
+
+- **Gated as typing**, on the hub's row for the device and again on the peer's row for the hub, as
+  every path form is; audited as `file.upload` with the path and size on whichever node wrote it
+  (and on the hub that relayed it).
+- `{local}` is ignored; `{node}` says which node writes. `dir` is absolute or `~`/`~/…` against that
+  node's home. Not there, not a directory and not writable are one `404`.
+- `name` is one path component: not empty, at most 255 bytes, not `.` or `..`, no `/` and no NUL —
+  anything else is `400`.
+- **Never over an existing file.** A taken name becomes `name (1).ext`, `name (2).ext`… (numbered
+  before the last extension: `a.tar (1).gz`, `.env (1)`), and the name is claimed with `link(2)`,
+  which fails rather than replaces.
+- **Streamed to disk**: the body goes into a hidden temp file in the target directory and is renamed
+  into place only after its last byte, so a reader never sees half a file. An upload that does not
+  finish — a dropped connection, a body short of its `Content-Length`, a hub that stops — leaves
+  nothing behind. A body that sends nothing for `limits.upload_idle_secs` (60) is dropped and
+  answered `408`. Each open upload is recorded under `<state>/uploads/` until it ends, so a node
+  killed mid-upload removes those temp files when it next starts. There is no size cap: the body is never buffered (axum's 2 MB body limit lives
+  in its buffering extractors and does not apply to a raw body).
+- A node this one does not serve is relayed over the mesh with `up.*`, below, at the rate the peer
+  writes.
 
 ### `att.*` — the mesh link only
 
@@ -727,13 +862,15 @@ MB record (#247) must not share a queue with terminal frames. A node answers `at
 ignores it from anything else, exactly as it ignores any other unknown `t`.
 
 ```
-hub  → peer  { "t":"att.fetch", "rid":7, "pane":"01JNODE/w3:p2", "id":"att-7f3", "window":4 }
+hub  → peer  { "t":"att.fetch", "rid":7, "pane":"01JNODE/w3:p2", "id":"att-7f3", "window":4,
+                                          "start":0, "end":1023 }   // start/end optional, file ids only
 peer → hub   { "t":"att.open",  "rid":7, "bytes":52831, "kind":"image", "mime":"image/png",
-                                          "name":"shot.png" }
+                                          "name":"shot.png", "total":9000000 }  // total only for a range
 peer → hub   { "t":"att.chunk", "rid":7, "seq":0, "b64":"…" }        // ≤ 64 KiB decoded
 hub  → peer  { "t":"att.more",  "rid":7, "n":1 }
 peer → hub   { "t":"att.end",   "rid":7 }
 peer → hub   { "t":"att.error", "rid":7, "code":"not_found" }        // or "too_large", "busy"
+peer → hub   { "t":"att.error", "rid":7, "code":"unsatisfiable", "total":9000000 }
 hub  → peer  { "t":"att.stop",  "rid":7 }
 ```
 
@@ -747,14 +884,52 @@ hub  → peer  { "t":"att.stop",  "rid":7 }
   transfer rather than after it, and `att.end` rides that lane too or it would arrive first.
 - **The ceiling is enforced on `att.open`'s claim before a chunk is asked for**, and again on the
   arithmetic as they arrive: a peer that sends more than it announced is cut off, and one that sends
-  less ends the body short of its `Content-Length`.
-- **`att.error` is one answer for the same reason `404` is.** `too_large` is the hub's `413`;
-  everything else, including a peer that is offline or never answers, is the hub's single `404`.
+  less ends the body short of its `Content-Length`. The ceiling is 8 MiB for a record id and the
+  16 GiB sanity bound for a path form, which the peer streams.
+- **`bytes` may be `null`**: a zip's length is not known until it ends. The hub then serves the body
+  chunked with no `Content-Length`, holds the ceiling against the running count, and takes `att.end`
+  as the end. A body that fails part way ends with `att.error` on the chunk lane, never `att.end`,
+  so a stopped zip cannot pass for a finished one.
+- **Ranges.** `start`/`end` (inclusive, as HTTP has them) are honoured for a `file` id and ignored
+  for anything else. A peer that honoured them says so with `total` on `att.open`, and the hub
+  answers `206` with `Content-Range: bytes start-(start+bytes-1)/total`; without `total` the hub
+  serves the whole file as a `200`. A start past the end is `att.error` `unsatisfiable` with the
+  file's `total`, which the hub answers `416`. The hub reads `Range` from its own request and
+  forwards it; a peer types the file from its own head, never from the slice.
+- **`att.error` is one answer for the same reason `404` is.** `too_large` is the hub's `413` and
+  `unsatisfiable` its `416`; everything else, including a peer that is offline or never answers, is
+  the hub's single `404`.
 - **`caps.attachments`** on a peer's `hello` is what tells a hub this build answers `att.fetch` at
   all. Absent means no, which is what every build before this one says.
-- **`id` is whatever the hub was handed**, forwarded unchanged — a record locator or a file id. The
-  peer decides which it is and applies its own gate: a file id is answered only for a hub whose
-  device may send input *there*, and a demoted one gets `not_found` like any other refusal.
+- **`id` is whatever the hub was handed**, forwarded unchanged — a record locator or any path form.
+  The peer decides which it is and applies its own gate: a path form is answered only for a hub
+  whose device may send input *there*, and a demoted one gets `not_found` like any other refusal.
+  A path form ignores `pane` beyond routing, so `"pane": "01JNODE/_"` is fine.
+
+### `up.*` — an upload, relayed to the peer that writes it
+
+The `att.*` lane run backwards: the hub pushes, the peer grants credit.
+
+```
+hub  → peer  { "t":"up.open",  "rid":9, "dir":"~/Downloads", "name":"shot.png" }
+peer → hub   { "t":"up.more",  "rid":9, "n":4 }        // accepted: the window it will take
+hub  → peer  { "t":"up.chunk", "rid":9, "seq":0, "b64":"…" }   // ≤ 64 KiB decoded, only against credit
+peer → hub   { "t":"up.more",  "rid":9, "n":1 }        // one per chunk written
+hub  → peer  { "t":"up.done",  "rid":9 }
+peer → hub   { "t":"up.ok",    "rid":9, "path":"/home/u/Downloads/shot.png", "bytes":52831 }
+peer → hub   { "t":"up.error", "rid":9, "code":"read_only" }  // bad_name, not_found, busy, overrun, idle, failed
+hub  → peer  { "t":"up.stop",  "rid":9 }               // the client went: discard what was written
+```
+
+- **The peer gates `up.open` on the hub's own device row**, re-read from the store as every writing
+  verb is: a hub that may not type there gets `read_only`, which the hub answers `403`. `bad_name`
+  is `400`, `busy` (more than four at once) `503`, `idle` `408`, everything else `404`.
+- **What the peer holds is the window**, whatever the file's size; a hub that sends past its credit
+  is cut off with `overrun`. The peer writes the same temp-then-rename file the HTTP route does, and
+  `up.stop`, a closed link, nothing for its own `limits.upload_idle_secs`, or any failure removes
+  it.
+- **`caps.upload`** on a peer's `hello` says the build answers `up.open`. A hub never asks one that
+  does not; the upload is then `404`.
 
 A `tool` block's `state` is `running` | `done` | **`error`**. A tool turn is **revised in place** when
 its result lands: match by turn id and replace, never append, or every tool renders twice.

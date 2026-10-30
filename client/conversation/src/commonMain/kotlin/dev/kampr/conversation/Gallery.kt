@@ -22,17 +22,19 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.action
+import dev.kampr.shared.ui.recordPlace
 import dev.kampr.shared.wire.Attachment
 import kotlinx.coroutines.launch
 
 private val TILE = 112.dp
 
-// A tile is a thumbnail and the file's name, and pressing it opens the full picture. The full
-// picture is fetched again on the press rather than kept from the thumbnail's fetch: the store
-// holds four of those, and a gallery of eight that held its own would be pushing them out of each
-// other and fetching again on every return to the pane.
+// A tile is a thumbnail and the file's name, and pressing it opens the full picture in the file
+// viewer. The decoded picture is not kept beside the thumbnail: the store holds four of those, and a
+// gallery of eight that held its own would be pushing them out of each other and fetching again on
+// every return to the pane. The viewer reuses the bytes while `HeldBytes` still has them.
 //
 // A read-only device is offered nothing, for the reason [InlinePicture] gives.
 @Composable
@@ -58,13 +60,8 @@ private fun Tile(att: Attachment, attachments: AttachmentStore) {
             if (idle) attachments.fetchThumbnail(io, att)
         }
     }
-    val full = attachments.state(att.id)
-    val label = when {
-        full is AttachmentState.Failed -> full.reason
-        full is AttachmentState.Fetching -> "opening"
-        thumb is Thumbnail.Failed -> thumb.reason
-        else -> null
-    }
+    val openPlace = LocalOpenPlace.current
+    val label = (thumb as? Thumbnail.Failed)?.reason
     val shape = RoundedCornerShape(tokens.radii.md)
     Column(
         Modifier
@@ -76,12 +73,10 @@ private fun Tile(att: Attachment, attachments: AttachmentStore) {
                     else -> "Fetching $headline"
                 },
                 {
-                    scope.launch {
-                        when {
-                            thumb is Thumbnail.Failed -> attachments.fetchThumbnail(io, att)
-                            full is AttachmentState.Shown -> attachments.view(att)
-                            else -> attachments.reveal(io, att)
-                        }
+                    if (thumb is Thumbnail.Failed) {
+                        scope.launch { attachments.fetchThumbnail(io, att) }
+                    } else {
+                        openPlace(recordPlace(attachments.pane, att))
                     }
                 },
                 shape = shape,

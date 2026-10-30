@@ -76,6 +76,7 @@ web-push = { version = "0.11.0", default-features = false }
 # needs: GMS does not perform authenticator selection, so the relying party has to state a
 # discoverable platform credential and drop `credProtect` itself.
 webauthn-rs = { version = "0.5.5", features = ["workaround-google-passkey-specific-issues"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2"] }
 # The ES256 keypair generator. Held at 0.12 because web-push 0.11 requires `^0.12.11`, so 0.13
 # cannot unify — it would put two jwt-simple trees (and two of p256, k256, rand) in the binary.
 # Safe to hold: this crate only ever calls `ES256KeyPair::generate()`, never verifies a token, so

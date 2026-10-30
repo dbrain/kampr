@@ -45,6 +45,7 @@ fun PaneActionsSheet(
     onDismiss: () -> Unit,
     panes: List<PaneInfo> = emptyList(),
     onFind: (() -> Unit)? = null,
+    onFiles: (() -> Unit)? = null,
     tools: @Composable () -> Unit = {},
     desk: Boolean = false,
 ) {
@@ -75,15 +76,33 @@ fun PaneActionsSheet(
         }
     }
 
+    val files: @Composable () -> Unit = {
+        onFiles?.let { go ->
+            Chip(
+                "files",
+                false,
+                {
+                    onDismiss()
+                    go()
+                },
+                label = "Browse the files where this ${if (pane.isNative || pane.isMuffit) "session" else "pane"} is working",
+            )
+        }
+    }
+    val chips: @Composable () -> Unit = {
+        files()
+        tools()
+    }
+
     BottomSheet(breakpoint, onDismiss) {
         SheetHeader("Actions", paneTitle(pane), null, onDismiss)
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
                 // The title is muffit's own, and docs/18 gives the node no way to rename a session.
                 if (pane.isMuffit) {
-                    NativeTarget(pane, desk, ::send, null, {}, renamable = false)
+                    NativeTarget(pane, desk, ::send, null, files, renamable = false)
                 } else if (pane.isNative) {
-                    NativeTarget(pane, desk, ::send, find, tools)
+                    NativeTarget(pane, desk, ::send, find, chips)
                 } else {
                     Target(
                         kind = "pane",
@@ -95,7 +114,7 @@ fun PaneActionsSheet(
                         zoomable = true,
                         onManage = ::send,
                         onFind = find,
-                        extra = tools,
+                        extra = chips,
                     )
                     pane.tabId?.let { tabId ->
                         Target(
@@ -194,7 +213,7 @@ private fun NativeTarget(
             Chip(action.verb, false, { onManage(action.op) }, label = action.spoken)
         }
     }
-    val facts = nativeFacts(pane).drop(1)
+    val facts = if (pane.isMuffit) emptyList() else nativeFacts(pane)
     if (facts.isNotEmpty()) {
         val tokens = Kampr.tokens
         KText(facts.joinToString(" · "), tokens.type.captionSmall, tokens.color.mute, maxLines = 2)

@@ -11,13 +11,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.kampr.conversation.files.FilesBar
+import dev.kampr.conversation.files.ZoomImage
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.net.AttachmentBytes
+import dev.kampr.shared.platform.decodeImage
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.PhosphorTheme
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.FilesNav
+import dev.kampr.shared.ui.FilesPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneScreenDesktop
 import dev.kampr.shared.ui.PaneScreenMobile
@@ -183,42 +188,17 @@ class ArtboardTest {
         }
     }
 
-    // The picture open on a phone, inside the pane screen it is opened from — which is where the
-    // question "how do I get out of this" is answered, and the artboard is how that answer is
-    // checked rather than assumed.
+    // The picture open on a phone, over the whole window as the file viewer draws it — which is
+    // where the question "how do I get out of this" is answered, and the artboard is how that
+    // answer is checked rather than assumed.
     @Test
     fun anOpenPictureArtboardRenders() {
-        val node = NodeWithAttachments(mapOf(SHOT.id to AttachmentBytes.Ok(pngBytes(900, 1400), "image/png")))
-        val fetched = AttachmentStore(PANE_ID)
-        runBlocking { fetched.open(node, SHOT) }
-        fetched.view(SHOT)
+        val image = requireNotNull(decodeImage(pngBytes(900, 1400)))
         renderArtboard(PORTRAIT.first, PORTRAIT.second, SoftTheme, TypeScale.Phone, File(OUT, "conversation-open.png")) {
-            val shown = fetched.state(SHOT.id) as AttachmentState.Shown
-            PaneScreenMobile(
-                pane = runPane(),
-                info = demoInfo(),
-                view = PaneView.Conversation,
-                surfaces = object : dev.kampr.shared.ui.PaneSurfaces by ConversationSurfaces() {
-                    @Composable
-                    override fun Conversation(
-                        pane: dev.kampr.shared.model.PaneState,
-                        info: dev.kampr.shared.wire.PaneInfo?,
-                        modifier: Modifier,
-                    ) = ImageViewer(
-                        shown.image,
-                        headlineOf(SHOT),
-                        detailOf(SHOT),
-                        {},
-                        {},
-                        null,
-                        modifier,
-                    )
-                },
-                landscape = false,
-                readOnly = false,
-                onBack = {},
-                onView = {},
-            )
+            Column(Modifier.fillMaxSize()) {
+                FilesBar(headlineOf(SHOT), detailOf(SHOT), NoNav)
+                ZoomImage(image, headlineOf(SHOT), Modifier.weight(1f))
+            }
         }
     }
 
@@ -394,4 +374,11 @@ class ArtboardTest {
             )
         }
     }
+}
+
+private object NoNav : FilesNav {
+    override fun open(place: FilesPlace) = Unit
+    override fun replace(place: FilesPlace) = Unit
+    override fun back() = Unit
+    override fun close() = Unit
 }

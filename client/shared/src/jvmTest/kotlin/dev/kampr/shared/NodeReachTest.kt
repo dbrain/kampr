@@ -82,8 +82,8 @@ class NodeReachTest {
             "a screen reader was told the same thing",
         )
         assertTrue(
-            onAllNodesWithText("peer · ", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty(),
-            "the peer's header lost the one word the wire does support",
+            onAllNodesWithContentDescription(", peer, ", substring = true, useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty(),
+            "the peer's header no longer says the one word the wire does support",
         )
     }
 }

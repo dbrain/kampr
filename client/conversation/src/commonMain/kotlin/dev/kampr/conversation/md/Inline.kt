@@ -9,6 +9,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import dev.kampr.shared.model.asPath
 
 data class InlineStyles(val code: SpanStyle, val link: SpanStyle)
 
@@ -75,8 +76,7 @@ private class Inline(
                 c == 'h' || c == 'H' || c == 'm' || c == 'M' -> {
                     val url = if (linkify) urlAt(src, at) else null
                     if (url == null) {
-                        pending.append(c)
-                        at++
+                        if (!path(::flush)) pending.append(src[at++])
                     } else {
                         flush()
                         target(url)
@@ -84,13 +84,19 @@ private class Inline(
                     }
                 }
 
-                else -> {
-                    pending.append(c)
-                    at++
-                }
+                else -> if (!path(::flush)) pending.append(src[at++])
             }
         }
         flush()
+    }
+
+    private fun path(flush: () -> Unit): Boolean {
+        if (!linkify) return false
+        val (length, path) = pathAt(src, at) ?: return false
+        flush()
+        marked(src.substring(at, at + length), pathLink(path))
+        at += length
+        return true
     }
 
     private fun code(): Boolean {
@@ -100,7 +106,13 @@ private class Inline(
         val close = src.indexOf(fence, at + ticks)
         if (close < 0) return false
         val body = src.substring(at + ticks, close).trim(' ')
+        val start = out.length
         out.withStyle(styles.code) { append(body) }
+        if (linkify) {
+            asPath(body, bare = false)?.let { path ->
+                out.addLink(LinkAnnotation.Url(pathLink(path), TextLinkStyles(styles.link)), start, out.length)
+            }
+        }
         at = close + ticks
         return true
     }
@@ -144,9 +156,11 @@ private class Inline(
         return true
     }
 
-    private fun target(url: String) {
+    private fun target(url: String) = marked(url, url)
+
+    private fun marked(shown: String, url: String) {
         val start = out.length
-        out.append(url)
+        out.append(shown)
         out.addStyle(styles.link, start, out.length)
         out.addLink(LinkAnnotation.Url(url, TextLinkStyles(styles.link)), start, out.length)
     }

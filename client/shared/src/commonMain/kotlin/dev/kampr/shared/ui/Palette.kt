@@ -6,12 +6,14 @@ import dev.kampr.shared.model.groups
 import dev.kampr.shared.model.homeRelative
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
+import dev.kampr.shared.net.anchorPane
 import dev.kampr.shared.wire.PaneInfo
 
 sealed interface PaletteTarget {
     data class OpenPane(val paneId: String) : PaletteTarget
     data class Go(val screen: Screen) : PaletteTarget
     data class NewOn(val nodeId: String) : PaletteTarget
+    data class Files(val place: FilesPlace) : PaletteTarget
 }
 
 data class PaletteField(val text: String, val weight: Int)
@@ -27,7 +29,7 @@ data class PaletteItem(
 // Nine, because a result is picked by its digit and there is no tenth digit to press.
 const val PALETTE_SHOWN = 9
 
-fun paletteItems(herd: Herd, mosaic: Boolean, canCreate: Boolean): List<PaletteItem> {
+fun paletteItems(herd: Herd, mosaic: Boolean, canCreate: Boolean, canBrowse: Boolean): List<PaletteItem> {
     val names = herd.nodes.associate { it.id to it.name }
     val listed = herd.groups().flatMap { it.panes }
     val fleet = herd.panes.filter { it.fleet != null }
@@ -47,6 +49,18 @@ fun paletteItems(herd: Herd, mosaic: Boolean, canCreate: Boolean): List<PaletteI
                         "workspace, tab or agent",
                         PaletteTarget.NewOn(node.id),
                         listOf(PaletteField("new create workspace session", 2), PaletteField(node.name, 3)),
+                    ),
+                )
+            }
+        }
+        if (canBrowse) {
+            for (node in herd.nodes.filter { it.isReachable }) {
+                add(
+                    PaletteItem(
+                        "Files on ${node.name}",
+                        "browse from home",
+                        PaletteTarget.Files(FilesPlace.Dir(node.id, anchorPane(node.id), "~")),
+                        listOf(PaletteField("files browse folder directory git", 2), PaletteField(node.name, 3)),
                     ),
                 )
             }

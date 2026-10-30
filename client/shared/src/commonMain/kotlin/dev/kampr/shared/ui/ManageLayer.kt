@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.capsFor
 import dev.kampr.shared.model.hasDesk
+import dev.kampr.shared.net.anchorPane
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.NodeInfo
@@ -45,6 +46,11 @@ interface ManageIo {
     // The + beside one machine: a Kampr session on that host, with nothing to fill in. There is no
     // sheet in front of it, so the ack and the refusal are both `AppState`'s to catch.
     fun quickSession(nodeId: String) = Unit
+
+    // A machine's folder, from beside its +. The node answers a path only for a device that may
+    // type, so a read-only one is not offered a folder it would only be refused.
+    val browses: Boolean get() = false
+    fun browse(node: NodeInfo) = Unit
 }
 
 private object NoManage : ManageIo {
@@ -59,6 +65,8 @@ val LocalManage: ProvidableCompositionLocal<ManageIo> = staticCompositionLocalOf
 
 class AppManage(private val state: AppState) : ManageIo {
     override val enabled: Boolean get() = state.store.canManage
+    override val browses: Boolean get() = !state.store.readOnly
+    override fun browse(node: NodeInfo) = state.open(FilesPlace.Dir(node.id, anchorPane(node.id), "~"))
     override fun openNew(paneId: String?) {
         val node = paneId?.let { state.store.paneInfo(it)?.nodeId }
             ?: state.store.herd.value.nodes.firstOrNull { it.kind == "local" }?.id
@@ -112,6 +120,15 @@ fun QuickSessionAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = 
         modifier,
         chip = 22.dp,
     ) { manage.quickSession(node.id) }
+}
+
+@Composable
+fun NodeFilesAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = Modifier) {
+    val manage = LocalManage.current
+    if (!manage.browses || !node.isReachable) return
+    GlyphAction(KamprIcons.folder, "Browse files on ${node.name}", Kampr.tokens.color.dim, target, modifier, chip = 22.dp) {
+        manage.browse(node)
+    }
 }
 
 @Composable
@@ -211,6 +228,8 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 // Absent rather than present-and-failing, the same rule the passkey button follows.
                 onFind = { state.openFind(pane.id) }
                     .takeIf { state.store.hello.value?.caps?.find == true },
+                onFiles = { state.open(FilesPlace.Dir(pane.nodeId, pane.id, pane.cwd ?: "~")) }
+                    .takeIf { !state.store.readOnly },
                 tools = { surfaces.Tools(pane.id, state::closeSheet) },
                 desk = herd.hasDesk(pane.nodeId),
             )

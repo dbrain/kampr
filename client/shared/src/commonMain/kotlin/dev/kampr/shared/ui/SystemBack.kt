@@ -27,15 +27,26 @@ internal fun backTarget(screen: Screen, breakpoint: Breakpoint, paired: Boolean)
 }
 
 // A sheet floats over whatever screen is showing and everything it acts on is behind it, so it is
-// what back closes first — the screen underneath has not been left yet.
+// what back closes first — the screen underneath has not been left yet. An open file floats over
+// the sheet too. One handler for all three: Android re-registers lifecycle-aware callbacks on
+// resume, so the order between two `BackHandler`s is not one anything can rely on. The browser's
+// back button is fed the same decision, since nothing in Compose hears it.
+private fun AppState.backTarget(breakpoint: Breakpoint): Screen? = backTarget(screen, breakpoint, endpoint?.token != null)
+
+private fun AppState.canGoBack(breakpoint: Breakpoint): Boolean = files.isNotEmpty() || sheet != null || backTarget(breakpoint) != null
+
+private fun AppState.goBack(breakpoint: Breakpoint) {
+    val target = backTarget(breakpoint)
+    when {
+        files.isNotEmpty() -> backFiles()
+        sheet != null -> closeSheet()
+        target != null -> go(target)
+    }
+}
+
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun SystemBack(state: AppState, breakpoint: Breakpoint) {
-    val target = backTarget(state.screen, breakpoint, state.endpoint?.token != null)
-    BackHandler(enabled = state.sheet != null || target != null) {
-        when {
-            state.sheet != null -> state.closeSheet()
-            target != null -> state.go(target)
-        }
-    }
+    BackHandler(enabled = state.canGoBack(breakpoint)) { state.goBack(breakpoint) }
+    BrowserBack(wanted = { state.canGoBack(breakpoint) }, back = { state.goBack(breakpoint) })
 }

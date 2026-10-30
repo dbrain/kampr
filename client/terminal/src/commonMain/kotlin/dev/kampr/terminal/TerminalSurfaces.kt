@@ -8,6 +8,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.ui.Chip
 import dev.kampr.shared.ui.FallbackSurfaces
+import dev.kampr.shared.ui.FilesNav
+import dev.kampr.shared.ui.FilesPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.wire.PaneInfo
@@ -46,6 +48,11 @@ class TerminalSurfaces(private val conversation: PaneSurfaces = FallbackSurfaces
     @Composable
     override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) {
         conversation.Conversation(pane, info, modifier)
+    }
+
+    @Composable
+    override fun Files(place: FilesPlace, nav: FilesNav, modifier: Modifier) {
+        conversation.Files(place, nav, modifier)
     }
 
     @Composable

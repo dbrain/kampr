@@ -67,6 +67,7 @@ import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalCovered
 import dev.kampr.shared.ui.LocalMosaicCell
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPalette
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalSafeArea
@@ -74,6 +75,7 @@ import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.breakpointOf
+import dev.kampr.shared.ui.filePlace
 import dev.kampr.shared.ui.gestureAction
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.MIN_PANE_COLS
@@ -294,7 +296,7 @@ fun TerminalView(
     val logical = remember(rows) { LogicalText(rows) }
     val probe = session.grid
     val review = session.review
-    val peek = session.peek
+    val openPlace = LocalOpenPlace.current
 
     // LocalClipboard's ClipEntry is constructed from a platform-native object in CMP 1.11.1,
     // so the deprecated ClipboardManager is still the only clipboard reachable from common code.
@@ -879,7 +881,7 @@ fun TerminalView(
                 return
             }
             val (line, offset) = logical.lineAt(cell.row, cell.col)
-            val found = detectTarget(line, offset)
+            val found = detectTarget(line, offset, io.info(pane.id)?.cwd)
             // The route is gated on a device that may send input, and the whole argument for a
             // client-minted file id is that such a device can already `cat` the file. A device
             // that may not type is offered the string instead of the bytes.
@@ -1007,7 +1009,7 @@ fun TerminalView(
                 // detector consumes the release — so leaving *it* live is what let a tap meant for
                 // the scrim raise the keyboard instead of closing the sheet.
                 .then(
-                    if (view.sheetOpen || view.menuAt != null || session.confirm.held != null || peek.path != null) {
+                    if (view.sheetOpen || view.menuAt != null || session.confirm.held != null) {
                         Modifier
                     } else {
                         Modifier.pointerInput(pane.id, scrollToPane != null) {
@@ -1121,7 +1123,7 @@ fun TerminalView(
         PaneTextInput(
             session = session,
             sink = sink,
-            enabled = !io.readOnly && !covered && !view.sheetOpen && session.confirm.held == null && peek.path == null,
+            enabled = !io.readOnly && !covered && !view.sheetOpen && session.confirm.held == null,
             onChord = { chord ->
                 when (chord) {
                     PaneChord.Copy -> copySelection()
@@ -1253,7 +1255,7 @@ fun TerminalView(
             val act = {
                 when (target.kind) {
                     TargetKind.Path -> clipboard.setText(AnnotatedString(target.text))
-                    TargetKind.File -> scope.launch { peek.open(io, pane.id, target.text) }
+                    TargetKind.File -> openPlace(filePlace(pane.id, target.text))
                     else -> uris.openUri(target.text)
                 }
                 view.aimOff()
@@ -1298,22 +1300,6 @@ fun TerminalView(
                         .padding(bottom = with(density) { (chromeBottom + session.indicatorHeight).toDp() }),
                 )
             }
-        }
-
-        peek.path?.let { at ->
-            FileSheet(
-                path = at,
-                state = peek.state,
-                onClose = peek::close,
-                onCopy = { clipboard.setText(AnnotatedString(it)) },
-                // The pane header floats over this surface rather than sitting above it, so a
-                // sheet that fills the surface and puts its controls at its own top edge puts
-                // them underneath the header. That is where the Close button has been: painted,
-                // reachable by tab, and covered by an opaque bar — which reads as no close button
-                // at all, and left Escape as the only way out.
-                chromeTop = chromeTop,
-                chromeBottom = with(density) { chromeBottom.toDp() },
-            )
         }
 
         session.confirm.held?.let { held ->

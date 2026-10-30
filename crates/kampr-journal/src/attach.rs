@@ -14,6 +14,10 @@ pub const IMAGE: &str = "image";
 /// Anything a client should offer as a download rather than try to render.
 pub const FILE: &str = "file";
 
+/// An answer the node composed itself — a diff, a listing, a commit — whose type is the node's
+/// own word rather than anything read off a file.
+pub const TEXT: &str = "text";
+
 /// The largest body this node will hand back for one attachment.
 ///
 /// The biggest single attachment measured on a real machine is a Codex `view_image` output of
@@ -95,7 +99,7 @@ impl Locator {
     pub fn decode(id: &str) -> Result<Self, JournalError> {
         match Source::decode(id)? {
             Source::Record(locator) => Ok(locator),
-            Source::File(_) | Source::Diff(_) | Source::Paste(_) => Err(refuse()),
+            _ => Err(refuse()),
         }
     }
 }
@@ -118,6 +122,14 @@ const DIFF_TAG: &str = "diff";
 /// Looking at a screenshot somebody pasted into an agent session is reading — the same argument
 /// that lets a read-only device fetch a record's attachment.
 const PASTE_TAG: &str = "paste";
+
+const STAGED_TAG: &str = "staged";
+const UNSTAGED_TAG: &str = "unstaged";
+const ZIP_TAG: &str = "zip";
+const LS_TAG: &str = "ls";
+const REPO_TAG: &str = "repo";
+const SHOW_TAG: &str = "show";
+const COMMIT_TAG: &str = "commit";
 
 /// A plain path on the node's filesystem, with no transcript behind it and no working directory
 /// to resolve against.
@@ -151,6 +163,15 @@ impl FileRef {
             mime: mime.map(str::to_string),
             bytes: None,
             name: self.path.file_name().map(|n| n.to_string_lossy().into_owned()),
+        }
+    }
+
+    /// The path with `~` expanded, refused unless it is then absolute. Nothing on disk is looked at.
+    pub fn absolute(&self, home: &Path) -> Result<PathBuf, JournalError> {
+        let path = self.against(home);
+        match path.is_absolute() {
+            true => Ok(path),
+            false => Err(refuse()),
         }
     }
 
@@ -192,33 +213,33 @@ impl FileRef {
         home.join(rest.trim_start_matches('/'))
     }
 
+    /// The regular file this id names, opened, with the length of the handle that was opened.
+    ///
+    /// **`stat` before `open`**: opening a fifo with no writer on the other end blocks for ever,
+    /// and a path naming one has to be refused rather than waited on. The handle is stat'd again
+    /// afterwards, so the size a caller relies on is the size of the file that was actually
+    /// opened.
+    pub fn open(&self, home: &Path) -> Result<(PathBuf, std::fs::File, u64), JournalError> {
+        let path = self.resolve(home)?;
+        let file = std::fs::File::open(&path).map_err(|_| refuse())?;
+        let stat = file.metadata().map_err(|_| refuse())?;
+        if !stat.is_file() {
+            return Err(refuse());
+        }
+        Ok((path, file, stat.len()))
+    }
+
     /// The bytes at that path, or the same refusal everything else here gives.
     ///
     /// `home` is the node's own — `Config::journal_home()`, which is the operator's home rather
     /// than the process's whenever the two differ. An empty one expands `~/x` to the relative `x`
     /// and the check below refuses it, which is the honest answer on a machine with no `$HOME`.
-    ///
-    /// **`stat` before `open`**: opening a fifo with no writer on the other end blocks for ever,
-    /// and a path naming one has to be refused rather than waited on. The handle is stat'd again
-    /// afterwards, so the size the ceiling is applied to is the size of the file that was
-    /// actually opened.
     pub fn fetch(&self, home: &Path) -> Result<Fetched, JournalError> {
-        let path = self.against(home);
-        if !path.is_absolute() {
-            return Err(refuse());
+        let (path, mut file, len) = self.open(home)?;
+        if len > MAX_BYTES {
+            return Err(JournalError::TooLarge(len));
         }
-        if !std::fs::metadata(&path).map_err(|_| refuse())?.is_file() {
-            return Err(refuse());
-        }
-        let mut file = std::fs::File::open(&path).map_err(|_| refuse())?;
-        let stat = file.metadata().map_err(|_| refuse())?;
-        if !stat.is_file() {
-            return Err(refuse());
-        }
-        if stat.len() > MAX_BYTES {
-            return Err(JournalError::TooLarge(stat.len()));
-        }
-        let mut data = Vec::with_capacity(stat.len().min(MAX_BYTES) as usize);
+        let mut data = Vec::with_capacity(len.min(MAX_BYTES) as usize);
         (&mut file)
             .take(MAX_BYTES + 1)
             .read_to_end(&mut data)
@@ -252,8 +273,23 @@ pub enum Source {
     /// and for the same reason: it reads a path on the node, and a device that can type into a
     /// terminal can already run `git diff` there.
     Diff(FileRef),
+    /// What is in the index and not in HEAD, and what is in the worktree and not in the index.
+    Staged(FileRef),
+    Unstaged(FileRef),
+    /// A directory, archived as it is read.
+    Zip(FileRef),
     /// One of this node's own pastes, and nothing else — see [`PASTE_TAG`].
     Paste(FileRef),
+    Ls(FileRef),
+    Repo(FileRef),
+    Show {
+        file: FileRef,
+        rev: String,
+    },
+    Commit {
+        repo: FileRef,
+        sha: String,
+    },
 }
 
 impl Source {
@@ -262,7 +298,35 @@ impl Source {
             Self::Record(locator) => locator.encode(),
             Self::File(file) => file.encode(),
             Self::Diff(file) => file.encode_as(DIFF_TAG),
+            Self::Staged(file) => file.encode_as(STAGED_TAG),
+            Self::Unstaged(file) => file.encode_as(UNSTAGED_TAG),
+            Self::Zip(dir) => dir.encode_as(ZIP_TAG),
             Self::Paste(file) => file.encode_as(PASTE_TAG),
+            Self::Ls(dir) => dir.encode_as(LS_TAG),
+            Self::Repo(path) => path.encode_as(REPO_TAG),
+            Self::Show { file, rev } => {
+                URL_SAFE_NO_PAD.encode(format!("{SHOW_TAG}{SEP}{}{SEP}{rev}", file.path.display()))
+            }
+            Self::Commit { repo, sha } => {
+                URL_SAFE_NO_PAD.encode(format!("{COMMIT_TAG}{SEP}{}{SEP}{sha}", repo.path.display()))
+            }
+        }
+    }
+
+    /// Every form that reads a path a client chose, which is every form gated as typing is. Both
+    /// gates — the HTTP route and the mesh peer — ask this rather than enumerating (#304).
+    pub fn is_path_form(&self) -> bool {
+        match self {
+            Self::File(_)
+            | Self::Diff(_)
+            | Self::Staged(_)
+            | Self::Unstaged(_)
+            | Self::Zip(_)
+            | Self::Ls(_)
+            | Self::Repo(_)
+            | Self::Show { .. }
+            | Self::Commit { .. } => true,
+            Self::Record(_) | Self::Paste(_) => false,
         }
     }
 
@@ -283,10 +347,39 @@ impl Source {
             })),
             [tag, path] if *tag == FILE_TAG && !path.is_empty() => Ok(Self::File(FileRef::new(*path))),
             [tag, path] if *tag == DIFF_TAG && !path.is_empty() => Ok(Self::Diff(FileRef::new(*path))),
+            [tag, path] if *tag == STAGED_TAG && !path.is_empty() => Ok(Self::Staged(FileRef::new(*path))),
+            [tag, path] if *tag == UNSTAGED_TAG && !path.is_empty() => {
+                Ok(Self::Unstaged(FileRef::new(*path)))
+            }
+            [tag, path] if *tag == ZIP_TAG && !path.is_empty() => Ok(Self::Zip(FileRef::new(*path))),
             [tag, path] if *tag == PASTE_TAG && !path.is_empty() => Ok(Self::Paste(FileRef::new(*path))),
+            [tag, path] if *tag == LS_TAG && !path.is_empty() => Ok(Self::Ls(FileRef::new(*path))),
+            [tag, path] if *tag == REPO_TAG && !path.is_empty() => Ok(Self::Repo(FileRef::new(*path))),
+            [tag, path, rev] if *tag == SHOW_TAG && !path.is_empty() && is_rev(rev) => Ok(Self::Show {
+                file: FileRef::new(*path),
+                rev: (*rev).to_string(),
+            }),
+            [tag, path, sha] if *tag == COMMIT_TAG && !path.is_empty() && is_sha(sha) => Ok(Self::Commit {
+                repo: FileRef::new(*path),
+                sha: (*sha).to_string(),
+            }),
             _ => Err(refuse()),
         }
     }
+}
+
+/// Both reach `git`'s argv, so the alphabet is what keeps either from being read as an option, a
+/// pathspec or a second revision.
+fn is_rev(rev: &str) -> bool {
+    (1..=100).contains(&rev.len())
+        && !rev.starts_with('-')
+        && rev
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"_.~^/@{}-".contains(&b))
+}
+
+fn is_sha(sha: &str) -> bool {
+    (4..=64).contains(&sha.len()) && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn refuse() -> JournalError {
@@ -296,7 +389,7 @@ fn refuse() -> JournalError {
 /// What an extension is worth, and it is the only thing a file on disk offers. Deliberately short:
 /// a type that is not on it is a download, which is the safe answer for `text/html` and for the
 /// scriptable document `image/svg+xml` names.
-fn image_mime(path: &Path) -> Option<&'static str> {
+pub fn image_mime(path: &Path) -> Option<&'static str> {
     let extension = path.extension()?.to_str()?.to_ascii_lowercase();
     Some(match extension.as_str() {
         "png" => "image/png",

@@ -20,11 +20,13 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
+import dev.kampr.shared.ui.recordPlace
 import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.wire.Attachment
 import kotlinx.coroutines.launch
@@ -35,6 +37,8 @@ private val THUMBNAIL = 64.dp
 fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val io = LocalPaneIo.current
+    val openPlace = LocalOpenPlace.current
+    val show: () -> Unit = { openPlace(recordPlace(attachments.pane, att)) }
     val scope = rememberCoroutineScope()
     val state = attachments.state(att.id)
     val headline = headlineOf(att)
@@ -53,7 +57,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                 Modifier
                     .fillMaxWidth()
                     .touchable(LANDSCAPE_TOUCH)
-                    .action("Open $headline", { attachments.view(att) })
+                    .action("Open $headline", show)
                     .padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(11.dp),
@@ -111,15 +115,6 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
 
                 is AttachmentState.Sound -> SoundBar(att, state, attachments, Modifier.fillMaxWidth())
 
-                is AttachmentState.Text -> DisableSelection {
-                    QuietAction(
-                        "Read it",
-                        { attachments.view(att) },
-                        Modifier.fillMaxWidth(),
-                        label = "Read $headline",
-                    )
-                }
-
                 is AttachmentState.Saved -> KText(
                     "saved to ${state.where}",
                     tokens.type.micro,
@@ -151,7 +146,9 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                 else -> DisableSelection {
                     QuietAction(
                         offer.label,
-                        { scope.launch { attachments.open(io, att) } },
+                        {
+                            if (offer == AttachmentOffer.Text) show() else scope.launch { attachments.open(io, att) }
+                        },
                         Modifier.fillMaxWidth(),
                         label = "${offer.label}, $headline",
                     )

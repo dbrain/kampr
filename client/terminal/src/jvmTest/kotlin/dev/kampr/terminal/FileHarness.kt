@@ -19,6 +19,8 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.theme.LocalTokens
+import dev.kampr.shared.ui.FilesPlace
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneChrome
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
@@ -101,6 +103,7 @@ internal fun ComposeUiTest.gridTerminal(
     height: Dp = 914.dp,
     bars: SafeArea = Phone.BARS,
     board: Pasteboard = Pasteboard(),
+    opened: MutableList<FilesPlace> = mutableListOf(),
 ): Pasteboard {
     setContent {
         CompositionLocalProvider(
@@ -109,6 +112,7 @@ internal fun ComposeUiTest.gridTerminal(
             LocalSafeArea provides bars,
             LocalPaneChrome provides PaneChrome(CHROME),
             LocalClipboardManager provides board,
+            LocalOpenPlace provides { opened += it },
         ) {
             Box(Modifier.size(width, height).keyboardInset()) {
                 Box(Modifier.fillMaxSize()) { TerminalView(pane, session, io) }

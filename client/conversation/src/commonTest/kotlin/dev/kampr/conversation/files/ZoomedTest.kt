@@ -1,4 +1,4 @@
-package dev.kampr.conversation
+package dev.kampr.conversation.files
 
 import androidx.compose.ui.unit.IntSize
 import kotlin.test.Test
@@ -57,5 +57,30 @@ class ZoomedTest {
         val early = zoomed(FIT, 2f, 500f, 500f, IntSize.Zero)
         assertEquals(0f, early.panX)
         assertEquals(0f, early.panY)
+    }
+
+    // A pinch is about the point between the fingers: the part of the picture under them stays
+    // under them, which is what a pinch in a corner of a screenshot is for.
+    @Test
+    fun aPinchKeepsThePointBetweenTheFingersWhereItWas() {
+        val focus = 100f to -200f
+        val twice = zoomed(FIT, 2f, 0f, 0f, PANE, focus.first, focus.second)
+        assertEquals(-100f, twice.panX, "the point under the fingers slid away horizontally")
+        assertEquals(200f, twice.panY, "the point under the fingers slid away vertically")
+        val contentX = (focus.first - twice.panX) / twice.zoom
+        val contentY = (focus.second - twice.panY) / twice.zoom
+        assertEquals(focus.first, contentX, "the content under the fingers changed")
+        assertEquals(focus.second, contentY)
+    }
+
+    @Test
+    fun aDoubleTapZoomsInAtTheTapAndTheNextOneFits() {
+        val tapped = doubleTapped(FIT, 150f, 300f, PANE)
+        assertEquals(DOUBLE_TAP_ZOOM, tapped.zoom)
+        assertEquals(150f * (1f - DOUBLE_TAP_ZOOM), tapped.panX)
+        assertEquals(300f * (1f - DOUBLE_TAP_ZOOM), tapped.panY)
+        val back = doubleTapped(tapped, 0f, 0f, PANE)
+        assertEquals(1f, back.zoom)
+        assertEquals(0f, back.panX)
     }
 }

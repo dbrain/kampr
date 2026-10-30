@@ -1,6 +1,7 @@
 package dev.kampr.shared.platform
 
 import androidx.compose.ui.graphics.ImageBitmap
+import dev.kampr.shared.net.DownloadSink
 import org.jetbrains.compose.resources.decodeToImageBitmap
 
 // Null means "these bytes are not a picture this device can read", and the caller says so on
@@ -11,6 +12,9 @@ fun decodeImage(bytes: ByteArray): ImageBitmap? = runCatching { bytes.decodeToIm
 // Where the file landed, in words an operator can go and look at, or null if this device refused
 // it. A silent "saved" that saved nothing is the failure mode this return type exists to prevent.
 expect fun saveToDevice(name: String, mime: String?, bytes: ByteArray): String?
+
+// The same landing place opened for writing in chunks, for a file too large to hold whole.
+expect fun openDownload(name: String, mime: String?): DownloadSink?
 
 // A pasted screenshot genuinely has no filename, and every platform below needs one to write.
 fun attachmentFileName(name: String?, mime: String?, id: String): String {

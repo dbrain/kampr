@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
+use tower_http::compression::predicate::{DefaultPredicate, Predicate};
 use tower_http::set_header::SetResponseHeaderLayer;
 
 /// `'wasm-unsafe-eval'` is what a Compose Multiplatform wasm bundle needs and is strictly weaker
@@ -108,6 +109,9 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/api/mesh/{id}/revoke", post(revoke_mesh_node))
         .route("/api/warm", get(warm))
         .route("/api/attachment/{*locator}", get(attachment))
+        // A raw `Body` is never held to axum's 2 MB `DefaultBodyLimit` — that limit lives in the
+        // buffering extractors — so an upload streams to disk at whatever size it is.
+        .route("/api/upload/{*locator}", post(crate::upload_route::upload))
         .route("/api/push", get(push_state))
         .route("/api/push/subscribe", post(push_subscribe))
         .route("/api/push/unsubscribe", post(push_unsubscribe))
@@ -123,13 +127,33 @@ pub fn router(node: Arc<Node>) -> Router {
         // `gzip_types` — so nothing downstream compresses it if this does not. Brotli and gzip
         // only: `zstd` buys a few per cent over brotli on a bundle no browser asks for it on.
         // The layer is outside the WebSocket routes' concern by construction — a 101 has no body.
-        .layer(CompressionLayer::new().br(true).gzip(true))
+        .layer(
+            CompressionLayer::new()
+                .br(true)
+                .gzip(true)
+                .compress_when(DefaultPredicate::new().and(not_a_download)),
+        )
         .layer(secured(CONTENT_SECURITY_POLICY, CSP))
         .layer(secured(X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(secured(X_FRAME_OPTIONS, "DENY"))
         .layer(secured(REFERRER_POLICY, "no-referrer"))
         .layer(tower::util::option_layer(hsts))
         .with_state(node)
+}
+
+/// A file that answers ranges, and a zip, go out as the bytes they are. Compressing either would
+/// make a `Content-Range` count bytes of a body the client never sees, drop the `Content-Length` a
+/// download's progress is drawn from, and spend the node's CPU deflating what is usually already
+/// compressed.
+fn not_a_download(
+    _: StatusCode,
+    _: axum::http::Version,
+    headers: &HeaderMap,
+    _: &axum::http::Extensions,
+) -> bool {
+    !headers.contains_key(axum::http::header::ACCEPT_RANGES)
+        && !headers.contains_key(axum::http::header::CONTENT_RANGE)
+        && headers.get(CONTENT_TYPE).is_none_or(|t| t != crate::zipped::ZIP)
 }
 
 pub async fn serve(node: Arc<Node>) -> Result<()> {
@@ -271,7 +295,7 @@ impl Authenticated {
     /// and the pairing surface are exactly what a half-trusted device probes, and a 403 that
     /// leaves no line behind is a probe nobody can see. `verb` names the surface, and it is what
     /// the loop rule counts.
-    fn refused(&self, node: &Node, verb: &str) -> Option<Response> {
+    pub(crate) fn refused(&self, node: &Node, verb: &str) -> Option<Response> {
         if self.device.role.writes() {
             return None;
         }
@@ -628,6 +652,7 @@ async fn attachment(
     State(node): State<Arc<Node>>,
     auth: Authenticated,
     Path(locator): Path<String>,
+    headers: HeaderMap,
 ) -> Response {
     let missing = || refuse(StatusCode::NOT_FOUND, "no such attachment");
     let mut parts = locator.split('/');
@@ -641,31 +666,37 @@ async fn attachment(
     }
     let pane = format!("{node_id}/{local}");
     let id = id.to_string();
-    // Both path forms read a file this node can see, so both are gated as typing is, and both are
+    let source = kampr_journal::Source::decode(&id).ok();
+    // Every path form reads a file this node can see, so every one is gated as typing is, and
     // decided here rather than after the mesh hop — a hub must refuse them on its own device row.
-    let path_form = match kampr_journal::Source::decode(&id) {
-        Ok(kampr_journal::Source::File(file)) => Some((file, false)),
-        Ok(kampr_journal::Source::Diff(file)) => Some((file, true)),
-        _ => None,
-    };
+    if let Some(source) = source.as_ref().filter(|s| s.is_path_form()) {
+        if let Some(response) = auth.refused(&node, "api.attachment.path") {
+            return response;
+        }
+        // Routed by node id alone: a path names a machine, not a pane, so a client with no pane
+        // on that node anchors the request on `<node>/_`.
+        let span = headers
+            .get(axum::http::header::RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(crate::served::parse_range);
+        if node.route(node_id).is_none() {
+            return attach::relay(&node.peers, &pane, &id, span).await;
+        }
+        return attach::serve_path(source, &node.config.journal_home(), span).await;
+    }
     // **Deliberately not a path form.** A `paste` id names a file inside this node's own pastes
     // directory or it names nothing at all, and `serve_paste` proves that before it reads a byte —
     // so it carries the *record* gate rather than the typing one, and the device that may only
     // look can look at the screenshot somebody pasted.
-    let pasted = match kampr_journal::Source::decode(&id) {
-        Ok(kampr_journal::Source::Paste(file)) => Some(file),
+    let pasted = match source {
+        Some(kampr_journal::Source::Paste(file)) => Some(file),
         _ => None,
     };
-    if path_form.is_some()
-        && let Some(response) = auth.refused(&node, "api.attachment.path")
-    {
-        return response;
-    }
     // A pane this node does not own is served by the node that does, over the mesh link that node
     // dialled — it has no inbound path for this hub to fetch from (ADR 0007), so the bytes come
     // back the way the frames do.
     if node.resolve(&pane).is_none() {
-        return attach::relay(&node.peers, &pane, &id).await;
+        return attach::relay(&node.peers, &pane, &id, None).await;
     }
     // Both halves are file IO and the *first* is the expensive one: a miss walks every project
     // directory and reads both ends of up to 64 transcripts. Leaving it on the executor put tens
@@ -674,13 +705,6 @@ async fn attachment(
         if let Some(file) = pasted {
             let dir = node.state_dir.join("pastes");
             return Some(attach::serve_paste(&file, &dir));
-        }
-        if let Some((file, diff)) = path_form {
-            let home = node.config.journal_home();
-            return Some(match diff {
-                true => attach::serve_diff(&file, &home),
-                false => attach::serve_file(&file, &home),
-            });
         }
         let transcript = transcript_of(&node, &pane)?;
         Some(attach::serve(&node.journals(), &transcript, &id))

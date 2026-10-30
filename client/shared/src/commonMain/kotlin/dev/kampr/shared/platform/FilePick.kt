@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
+import dev.kampr.shared.net.UploadSource
 
 // What the operator chose to hand the agent. `name` is a hint at the stem and nothing more — the
 // node owns the directory it writes to and derives the extension from the bytes, because an
@@ -16,6 +17,10 @@ expect val filePickAvailable: Boolean
 // Null is "nothing was chosen", which is what backing out of a system picker means and is not a
 // failure to report.
 expect suspend fun pickFile(): PickedFile?
+
+// A file to send into a folder on the node, read as it is sent rather than loaded first: it may
+// be larger than this device can hold in memory. Null is "nothing was chosen".
+expect suspend fun pickUpload(): UploadSource?
 
 // A file the operator *pasted*, which is a different gesture from the one the attach button
 // serves and — in a browser, where the clipboard is the only path between a screenshot tool and

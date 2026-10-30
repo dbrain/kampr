@@ -591,3 +591,111 @@ async fn a_tilde_on_the_link_resolves_against_the_peers_own_home() {
     assert_eq!(body, fixture.bytes);
     peer.stop();
 }
+
+fn a_repo_on_the_peer() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = dir.path().canonicalize().expect("a root");
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .expect("git")
+            .status
+            .success();
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("notes.md"), "one\n").expect("write");
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "first"]);
+    std::fs::write(root.join("notes.md"), "two\n").expect("write");
+    (dir, root)
+}
+
+fn browsing_forms(root: &std::path::Path) -> Vec<kampr_journal::Source> {
+    use kampr_journal::{FileRef, Source};
+    let notes = FileRef::new(root.join("notes.md"));
+    vec![
+        Source::Diff(notes.clone()),
+        Source::Ls(FileRef::new(root)),
+        Source::Repo(FileRef::new(root)),
+        Source::Show {
+            file: notes,
+            rev: "HEAD".into(),
+        },
+        Source::Commit {
+            repo: FileRef::new(root),
+            sha: "0000".into(),
+        },
+    ]
+}
+
+/// Every path form a hub can serve locally it can relay, anchored on no pane at all: the peer
+/// answers it from the one function the HTTP route uses, under the type that function chose.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_is_handed_every_browsing_form_off_the_peer_with_no_pane_behind_it() {
+    let fixture = Fixture::new(1024);
+    let mut peer = Peer::start(&fixture, Caller::Hub, UNTHROTTLED).await;
+    paneless(&peer);
+    let (_dir, root) = a_repo_on_the_peer();
+    let anchor = format!("{}/_", peer.node.node_id());
+    peer.until("hello").await;
+
+    let forms = browsing_forms(&root);
+    let mut answers = Vec::new();
+    for (rid, source) in forms.iter().take(4).enumerate() {
+        let rid = rid as u64 + 20;
+        peer.say(json!({
+            "t": "att.fetch", "rid": rid, "pane": anchor, "id": source.encode(), "window": ATT_WINDOW
+        }))
+        .await;
+        answers.push(pull(&mut peer, rid).await);
+    }
+
+    let text = |(open, body, _): &(Value, Vec<u8>, usize)| {
+        (
+            open["mime"].as_str().unwrap_or_default().to_string(),
+            String::from_utf8(body.clone()).expect("utf-8"),
+        )
+    };
+    let (mime, diff) = text(&answers[0]);
+    assert_eq!(mime, "text/plain; charset=utf-8");
+    assert!(diff.contains("+two"), "{diff}");
+    let (mime, listing) = text(&answers[1]);
+    assert_eq!(mime, "application/json");
+    let listing: Value = serde_json::from_str(&listing).expect("JSON");
+    assert_eq!(listing["entries"][1]["name"], "notes.md");
+    assert_eq!(listing["entries"][1]["git"], "M");
+    let (mime, repo) = text(&answers[2]);
+    assert_eq!(mime, "application/json");
+    assert_eq!(
+        serde_json::from_str::<Value>(&repo).expect("JSON")["branch"],
+        "main"
+    );
+    assert_eq!(text(&answers[3]).1, "one\n");
+    peer.stop();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hub_this_node_will_not_take_input_from_is_refused_every_browsing_form() {
+    let fixture = Fixture::new(1024);
+    let mut peer = Peer::start_as(&fixture, Caller::Hub, UNTHROTTLED, Role::Readonly).await;
+    let (_dir, root) = a_repo_on_the_peer();
+    peer.until("hello").await;
+
+    for (rid, source) in browsing_forms(&root).iter().enumerate() {
+        let rid = rid as u64 + 40;
+        peer.say(json!({
+            "t": "att.fetch", "rid": rid, "pane": peer.pane, "id": source.encode(), "window": ATT_WINDOW
+        }))
+        .await;
+        let refusal = peer.until("att.error").await;
+        assert_eq!(refusal["rid"], rid, "{source:?}");
+        assert_eq!(refusal["code"], "not_found", "{source:?}");
+    }
+    peer.stop();
+}

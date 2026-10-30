@@ -22,20 +22,15 @@ fun exitPhrase(exit: NativeExit): String = when {
     else -> "exited"
 }
 
-fun nativeFacts(pane: PaneInfo): List<String> {
-    if (pane.isMuffit) return listOf("muffit")
-    if (!pane.isNative) return emptyList()
-    val exit = pane.exited
-    return listOfNotNull(
-        "kampr",
-        "not on desk".takeIf { pane.detached && exit == null },
-        exit?.let(::exitPhrase),
-    )
+// A Kampr session is the default kind of pane and off the desk is its normal place, so neither is
+// worth a label; only a session that has ended says anything.
+fun nativeFacts(pane: PaneInfo): List<String> = when {
+    pane.isMuffit -> listOf("muffit")
+    pane.isNative -> listOfNotNull(pane.exited?.let(::exitPhrase))
+    else -> emptyList()
 }
 
-fun nativeSpoken(pane: PaneInfo): String? = nativeFacts(pane).takeIf { it.isNotEmpty() }?.let { facts ->
-    (listOf(if (pane.isMuffit) "Muffit session" else "Kampr session") + facts.drop(1)).joinToString(", ")
-}
+fun nativeSpoken(pane: PaneInfo): String? = if (pane.isMuffit) "Muffit session" else nativeFacts(pane).firstOrNull()
 
 // `confirm` is whether the press only asks: closing hangs the program up and forgetting deletes its
 // log, and neither can be taken back. Showing it on the desk adds a herdr pane and loses nothing.

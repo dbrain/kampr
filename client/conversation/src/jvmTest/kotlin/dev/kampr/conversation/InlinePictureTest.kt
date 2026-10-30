@@ -1,9 +1,8 @@
 package dev.kampr.conversation
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
@@ -11,14 +10,12 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.kampr.conversation.files.Stack
+import dev.kampr.conversation.files.Stage
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.fileAttachmentId
-import dev.kampr.shared.theme.LocalTokens
-import dev.kampr.shared.theme.SoftTheme
-import dev.kampr.shared.theme.TypeScale
-import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
@@ -68,12 +65,7 @@ private fun withPicture() = Machine(
 
 @Composable
 private fun Screen(pane: PaneState, io: PaneIo) {
-    CompositionLocalProvider(
-        LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
-        LocalPaneIo provides io,
-    ) {
-        Box(Modifier.fillMaxSize()) { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) }
-    }
+    Stage(io, remember { Stack() }) { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) }
 }
 
 @OptIn(ExperimentalTestApi::class)

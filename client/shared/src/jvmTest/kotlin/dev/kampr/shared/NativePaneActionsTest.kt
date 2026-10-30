@@ -125,7 +125,7 @@ class NativePaneActionsTest {
         for (absent in listOf("focus at the desk", "fill the tab", "remember the splits", "tab", "workspace")) {
             assertTrue(absent !in shown, "a kept session's sheet offers herdr's \"$absent\": $shown")
         }
-        assertTrue("not on desk" in shown.joinToString("\n"), "the sheet does not say the session is off the desk: $shown")
+        assertTrue("not on desk" !in shown.joinToString("\n"), "the sheet still labels a session off the desk: $shown")
         onNodeWithText("show on desk").performClick()
         waitForIdle()
         onNodeWithText("close").performClick()
@@ -150,14 +150,15 @@ class NativePaneActionsTest {
     }
 
     @Test
-    fun aSidebarRowMarksASessionAndSaysSo() = runComposeUiTest {
+    fun aSidebarRowSaysOnlyThatASessionEnded() = runComposeUiTest {
         setContent {
             CompositionLocalProvider(LocalTokens provides phoneTokens()) {
                 Box(Modifier.size(296.dp, 80.dp)) { PaneRow(ENDED, 0.0, false) {} }
             }
         }
         waitForIdle()
-        onNodeWithText("kampr · killed by signal 9").assertExists()
-        onNodeWithContentDescription("Kampr session, killed by signal 9", substring = true).assertExists()
+        onNodeWithText("killed by signal 9").assertExists()
+        onNodeWithText("kampr · killed by signal 9").assertDoesNotExist()
+        onNodeWithContentDescription("killed by signal 9", substring = true).assertExists()
     }
 }

@@ -254,9 +254,9 @@ async fn every_answer_this_route_gives_carries_a_body() {
     }
 }
 
-struct Harness {
-    node: Arc<Node>,
-    origin: String,
+pub(crate) struct Harness {
+    pub(crate) node: Arc<Node>,
+    pub(crate) origin: String,
     _home: tempfile::TempDir,
     server: tokio::task::JoinHandle<()>,
 }
@@ -269,7 +269,11 @@ impl Drop for Harness {
 }
 
 impl Harness {
-    async fn start() -> Self {
+    pub(crate) async fn start() -> Self {
+        Self::start_with(|_| {}).await
+    }
+
+    pub(crate) async fn start_with(tweak: impl FnOnce(&mut Config)) -> Self {
         let home = tempfile::tempdir().expect("a home");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -293,6 +297,7 @@ impl Harness {
         config.native.root = home.path().join("native").display().to_string();
         config.herdr.binary = home.path().join("no-such-herdr").display().to_string();
         config.herdr.sessions = Some(Vec::new());
+        tweak(&mut config);
         config.save(&config_dir).expect("a config");
 
         let origin = config.origin();
@@ -315,7 +320,7 @@ impl Harness {
         self.token_for(Role::Readonly).await
     }
 
-    async fn token_for(&self, role: Role) -> String {
+    pub(crate) async fn token_for(&self, role: Role) -> String {
         let pairing = self
             .node
             .auth
@@ -333,15 +338,15 @@ impl Harness {
             .to_string()
     }
 
-    async fn get(&self, path: &str, headers: &[(&str, &str)]) -> String {
+    pub(crate) async fn get(&self, path: &str, headers: &[(&str, &str)]) -> String {
         request(&self.origin, "GET", path, headers, None).await.0
     }
 
-    async fn get_raw(&self, path: &str, headers: &[(&str, &str)]) -> Vec<u8> {
+    pub(crate) async fn get_raw(&self, path: &str, headers: &[(&str, &str)]) -> Vec<u8> {
         raw_request(&self.origin, "GET", path, headers, None).await
     }
 
-    fn journals_home(&self) -> PathBuf {
+    pub(crate) fn journals_home(&self) -> PathBuf {
         self.node.config.journal_home()
     }
 }
@@ -455,7 +460,12 @@ fn png_bytes() -> Vec<u8> {
 #[tokio::test]
 async fn a_png_on_disk_is_served_inline_under_the_name_it_has_there() {
     let (_dir, path) = a_file("plot.png", &png_bytes());
-    let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+    let response = node_attach::serve_path(
+        &attach::Source::File(FileRef::new(&path)),
+        Path::new(NO_HOME),
+        None,
+    )
+    .await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(header(&response, "content-type"), "image/png");
@@ -471,7 +481,12 @@ async fn a_png_on_disk_is_served_inline_under_the_name_it_has_there() {
 async fn a_document_on_disk_is_a_download_whatever_its_extension_says() {
     for name in ["page.html", "vector.svg", "notes.txt"] {
         let (_dir, path) = a_file(name, b"<svg onload=\"alert(1)\"><script>x</script></svg>");
-        let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+        let response = node_attach::serve_path(
+            &attach::Source::File(FileRef::new(&path)),
+            Path::new(NO_HOME),
+            None,
+        )
+        .await;
 
         assert_eq!(response.status(), StatusCode::OK, "{name}");
         assert_eq!(
@@ -491,7 +506,12 @@ async fn a_document_on_disk_is_a_download_whatever_its_extension_says() {
 #[tokio::test]
 async fn a_file_with_no_extension_is_answered_from_its_own_bytes() {
     let (_dir, path) = a_file("screenshot", &png_bytes());
-    let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+    let response = node_attach::serve_path(
+        &attach::Source::File(FileRef::new(&path)),
+        Path::new(NO_HOME),
+        None,
+    )
+    .await;
 
     assert_eq!(header(&response, "content-type"), "image/png");
     assert_eq!(header(&response, "content-disposition"), "inline");
@@ -506,7 +526,12 @@ async fn a_path_this_node_cannot_serve_is_the_same_404_every_other_refusal_is() 
         empty,
         PathBuf::from("relative.png"),
     ] {
-        let response = node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME));
+        let response = node_attach::serve_path(
+            &attach::Source::File(FileRef::new(&path)),
+            Path::new(NO_HOME),
+            None,
+        )
+        .await;
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND,
@@ -521,11 +546,18 @@ async fn a_file_past_the_ceiling_is_refused_with_a_status_that_says_so() {
     let dir = tempfile::tempdir().expect("a directory");
     let path = dir.path().join("huge.png");
     let file = std::fs::File::create(&path).expect("a file");
-    file.set_len(attach::MAX_BYTES + 1).expect("a sparse file");
+    file.set_len(kampr_node::served::STREAM_CEILING + 1)
+        .expect("a sparse file");
     drop(file);
 
     assert_eq!(
-        node_attach::serve_file(&FileRef::new(&path), Path::new(NO_HOME)).status(),
+        node_attach::serve_path(
+            &attach::Source::File(FileRef::new(&path)),
+            Path::new(NO_HOME),
+            None
+        )
+        .await
+        .status(),
         StatusCode::PAYLOAD_TOO_LARGE
     );
 }
@@ -638,8 +670,8 @@ async fn a_read_only_device_may_see_a_paste_and_still_may_not_read_the_path_it_s
     );
 }
 
-/// What the ceiling actually costs the local route, which is the measurement behind not splitting
-/// this into a streamed second path (probe #258). Run it with `--nocapture` to read the numbers.
+/// What a file the size of the old ceiling costs the local route now that it is streamed (probe
+/// #258 measured it buffered). Run it with `--nocapture` to read the numbers.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_file_at_the_ceiling_crosses_the_local_route_whole() {
     let h = Harness::start().await;

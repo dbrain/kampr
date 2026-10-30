@@ -2,14 +2,22 @@ use std::path::Path;
 
 use axum::body::Body;
 use axum::http::StatusCode;
-use axum::http::header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE};
-use axum::response::{IntoResponse, Response};
+use axum::http::header::{
+    ACCEPT_RANGES, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+};
+use axum::http::{HeaderName, HeaderValue};
+use axum::response::{AppendHeaders, IntoResponse, Response};
 use futures_util::{Stream, StreamExt, TryStreamExt};
-use kampr_journal::attach::MAX_BYTES;
-use kampr_journal::{Fetched, FileRef, JournalError, Registry as Journals};
-use kampr_mesh::{FetchError, Peers};
+use std::path::PathBuf;
 
+use kampr_journal::attach::{FILE, IMAGE, MAX_BYTES, TEXT, image_mime};
+use kampr_journal::{Fetched, FileRef, JournalError, Registry as Journals, Source};
+use kampr_mesh::{FetchError, Peers, Span};
+
+use crate::git::{self, Between, GitError};
 use crate::http::refuse;
+use crate::served::{Refused, STREAM_CEILING, Served, Slice};
+use crate::zipped::{ARCHIVE, ZIP};
 
 /// What a transcript's own `media_type` is allowed to become on a response from this origin.
 ///
@@ -55,44 +63,164 @@ fn past_the_ceiling() -> Response {
     )
 }
 
+fn unsatisfiable(total: u64) -> Response {
+    let mut response = refuse(
+        StatusCode::RANGE_NOT_SATISFIABLE,
+        "that range is past the end of the file",
+    );
+    if let Ok(value) = HeaderValue::from_str(&format!("bytes */{total}")) {
+        response.headers_mut().insert(CONTENT_RANGE, value);
+    }
+    response
+}
+
+fn refused(why: Refused) -> Response {
+    match why {
+        Refused::Missing => missing(),
+        Refused::TooLarge(bytes) => {
+            tracing::debug!(bytes, "refusing an attachment past the ceiling");
+            past_the_ceiling()
+        }
+        Refused::Unsatisfiable(total) => unsatisfiable(total),
+    }
+}
+
 pub fn serve(journals: &Journals, transcript: &Path, id: &str) -> Response {
     respond(kampr_journal::attach::fetch(journals, id, transcript))
 }
 
-/// The bytes at a plain path on this machine, for a caller the route has already established may
-/// send input — a device that can type into a terminal can `cat` this file anyway.
+/// The answer to any path form (`Source::is_path_form`), for the HTTP route and the mesh peer
+/// alike, for a caller already established as one that may send input — a device that can type
+/// into a terminal can `cat`, `ls`, `zip` and `git show` there anyway.
 ///
-/// `home` is what a leading `~/` resolves against, and it is the node's own
-/// [`crate::Config::journal_home`] — the home the transcripts are under, which is the operator's
-/// rather than the process's whenever a node runs as a service user.
+/// `home` is what a leading `~` resolves against, and it is the node's own
+/// [`crate::Config::journal_home`] — the operator's home rather than the process's whenever a
+/// node runs as a service user. `span` is honoured by a `file` and by nothing else.
 ///
 /// **Every refusal is the same 404 the record form gives.** A relative path, a directory, a file
-/// that is not there and one this user cannot read must not be distinguishable from outside, or
-/// the route is a way to map the filesystem by response code.
-pub fn serve_file(file: &FileRef, home: &Path) -> Response {
-    respond(file.fetch(home))
+/// that is not there, one this user cannot read and a rev that names nothing must not be
+/// distinguishable from outside, or the route is a way to map the filesystem by response code.
+/// Blocking: it opens files, reads directories and runs `git`. What it returns is not — a file
+/// and a zip are read as the body is polled, never here.
+pub fn open_path_form(source: &Source, home: &Path, span: Option<Span>) -> Result<Served, Refused> {
+    match source {
+        Source::File(file) => {
+            let (path, opened, len) = file.open(home)?;
+            Served::file(&path, opened, len, span)
+        }
+        Source::Zip(dir) => crate::zipped::serve(&dir.absolute(home)?),
+        _ => Ok(Served::whole(composed(source, home)?)),
+    }
 }
 
-/// What `git` says has changed in that file since HEAD, as `text/plain`.
-///
-/// Gated exactly as [`serve_file`] is and refused in exactly the same words, because it reads the
-/// same paths: a device that may type into the terminal can already run `git diff` there, and one
-/// that may not must not learn from a response code which of this machine's files are tracked.
-pub fn serve_diff(file: &FileRef, home: &Path) -> Response {
-    let Ok(path) = file.resolve(home) else {
-        return missing();
+/// The path forms whose answer the node writes itself and holds whole: a diff, a listing, a
+/// summary, a file out of history, a commit.
+fn composed(source: &Source, home: &Path) -> Result<Fetched, JournalError> {
+    let refused = || JournalError::NotFound(String::new());
+    let git = |e: GitError| match e {
+        GitError::TooLarge => JournalError::TooLarge(STREAM_CEILING),
+        GitError::None => refused(),
     };
-    match crate::git::diff_against_head(&path) {
-        Ok(text) => (
-            [
-                (CONTENT_TYPE, "text/plain; charset=utf-8"),
-                (CACHE_CONTROL, "private, no-store"),
-            ],
-            text,
-        )
-            .into_response(),
-        Err(crate::git::DiffError::TooLarge) => past_the_ceiling(),
-        Err(crate::git::DiffError::None) => missing(),
+    let diff = |file: &FileRef, between| -> Result<Fetched, JournalError> {
+        let path = file.resolve(home)?;
+        let diff = git::diff(&path, between).map_err(git)?;
+        Ok(text(diff.into_bytes(), named(&path, ".diff")))
+    };
+    match source {
+        Source::Diff(file) => diff(file, Between::Head),
+        Source::Staged(file) => diff(file, Between::Staged),
+        Source::Unstaged(file) => diff(file, Between::Unstaged),
+        Source::Ls(dir) => {
+            let listing = crate::fs::list(&dir.absolute(home)?, home).ok_or_else(refused)?;
+            json(&listing)
+        }
+        Source::Repo(path) => json(&git::summary(&directory_of(&path.absolute(home)?)?).map_err(git)?),
+        Source::Show { file, rev } => {
+            let path = file.absolute(home)?;
+            let data = git::show_at(&path, rev).map_err(git)?;
+            Ok(as_found(&path, data))
+        }
+        Source::Commit { repo, sha } => {
+            let dir = directory_of(&repo.absolute(home)?)?;
+            let patch = git::commit_patch(&dir, sha).map_err(git)?;
+            Ok(text(patch.into_bytes(), Some(format!("{sha}.patch"))))
+        }
+        Source::File(_) | Source::Zip(_) | Source::Record(_) | Source::Paste(_) => Err(refused()),
+    }
+}
+
+pub async fn serve_path(source: &Source, home: &Path, span: Option<Span>) -> Response {
+    let (source, home) = (source.clone(), home.to_path_buf());
+    match tokio::task::spawn_blocking(move || open_path_form(&source, &home, span)).await {
+        Ok(Ok(served)) => answer(served).await,
+        Ok(Err(why)) => refused(why),
+        Err(_) => refuse(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "the attachment could not be read",
+        ),
+    }
+}
+
+/// The directory to run `git` in for a path that may name a file or a directory.
+fn directory_of(path: &Path) -> Result<PathBuf, JournalError> {
+    let meta = std::fs::metadata(path).map_err(|_| JournalError::NotFound(String::new()))?;
+    match (meta.is_dir(), path.parent()) {
+        (true, _) => Ok(path.to_path_buf()),
+        (false, Some(parent)) => Ok(parent.to_path_buf()),
+        (false, None) => Err(JournalError::NotFound(String::new())),
+    }
+}
+
+fn named(path: &Path, suffix: &str) -> Option<String> {
+    path.file_name()
+        .map(|n| format!("{}{suffix}", n.to_string_lossy()))
+}
+
+pub(crate) const PLAIN: &str = "text/plain; charset=utf-8";
+const JSON: &str = "application/json";
+
+/// The types the node's own answers are served as. Never a type read off a file or a record: the
+/// node decided these, so only these are trusted when a peer's claim comes back over the mesh.
+const COMPOSED: &[&str] = &[PLAIN, JSON];
+
+fn text(data: Vec<u8>, name: Option<String>) -> Fetched {
+    Fetched {
+        kind: TEXT.to_string(),
+        mime: Some(PLAIN.to_string()),
+        name,
+        data,
+    }
+}
+
+fn json(value: &impl serde::Serialize) -> Result<Fetched, JournalError> {
+    Ok(Fetched {
+        kind: TEXT.to_string(),
+        mime: Some(JSON.to_string()),
+        name: None,
+        data: serde_json::to_vec(value).map_err(|_| JournalError::NotFound(String::new()))?,
+    })
+}
+
+/// A file's bytes out of history are typed the way a file on disk is — an image by its extension,
+/// otherwise by its bytes — except that text is said to be text, because a reader comparing two
+/// revisions wants to read them.
+fn as_found(path: &Path, data: Vec<u8>) -> Fetched {
+    if let Some(mime) = image_mime(path) {
+        return Fetched {
+            kind: IMAGE.to_string(),
+            mime: Some(mime.to_string()),
+            name: named(path, ""),
+            data,
+        };
+    }
+    if !data.contains(&0) && std::str::from_utf8(&data).is_ok() {
+        return text(data, named(path, ""));
+    }
+    Fetched {
+        kind: FILE.to_string(),
+        mime: None,
+        name: named(path, ""),
+        data,
     }
 }
 
@@ -118,16 +246,29 @@ pub fn serve_paste(file: &FileRef, pastes: &Path) -> Response {
 
 fn respond(found: Result<Fetched, JournalError>) -> Response {
     match found {
-        Ok(found) => body(found),
-        Err(JournalError::TooLarge(bytes)) => {
-            tracing::debug!(bytes, "refusing an attachment past the ceiling");
-            past_the_ceiling()
+        Ok(found) => {
+            let prefix = found.data[..found.data.len().min(OGG_CODEC_WINDOW)].to_vec();
+            response(Served::whole(found), &prefix, Vec::new())
         }
         Err(e) => {
             tracing::debug!(error = %e, "refusing an attachment");
-            missing()
+            refused(e.into())
         }
     }
+}
+
+/// The first chunk is pulled before the status line goes out, because a body that has no type on
+/// record is typed from its own first bytes.
+async fn answer(mut served: Served) -> Response {
+    let first = match served.body.next().await {
+        Some(Ok(chunk)) => chunk,
+        Some(Err(e)) => {
+            tracing::debug!(error = %e, "an attachment failed before its first byte");
+            return missing();
+        }
+        None => Vec::new(),
+    };
+    response(served, &first.clone(), first)
 }
 
 /// What a record claims to be, which is all the response headers are ever derived from — and
@@ -136,38 +277,59 @@ struct Claim<'a> {
     kind: &'a str,
     mime: Option<&'a str>,
     name: Option<&'a str>,
-    bytes: u64,
+    bytes: Option<u64>,
 }
 
-/// The four headers an attachment is served under, decided from a record's claims and the first
-/// bytes of its body.
+/// The headers an attachment is served under, decided from a record's claims and the first bytes
+/// of its body. No `Content-Length` when nobody knows it, which makes the body chunked.
 ///
 /// One implementation for both paths on purpose. A relayed attachment is described by the peer
 /// and served from *this* origin, so the allowlist that decides what may render has to be applied
 /// here rather than taken on trust — a peer that said `text/html` would otherwise get a document
 /// out of the hub's origin, past a CSP written for the bundle.
-fn headers(claim: &Claim<'_>, prefix: &[u8]) -> [(axum::http::HeaderName, String); 4] {
+fn headers(claim: &Claim<'_>, prefix: &[u8]) -> Vec<(HeaderName, String)> {
     let rendered = rendered_as(claim, prefix);
     let disposition = match rendered {
+        Some(ZIP) | None => format!("attachment; filename=\"{}\"", filename(claim)),
         Some(_) => "inline".to_string(),
-        None => format!("attachment; filename=\"{}\"", filename(claim)),
     };
-    [
+    let mut headers = vec![
         (CONTENT_TYPE, rendered.unwrap_or(OPAQUE).to_string()),
-        (CONTENT_LENGTH, claim.bytes.to_string()),
         (CONTENT_DISPOSITION, disposition),
         (CACHE_CONTROL, "no-store".to_string()),
-    ]
+    ];
+    if let Some(bytes) = claim.bytes {
+        headers.push((CONTENT_LENGTH, bytes.to_string()));
+    }
+    headers
 }
 
-fn body(found: Fetched) -> Response {
+/// `prefix` is what an untyped body is sniffed from, and a slice is never sniffed: bytes from the
+/// middle of a file say nothing about what the file is.
+fn response(served: Served, prefix: &[u8], first: Vec<u8>) -> Response {
     let claim = Claim {
-        kind: &found.kind,
-        mime: found.mime.as_deref(),
-        name: found.name.as_deref(),
-        bytes: found.data.len() as u64,
+        kind: &served.kind,
+        mime: served.mime.as_deref(),
+        name: served.name.as_deref(),
+        bytes: served.length,
     };
-    (StatusCode::OK, headers(&claim, &found.data), found.data).into_response()
+    let mut headers = headers(&claim, if served.slice.is_some() { &[] } else { prefix });
+    if served.ranges {
+        headers.push((ACCEPT_RANGES, "bytes".to_string()));
+    }
+    let status = match served.slice {
+        Some(Slice { start, end, total }) => {
+            headers.push((CONTENT_RANGE, format!("bytes {start}-{end}/{total}")));
+            StatusCode::PARTIAL_CONTENT
+        }
+        None => StatusCode::OK,
+    };
+    (
+        status,
+        AppendHeaders(headers),
+        Body::from_stream(chunked(first, served.body)),
+    )
+        .into_response()
 }
 
 /// The type this response is served as, or `None` for bytes to download.
@@ -179,7 +341,12 @@ fn body(found: Fetched) -> Response {
 /// `Content-Type` is what a client names the saved file from, and sniffing can only ever produce
 /// a type off the list above, so it widens what is shown without widening what is trusted.
 fn rendered_as(claim: &Claim<'_>, prefix: &[u8]) -> Option<&'static str> {
-    use kampr_journal::attach::{FILE, IMAGE};
+    if claim.kind == ARCHIVE {
+        return (claim.mime == Some(ZIP)).then_some(ZIP);
+    }
+    if claim.kind == TEXT {
+        return COMPOSED.iter().find(|m| Some(**m) == claim.mime).copied();
+    }
     if claim.kind != IMAGE && claim.kind != FILE {
         return None;
     }
@@ -194,7 +361,7 @@ fn rendered_as(claim: &Claim<'_>, prefix: &[u8]) -> Option<&'static str> {
 /// inside it; 64 bytes covers that without letting a `vorbis` somewhere in a payload decide.
 const OGG_CODEC_WINDOW: usize = 64;
 
-fn sniff(data: &[u8]) -> Option<&'static str> {
+pub(crate) fn sniff(data: &[u8]) -> Option<&'static str> {
     let at = |from: usize, magic: &[u8]| {
         data.len() >= from + magic.len() && &data[from..from + magic.len()] == magic
     };
@@ -255,17 +422,30 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
 ///
 /// **The ceiling is enforced on the peer's claim before a chunk is asked for**, so a record
 /// claiming a gigabyte costs a comparison here exactly as it does locally — and again as the
-/// bytes arrive, because the claim came off the network.
+/// bytes arrive, because the claim came off the network. A record keeps its 8 MiB; a path form
+/// is streamed end to end and is held only to [`STREAM_CEILING`].
 ///
-/// **Every refusal but the ceiling is the one 404.** Offline, unknown pane, a peer that never
-/// answered and a stale id are the same sentence from outside; which one it was goes to the log.
-pub async fn relay(peers: &Peers, pane: &str, id: &str) -> Response {
-    let mut transfer = match peers.fetch_attachment(pane, id, MAX_BYTES).await {
+/// A `span` is passed on for a `file` id and answered as `206` when the peer says it honoured it
+/// — an `att.open` with a `total` — and as the whole file when it did not.
+///
+/// **Every refusal but the ceiling and the range is the one 404.** Offline, unknown pane, a peer
+/// that never answered and a stale id are the same sentence from outside; which one it was goes
+/// to the log.
+pub async fn relay(peers: &Peers, pane: &str, id: &str, span: Option<Span>) -> Response {
+    let source = Source::decode(id).ok();
+    let ceiling = match source.as_ref().is_some_and(Source::is_path_form) {
+        true => STREAM_CEILING,
+        false => MAX_BYTES,
+    };
+    let ranges = matches!(source, Some(Source::File(_)));
+    let span = span.filter(|_| ranges);
+    let mut transfer = match peers.fetch_attachment(pane, id, ceiling, span).await {
         Ok(transfer) => transfer,
         Err(FetchError::TooLarge(bytes)) => {
             tracing::debug!(pane, bytes, "refusing a peer's attachment past the ceiling");
             return past_the_ceiling();
         }
+        Err(FetchError::Unsatisfiable(total)) => return unsatisfiable(total),
         Err(e) => {
             tracing::debug!(pane, error = %e, "refusing a peer's attachment");
             return missing();
@@ -283,13 +463,14 @@ pub async fn relay(peers: &Peers, pane: &str, id: &str) -> Response {
         None => return missing(),
     };
     let header = transfer.header().clone();
-    let claim = Claim {
-        kind: &header.kind,
-        mime: header.mime.as_deref(),
-        name: header.name.as_deref(),
-        bytes: header.bytes,
+    let slice = match (span, header.total, header.bytes) {
+        (Some(span), Some(total), Some(bytes)) if bytes > 0 => Some(Slice {
+            start: span.start,
+            end: span.start + bytes - 1,
+            total,
+        }),
+        _ => None,
     };
-    let headers = headers(&claim, &first);
     let pane = pane.to_string();
     let rest = futures_util::stream::unfold(transfer, |mut transfer| async move {
         transfer.next_chunk().await.map(|chunk| (chunk, transfer))
@@ -300,7 +481,16 @@ pub async fn relay(peers: &Peers, pane: &str, id: &str) -> Response {
             std::io::Error::other(e.to_string())
         })
     });
-    (StatusCode::OK, headers, Body::from_stream(chunked(first, rest))).into_response()
+    let served = Served {
+        kind: header.kind,
+        mime: header.mime,
+        name: header.name,
+        length: header.bytes,
+        slice,
+        ranges,
+        body: Box::pin(rest),
+    };
+    response(served, &first.clone(), first)
 }
 
 /// The first chunk, held back to decide the headers, and then the rest of them.
@@ -318,7 +508,7 @@ fn chunked<S>(first: Vec<u8>, rest: S) -> impl Stream<Item = std::io::Result<axu
 where
     S: Stream<Item = std::io::Result<Vec<u8>>> + Send,
 {
-    futures_util::stream::once(async move { Ok(first) })
+    futures_util::stream::iter((!first.is_empty()).then_some(Ok(first)))
         .chain(rest.fuse())
         .map_ok(axum::body::Bytes::from)
 }
@@ -393,7 +583,7 @@ mod tests {
             kind,
             mime,
             name: Some("clip.wav"),
-            bytes: body.len() as u64,
+            bytes: Some(body.len() as u64),
         };
         let headers = headers(&claim, body);
         headers
@@ -408,7 +598,7 @@ mod tests {
             kind,
             mime,
             name: Some("clip.wav"),
-            bytes: body.len() as u64,
+            bytes: Some(body.len() as u64),
         };
         headers(&claim, body)
             .into_iter()
@@ -496,6 +686,19 @@ mod tests {
         let mut webp = b"RIFF\x24\x00\x00\x00WEBPVP8 ".to_vec();
         webp.extend_from_slice(&[0u8; 16]);
         assert_eq!(served(FILE, None, &webp), "image/webp");
+    }
+
+    // A peer's `att.open` is relayed from this origin, so a composed answer is served as one of
+    // the two types the node itself mints and a peer claiming anything else under that kind is a
+    // download.
+    #[test]
+    fn a_composed_answer_is_served_as_its_own_type_and_nothing_a_peer_claims_beyond_it() {
+        use kampr_journal::attach::TEXT;
+        assert_eq!(served(TEXT, Some(PLAIN), b"diff"), PLAIN);
+        assert_eq!(served(TEXT, Some(JSON), b"{}"), JSON);
+        for claimed in [Some("text/html"), Some("text/plain"), None] {
+            assert_eq!(served(TEXT, claimed, b"<html>"), OPAQUE, "{claimed:?}");
+        }
     }
 
     #[test]
