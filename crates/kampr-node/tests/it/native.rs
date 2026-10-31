@@ -1555,9 +1555,10 @@ async fn input_held_for_a_booting_harness_goes_on_the_frame_that_shows_it_readin
         "#!/bin/sh\nstty raw -echo\nfor r in 1 2 3 4 5; do\n\
          printf '\\033[2J\\033[HREADY%s' $r\n\
          while [ ! -e paint$r ]; do sleep 0.005; done\n\
-         printf '\\033[2J\\033[H'; cat \"$1\"; t0=$(date +%s%N)\n\
-         head -c 1 >/dev/null; t1=$(date +%s%N)\n\
-         echo $(( (t1 - t0) / 1000000 )) >> waited\ndone\nexec sleep 600\n",
+         printf '\\033[2J\\033[H'; perl -MTime::HiRes=time -e \
+         'open my $d, \"<\", shift; $|=1; print <$d>; $t = time; sysread STDIN, $b, 1; \
+         open my $w, \">>\", \"waited\"; printf $w \"%d\\n\", (time - $t) * 1000' \"$1\"\n\
+         done\nexec sleep 600\n",
     )
     .unwrap();
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();

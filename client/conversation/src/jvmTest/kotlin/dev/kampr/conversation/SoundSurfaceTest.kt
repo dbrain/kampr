@@ -162,7 +162,8 @@ class SoundSurfaceTest {
         val decoder = Decoder()
         setContent { Screen(paneOf(SPOKEN), SoundNode(), decoder) }
         onNodeWithContentDescription("Play clip.wav").performClick()
-        waitForIdle()
+        // The first press loads the clip, and the button is only a glyph until its player is back.
+        waitUntilAtLeastOneExists(hasContentDescription("Play clip.wav"), 5_000)
         onNodeWithContentDescription("Play clip.wav").performClick()
         waitForIdle()
 
@@ -182,7 +183,8 @@ class SoundSurfaceTest {
         val decoder = Decoder()
         setContent { Screen(paneOf(SPOKEN), SoundNode(), decoder) }
         onNodeWithContentDescription("Play clip.wav").performClick()
-        waitForIdle()
+        // The first press loads the clip, and the button is only a glyph until its player is back.
+        waitUntilAtLeastOneExists(hasContentDescription("Play clip.wav"), 5_000)
         onNodeWithContentDescription("Play clip.wav").performClick()
         waitUntilAtLeastOneExists(hasContentDescription("Pause clip.wav"), 5_000)
 

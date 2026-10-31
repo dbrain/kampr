@@ -566,7 +566,10 @@ fn each_harness_names_the_directories_its_next_transcript_appears_in() {
         for dir in &dirs {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }
-        let want: Vec<PathBuf> = dirs.iter().map(|d| root.join(d)).collect();
+        let want: Vec<PathBuf> = dirs
+            .iter()
+            .map(|d| std::fs::canonicalize(root.join(d)).unwrap())
+            .collect();
         assert_eq!(registry.watched(Some(agent), Some(&work)), want, "{agent}");
     }
     assert!(Registry::new().watched(Some("claude"), Some(&work)).is_empty());
