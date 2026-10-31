@@ -1573,9 +1573,7 @@ async fn input_held_for_a_booting_harness_goes_on_the_frame_that_shows_it_readin
             json!({ "cwd": work.display().to_string(), "cols": 120, "rows": 40 }),
         )
         .await;
-    client
-        .pane(&id, |p| p["agent"] == "claude")
-        .await;
+    client.pane(&id, |p| p["agent"] == "claude").await;
     client.watch(&id, false).await;
     for round in 1..=5 {
         client.shows(&id, &format!("READY{round}")).await;
