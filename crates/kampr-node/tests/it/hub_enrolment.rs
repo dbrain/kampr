@@ -15,6 +15,8 @@ async fn a_hub_joined_or_left_by_another_process_is_dialled_or_dropped_at_once()
     let mut config = Config::bootstrap("joiner");
     config.muffit.enabled = Some(false);
     config.update.check = false;
+    // The node's mesh key is made on its first dial, and only this test's directory may get one.
+    config.config_dir = state.path().join("config").display().to_string();
     config.journals.home = state.path().display().to_string();
     config.herdr.socket = state.path().join("no-herdr.sock").display().to_string();
     config.herdr.enabled = Some(false);

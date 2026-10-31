@@ -22,6 +22,7 @@ kampr-muffit = { path = "../kampr-muffit" }
 kampr-keep = { path = "../kampr-keep" }
 kampr-native = { path = "../kampr-native" }
 kampr-term = { path = "../kampr-term" }
+kampr-watch = { path = "../kampr-watch" }
 mime_guess.workspace = true
 rust-embed.workspace = true
 reqwest.workspace = true

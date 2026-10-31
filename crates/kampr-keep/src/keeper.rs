@@ -11,7 +11,7 @@ use crate::sys::{self, Usr1};
 use anyhow::{Context, Result, anyhow, bail};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::{Errno, FdFlags, fcntl_getfd, fcntl_setfd};
-use rustix::process::{Pid, WaitId, WaitIdOptions, getpid, getuid, waitid};
+use rustix::process::{Pid, WaitOptions, getpid, getuid, waitpid};
 use std::ffi::{CString, OsString};
 use std::io::{self, BufRead, BufReader, Read as _, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -139,9 +139,9 @@ pub fn serve(dir: &Path) -> Result<()> {
     let mut ended: Option<Instant> = None;
     let (mut watched, mut outcome) = match kampr_watch::Exit::open(child) {
         Ok(Some(exit)) => (Some(exit), Outcome::Running),
-        // kqueue will not watch a zombie, so a child that died before this keeper could watch it
-        // is reaped now or never.
-        Ok(None) => match reap(child, false) {
+        // kqueue refuses a process that has begun exiting, which a quick command has by now,
+        // possibly before it is waitable; so this waits for it rather than asking once.
+        Ok(None) => match reap(child, true) {
             Outcome::Running => (None, Outcome::Lost),
             outcome => {
                 ended = Some(Instant::now());
@@ -349,22 +349,26 @@ fn child_env(spec: &Spec) -> Vec<(OsString, OsString)> {
 }
 
 // `exited` is the kernel having said so, after which a blocking wait returns at once; on macOS the
-// kqueue note can come a moment before the zombie is waitable, and a NOHANG there would spin.
+// kqueue note can come a moment before the zombie is waitable, and a NOHANG there would miss it.
+// waitpid rather than waitid: its status is the one std decodes on every platform.
 fn reap(child: u32, exited: bool) -> Outcome {
     let Some(pid) = i32::try_from(child).ok().and_then(Pid::from_raw) else {
         return Outcome::Lost;
     };
     let options = match exited {
-        true => WaitIdOptions::EXITED,
-        false => WaitIdOptions::EXITED | WaitIdOptions::NOHANG,
+        true => WaitOptions::empty(),
+        false => WaitOptions::NOHANG,
     };
-    match waitid(WaitId::Pid(pid), options) {
-        Ok(Some(status)) => Outcome::Reaped {
-            code: status.exit_status(),
-            signal: status.terminating_signal(),
-        },
-        Ok(None) => Outcome::Running,
-        Err(_) => Outcome::Lost,
+    loop {
+        return match waitpid(Some(pid), options) {
+            Ok(Some((_, status))) => Outcome::Reaped {
+                code: status.exit_status(),
+                signal: status.terminating_signal(),
+            },
+            Ok(None) => Outcome::Running,
+            Err(Errno::INTR) => continue,
+            Err(_) => Outcome::Lost,
+        };
     }
 }
 

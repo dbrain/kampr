@@ -55,6 +55,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "kampr-native",
             "kampr-push",
             "kampr-term",
+            "kampr-watch",
         ],
     ),
     (

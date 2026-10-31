@@ -301,27 +301,56 @@ async fn a_job_starting_and_ending_is_announced_at_once() {
 
 /// The output window closes on its own deadline, not at the next tick after it. The echo of a
 /// keystroke is output that is not work, and it moved the old tick off the window's end.
+///
+/// The window is measured from the last output the screen shows, not from when the status went
+/// to working: the echo window is judged when the node reads the bytes, so on a loaded machine a
+/// late read counts the typed line's echo as work and the window opens early (CI's first round,
+/// 107 ms). The first round reproduces that by holding the keeper while the line is echoed.
 #[tokio::test(flavor = "multi_thread")]
 async fn working_drops_to_idle_on_the_deadline() {
     let root = Root::new();
     let (provider, pane) = shell(&root, "$ ").await;
     tokio::time::sleep(Duration::from_secs(2)).await;
+    let keeper = kampr_keep::list(root.0.path()).expect("sessions")[0]
+        .keeper()
+        .expect("a keeper")
+        .keeper as i32;
     let mut late = Vec::new();
-    for _ in 0..3 {
+    for round in 0..3 {
         let mut statuses = provider.pane_changes(&pane).status.expect("a status pulse");
-        typed(&provider, &pane, "sleep 0.5; echo done\r").await;
-        let working = loop {
-            let at = moves(&mut statuses, "the status").await;
-            if status(&provider, &pane).await == AgentStatus::Working {
-                break at;
+        typed(
+            &provider,
+            &pane,
+            &format!("sleep 0.5; echo fin$(({round}+100))\r"),
+        )
+        .await;
+        if round == 0 {
+            unsafe { libc::kill(keeper, libc::SIGSTOP) };
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            unsafe { libc::kill(keeper, libc::SIGCONT) };
+        }
+        let fin = format!("fin{}", round + 100);
+        let output = loop {
+            if provider
+                .visible(&pane)
+                .unwrap_or_default()
+                .lines()
+                .any(|l| l.trim_end() == fin)
+            {
+                break Instant::now();
             }
+            tokio::time::sleep(Duration::from_millis(1)).await;
         };
         tokio::time::sleep(Duration::from_millis(100)).await;
         statuses.seen();
         typed(&provider, &pane, " ").await;
-        let idle = moves(&mut statuses, "the status").await;
-        assert_ne!(status(&provider, &pane).await, AgentStatus::Working);
-        late.push((idle - working).saturating_sub(WORKING));
+        let idle = loop {
+            let at = moves(&mut statuses, "the status").await;
+            if status(&provider, &pane).await != AgentStatus::Working {
+                break at;
+            }
+        };
+        late.push((idle - output).saturating_sub(WORKING));
         typed(&provider, &pane, "\x15").await;
     }
     assert!(

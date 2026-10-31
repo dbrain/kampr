@@ -2,6 +2,7 @@ mod android_passkeys;
 mod attachment;
 mod attachment_mesh;
 mod backpressure;
+mod device_store;
 mod discovery;
 mod done_read;
 mod files;
