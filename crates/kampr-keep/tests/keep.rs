@@ -415,3 +415,39 @@ fn output_and_a_resize_arriving_together_leave_the_keeper_answering() {
         asked.elapsed()
     );
 }
+
+/// A command that is over before its keeper answers is still a launch that worked: the keeper
+/// takes its socket down only once `exit.json` says how the command ended.
+#[test]
+fn a_command_over_before_its_keeper_answers_is_still_launched() {
+    let root = root();
+    let launches: Vec<_> = (0..16)
+        .map(|_| {
+            let root = root.path().to_path_buf();
+            std::thread::spawn(move || {
+                (0..50)
+                    .filter_map(|_| {
+                        kampr_keep::spawn(
+                            &root,
+                            sh("exit 3"),
+                            Launch::Detached,
+                            std::path::Path::new(common::EXE),
+                        )
+                        .err()
+                        .map(|e| format!("{e:#}"))
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .collect();
+    let failed: Vec<String> = launches
+        .into_iter()
+        .flat_map(|l| l.join().expect("launcher"))
+        .collect();
+    assert!(
+        failed.is_empty(),
+        "{} of 800 failed: {:?}",
+        failed.len(),
+        failed.first()
+    );
+}

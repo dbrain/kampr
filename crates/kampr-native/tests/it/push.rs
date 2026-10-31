@@ -1,5 +1,6 @@
 //! A native session says when it changed, so nothing that follows one waits on a timer.
 
+use kampr_core::desk::Desk;
 use kampr_core::provider::{AgentStatus, Input, Provider};
 use kampr_core::push::PulseRx;
 use kampr_core::registry::{HistoryPolicy, PaneRegistry, RegistryConfig};
@@ -387,4 +388,68 @@ async fn a_report_from_a_pane_already_working_moves_the_status_pulse() {
             .await,
         "the report moved nothing"
     );
+}
+
+/// What a herd that re-reads the provider on every topology change last saw of `pane`'s screen,
+/// after `settle`: it reads once at the start and once after each change, as `refresh_herd` does.
+async fn herd_last_sees(provider: &NativeProvider, pane: &str, settle: Duration) -> String {
+    let mut changes = provider.changes();
+    changes.borrow_and_update();
+    let _ = provider.list_panes().await;
+    let mut seen = provider.visible(pane).unwrap_or_default();
+    let until = tokio::time::Instant::now() + settle;
+    while tokio::time::timeout_at(until, changes.changed())
+        .await
+        .is_ok_and(|r| r.is_ok())
+    {
+        changes.borrow_and_update();
+        let _ = provider.list_panes().await;
+        seen = provider.visible(pane).unwrap_or_default();
+    }
+    seen
+}
+
+/// A node that starts beside a running session rebuilds its screen from the log; whatever it
+/// published before that replay landed has to be published again once it has.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_replayed_screen_is_published_once_it_lands() {
+    let root = Root::new();
+    let first = root.provider();
+    let pane = first
+        .create(NewSession {
+            argv: vec![
+                "sh".into(),
+                "-c".into(),
+                "seq 1 200000; printf 'MA''RK'; exec sleep 600".into(),
+            ],
+            cols: 80,
+            rows: 24,
+            ..NewSession::default()
+        })
+        .await
+        .expect("a session");
+    while !first.visible(&pane).unwrap_or_default().contains("MARK") {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    drop(first);
+    let second = root.provider();
+    let seen = herd_last_sees(&second, &pane, Duration::from_secs(3)).await;
+    assert!(seen.contains("MARK"), "the herd was last told of:\n{seen}");
+}
+
+/// Output inside the echo window is not work, so the status word does not move for it; the screen
+/// it paints, a dialog answering a keystroke, still has to reach whoever reads the screen.
+/// `read -t` paints it inside that window without starting a job, whose look would publish.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_screen_painted_in_the_echo_window_is_published_once_it_settles() {
+    let root = Root::new();
+    let (provider, pane) = shell(&root, "$ ").await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let herd = herd_last_sees(&provider, &pane, Duration::from_secs(3));
+    let typing = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        typed(&provider, &pane, "read -t 0.2 x; printf 'MA''RK\\n'\r").await;
+    };
+    let (seen, ()) = tokio::join!(herd, typing);
+    assert!(seen.contains("MARK"), "the herd was last told of:\n{seen}");
 }

@@ -70,15 +70,16 @@ fn spawn(db: &Path) -> std::io::Result<Arc<Shared>> {
                         return;
                     }
                 };
-                if !events.iter().any(|e| files.concerns(&armed, e)) {
-                    continue;
-                }
-                if events.iter().any(|e| files.moved(&armed, e)) {
-                    for key in armed.drain(..) {
+                let (wake, rearm) = events
+                    .iter()
+                    .map(|e| files.judge(&armed, e))
+                    .fold((false, false), |(w, r), (ew, er)| (w || ew, r || er));
+                if rearm {
+                    for key in armed.keys.drain(..) {
                         watch.remove(key);
                     }
                     match files.arm(&mut watch) {
-                        Ok(keys) => armed = keys,
+                        Ok(again) => armed = again,
                         Err(e) => {
                             tracing::warn!(error = %e, "re-arming the device store's watch; only its timers are left");
                             bumps.bump();
@@ -86,10 +87,21 @@ fn spawn(db: &Path) -> std::io::Result<Arc<Shared>> {
                         }
                     }
                 }
-                bumps.bump();
+                if wake {
+                    bumps.bump();
+                }
             }
         })?;
     Ok(Arc::new(Shared { pulse, _stop: stop }))
+}
+
+/// Which file each of the store's names is: `(dev, ino)`, or `None` while it does not exist.
+type Identities = [Option<(u64, u64)>; 2];
+
+/// What the watch is on: the directory first, then each of the store's files that existed.
+struct Armed {
+    keys: Vec<Key>,
+    ids: Identities,
 }
 
 /// The store's directory and the names in it that are the store.
@@ -109,8 +121,17 @@ impl Files {
         }
     }
 
-    /// The directory first, so `armed[0]` is its key.
-    fn arm(&self, watch: &mut Watch) -> std::io::Result<Vec<Key>> {
+    fn identities(&self) -> Identities {
+        use std::os::unix::fs::MetadataExt;
+        self.names.clone().map(|name| {
+            std::fs::metadata(self.dir.join(name))
+                .ok()
+                .map(|m| (m.dev(), m.ino()))
+        })
+    }
+
+    fn arm(&self, watch: &mut Watch) -> std::io::Result<Armed> {
+        let ids = self.identities();
         let mut keys = vec![watch.add(&self.dir)?];
         for name in &self.names {
             let path = self.dir.join(name);
@@ -118,20 +139,27 @@ impl Files {
                 keys.push(watch.add(&path)?);
             }
         }
-        Ok(keys)
+        Ok(Armed { keys, ids })
     }
 
-    /// kqueue names nothing in a directory, so a nameless event there may be the store's.
-    fn ours(&self, event: &Event) -> bool {
-        event.name.as_ref().is_none_or(|n| self.names.contains(n))
-    }
-
-    fn concerns(&self, armed: &[Key], event: &Event) -> bool {
-        event.key != armed[0] || self.ours(event)
-    }
-
-    fn moved(&self, armed: &[Key], event: &Event) -> bool {
-        event.gone || (event.key == armed[0] && self.ours(event))
+    /// Whether an event is news about the store, and whether the watch must be put on the files
+    /// that are there now. inotify names the entry a directory event is about; kqueue names
+    /// nothing, so there the files are looked at and only one that came, went or was replaced
+    /// counts, and every other file written beside the store wakes nobody.
+    fn judge(&self, armed: &Armed, event: &Event) -> (bool, bool) {
+        if event.key != armed.keys[0] || event.gone {
+            return (true, event.gone);
+        }
+        match &event.name {
+            Some(name) => {
+                let ours = self.names.contains(name);
+                (ours, ours)
+            }
+            None => {
+                let moved = self.identities() != armed.ids;
+                (moved, moved)
+            }
+        }
     }
 }
 
@@ -139,4 +167,50 @@ impl Files {
 pub fn expiry(device: &Device) -> Option<Instant> {
     let at = UNIX_EPOCH + Duration::from_secs(u64::try_from(device.expires_at?).unwrap_or(0));
     Some(Instant::now() + at.duration_since(SystemTime::now()).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Files;
+    use kampr_watch::{Event, Watch};
+
+    /// kqueue's directory events name nothing, so this is the macOS path asked on any host: a file
+    /// beside the store wakes nobody, and the store's files coming, going or being replaced wake
+    /// and re-arm.
+    #[test]
+    fn a_nameless_directory_event_is_news_only_when_the_store_files_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("kampr.db");
+        let wal = dir.path().join("kampr.db-wal");
+        std::fs::write(&db, b"").unwrap();
+        let files = Files::of(&db);
+        let (mut watch, _stop) = Watch::new().unwrap();
+        let mut armed = files.arm(&mut watch).unwrap();
+        let mut nameless = |why: &str, expected: bool| {
+            let event = Event {
+                key: armed.keys[0],
+                name: None,
+                gone: false,
+            };
+            assert_eq!(files.judge(&armed, &event), (expected, expected), "{why}");
+            if expected {
+                for key in armed.keys.drain(..) {
+                    watch.remove(key);
+                }
+                armed = files.arm(&mut watch).unwrap();
+            }
+        };
+
+        std::fs::write(dir.path().join("reads.json"), b"{}").unwrap();
+        nameless("a file beside the store", false);
+        std::fs::write(&wal, b"").unwrap();
+        nameless("the wal appearing", true);
+        std::fs::write(&wal, b"a commit").unwrap();
+        nameless("a commit into the wal, which its own watch reports", false);
+        // Kept rather than removed, so the new wal cannot be handed the old one's inode.
+        std::fs::rename(&wal, dir.path().join("kampr.db-wal.old")).unwrap();
+        nameless("the wal going", true);
+        std::fs::write(&wal, b"").unwrap();
+        nameless("the wal made again", true);
+    }
 }

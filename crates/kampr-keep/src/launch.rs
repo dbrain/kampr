@@ -14,6 +14,7 @@ pub const UNIT_PREFIX: &str = "kampr-keep-";
 /// The fd a detached keeper closes once it answers, or dies holding: its launcher's readiness pipe.
 pub(crate) const READY_FD: &str = "KAMPR_KEEP_READY";
 const READY: Duration = Duration::from_secs(10);
+const BUSY: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Launch {
@@ -69,16 +70,24 @@ fn start(session: &SessionDir, spec: &Spec, launch: Launch, exe: &Path) -> Resul
         Launch::Systemd => systemd(session, &spec.id, exe)?,
         Launch::Detached => until_closed(detached(session, exe)?)?,
     }
-    if let Some(exit) = session.exit() {
-        return match exit.error {
-            Some(error) => bail!("{error}"),
-            None => Ok(()),
-        };
+    // The keeper writes exit.json before it takes its socket down, so a connect that fails is
+    // answered by exit.json; failing both, a live keeper only had its backlog full for a moment.
+    let deadline = Instant::now() + READY;
+    loop {
+        if UnixStream::connect(session.path().join(CTL)).is_ok() {
+            return Ok(());
+        }
+        if let Some(exit) = session.exit() {
+            return match exit.error {
+                Some(error) => bail!("{error}"),
+                None => Ok(()),
+            };
+        }
+        if !session.alive() || Instant::now() >= deadline {
+            bail!("the keeper ended without answering");
+        }
+        std::thread::sleep(BUSY);
     }
-    if UnixStream::connect(session.path().join(CTL)).is_err() {
-        bail!("the keeper ended without answering");
-    }
-    Ok(())
 }
 
 fn until_closed(mut ready: PipeReader) -> Result<()> {

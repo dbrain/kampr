@@ -99,6 +99,9 @@ struct Activity {
     job: Option<(u32, Option<String>)>,
     look: Option<Instant>,
     chase: Option<(u32, Instant)>,
+    /// When a screen change no published status has followed yet is published anyway: whoever
+    /// reads more than the status word off the screen (a dialog, #42) is told of it only then.
+    settle: Option<Instant>,
 }
 
 pub(crate) struct Joined {
@@ -282,10 +285,15 @@ impl Live {
         let mut activity = self.activity.lock().unwrap();
         if activity.published != Some((status, reports)) {
             activity.published = Some((status, reports));
+            activity.settle = None;
             drop(activity);
-            self.pulses.status.bump();
-            self.bump();
+            self.publish();
         }
+    }
+
+    fn publish(&self) {
+        self.pulses.status.bump();
+        self.bump();
     }
 
     fn bump(&self) {
@@ -385,6 +393,17 @@ impl Live {
                 self.follow_job();
             }
             self.tick();
+            let settled = {
+                let mut activity = self.activity.lock().unwrap();
+                let due = activity.settle.is_some_and(|at| at <= Instant::now());
+                if due {
+                    activity.settle = None;
+                }
+                due
+            };
+            if settled {
+                self.publish();
+            }
         }
     }
 
@@ -395,7 +414,11 @@ impl Live {
             .output
             .map(|at| at + WORKING)
             .filter(|end| activity.working && *end > now);
-        let until = window.into_iter().chain(activity.look).min();
+        let until = window
+            .into_iter()
+            .chain(activity.look)
+            .chain(activity.settle)
+            .min();
         let job = activity
             .job
             .as_ref()
@@ -466,8 +489,11 @@ impl Live {
                     replay_end = replay_end.max(reader.end().unwrap_or(0));
                 }
                 Ok(Replay::CaughtUp) => {
-                    self.caught_up();
+                    let replayed = self.caught_up();
                     self.tick();
+                    if replayed {
+                        self.publish();
+                    }
                     self.checkpoint(false);
                     if self.dir.exit().is_some() && reader.end().is_ok_and(|end| end <= reader.offset()) {
                         self.checkpoint(true);
@@ -551,9 +577,12 @@ impl Live {
         }
     }
 
-    fn caught_up(&self) {
+    /// True the first time, when the screen has just become the replayed one: anything published
+    /// before it, as a herd's look waking the clock can, was of the screen before the replay.
+    fn caught_up(&self) -> bool {
         let mut state = self.state.lock().unwrap();
-        if !state.replayed {
+        let first = !state.replayed;
+        if first {
             state.replayed = true;
             state.title = state.screen.title().to_string();
             state.alternate = state.screen.alternate_screen();
@@ -565,6 +594,7 @@ impl Live {
             state = self.state.lock().unwrap();
         }
         self.history_moved(&mut state);
+        first
     }
 
     /// Only bytes the program writes from now on are answered: a query in the replayed log was
@@ -603,6 +633,7 @@ impl Live {
             {
                 activity.output = Some(now);
             }
+            activity.settle = Some(now + WORKING);
         }
         let replies = self.ours(at, &fed);
         if !replies.is_empty()
