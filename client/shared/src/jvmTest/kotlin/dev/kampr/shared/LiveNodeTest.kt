@@ -177,11 +177,11 @@ class LiveNodeTest {
                     first.store.herd.value.takeIf { it.known }?.nodes?.firstOrNull { it.kind == "local" }
                 }
                 first.manage(ManageOp.WorkspaceCreate(local.id, "kampr-prefs", "/tmp"))
-                val workspace = assertNotNull(
+                val made = assertNotNull(
                     await("managed") { first.store.managed.value?.takeIf { it.op == "workspace.create" } }.id,
                 )
                 val pane = await("a pane") {
-                    first.store.herd.value.panes.firstOrNull { it.workspaceId == workspace }
+                    first.store.herd.value.panes.firstOrNull { it.id == made }
                 }.id
                 first.send(ClientMsg.SetPrefs(pane, mapOf("zoom" to "1.62")))
                 await("the zoom write") { first.store.prefsFor(pane).zoom }
@@ -199,7 +199,7 @@ class LiveNodeTest {
                 }
                 assertEquals(1.62f, restored.zoom)
                 assertEquals("terminal", restored.view)
-                second.manage(ManageOp.Close(workspace))
+                second.manage(ManageOp.Close(pane))
                 await("close") { second.store.managed.value?.takeIf { it.op == "close" && it.ok } }
                 second.disconnect()
             }

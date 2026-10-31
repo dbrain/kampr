@@ -254,6 +254,7 @@ fn a_lost_paper_record_can_be_replaced_from_the_console() {
 fn doctor_reports_a_dead_herdr_as_broken() {
     let cli = Cli::new();
     cli.init();
+    set_config(&cli, "[herdr]\n", "[herdr]\nenabled = true\n");
     let out = cli.run(&["doctor", "--json"]);
     let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
     let herdr = check(&json, "herdr");
@@ -288,6 +289,7 @@ fn doctor_says_herdr_is_off_and_holds_nothing_against_it() {
 fn doctor_reports_a_healthy_node_as_healthy() {
     let cli = Cli::new();
     cli.init();
+    set_config(&cli, "[herdr]\n", "[herdr]\nenabled = true\n");
     let out = cli.run(&["doctor", "--json"]);
     let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
 

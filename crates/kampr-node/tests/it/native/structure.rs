@@ -176,17 +176,20 @@ async fn a_worktree_is_a_checkout_and_a_workspace_named_for_its_branch() {
     );
     let mut client = h.client().await;
 
-    let (ack, pane) = client
+    let (_, pane) = client
         .made(json!({ "op": "worktree.create", "cwd": repo, "branch": "feat/y" }))
         .await;
-    let path = PathBuf::from(&h.node.config.native.worktrees)
-        .join("repo")
-        .join("feat-y");
+    // A shell reports its cwd resolved, and macOS's /tmp is a link to /private/tmp.
+    let path = std::fs::canonicalize(
+        PathBuf::from(&h.node.config.native.worktrees)
+            .join("repo")
+            .join("feat-y"),
+    )
+    .expect("the worktree");
     assert_eq!(pane["workspace"], "feat-y", "{pane}");
     assert_eq!(pane["cwd"], json!(path), "{pane}");
     assert!(git(&repo, &["worktree", "list"]).contains(&path.display().to_string()));
     assert!(git(&path, &["branch", "--show-current"]).trim() == "feat/y");
-    let _ = ack;
 
     let (_, again) = client.made(json!({ "op": "worktree.open", "path": path })).await;
     assert_eq!(again["workspace"], "feat-y", "{again}");
