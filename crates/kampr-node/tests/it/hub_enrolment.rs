@@ -3,14 +3,57 @@
 
 use kampr_auth::MeshRole;
 use kampr_node::{Config, Node};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpListener;
 
 const KEY: &str = "4444444444444444444444444444444444444444444444444444444444444444";
 
+/// What the store watch, the hub reads and the dials said, so a failure on a host nobody here
+/// can run says which of them stopped. Global, because the store watch logs from its own thread.
+fn captured() -> Arc<Mutex<Vec<String>>> {
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::SubscriberExt;
+    let lines = Arc::new(Mutex::new(Vec::new()));
+    let writer = {
+        let lines = lines.clone();
+        move || Line(lines.clone())
+    };
+    let layer = tracing_subscriber::fmt::layer()
+        .with_writer(writer)
+        .with_ansi(false)
+        .with_thread_names(true)
+        .with_filter(tracing_subscriber::EnvFilter::new(
+            "kampr_node::mesh=debug,kampr_node::device_watch=debug,kampr_mesh=debug",
+        ));
+    let _ = tracing::subscriber::set_global_default(tracing_subscriber::registry().with(layer));
+    lines
+}
+
+struct Line(Arc<Mutex<Vec<String>>>);
+
+impl std::io::Write for Line {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(String::from_utf8_lossy(buf).trim_end().to_string());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn said(lines: &Mutex<Vec<String>>) -> String {
+    lines.lock().unwrap().join("\n")
+}
+
 #[tokio::test]
 async fn a_hub_joined_or_left_by_another_process_is_dialled_or_dropped_at_once() {
+    let log = captured();
     let state = tempfile::tempdir().unwrap();
     let mut config = Config::bootstrap("joiner");
     config.muffit.enabled = Some(false);
@@ -34,10 +77,13 @@ async fn a_hub_joined_or_left_by_another_process_is_dialled_or_dropped_at_once()
         .enrol(KEY, "01JHUB", "hub", MeshRole::Hub, Some(&url), kampr_auth::now())
         .await
         .expect("the hub row");
-    let (mut link, _) = tokio::time::timeout(Duration::from_secs(1), hub.accept())
-        .await
-        .expect("the joined hub was not dialled promptly")
-        .unwrap();
+    let Ok(accepted) = tokio::time::timeout(Duration::from_secs(1), hub.accept()).await else {
+        panic!(
+            "the joined hub was not dialled promptly; the node said:\n{}",
+            said(&log)
+        );
+    };
+    let (mut link, _) = accepted.unwrap();
 
     cli.mesh().forget(KEY).await.expect("forgotten").expect("a row");
     let mut buf = [0u8; 4096];
@@ -50,6 +96,10 @@ async fn a_hub_joined_or_left_by_another_process_is_dialled_or_dropped_at_once()
         }
     })
     .await;
-    assert!(closed.is_ok(), "the hub that was left kept its link");
+    assert!(
+        closed.is_ok(),
+        "the hub that was left kept its link; the node said:\n{}",
+        said(&log)
+    );
     node.shutdown();
 }

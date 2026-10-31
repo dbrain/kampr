@@ -421,7 +421,10 @@ fn output_and_a_resize_arriving_together_leave_the_keeper_answering() {
 #[test]
 fn a_command_over_before_its_keeper_answers_is_still_launched() {
     let root = root();
-    let launches: Vec<_> = (0..16)
+    // macOS fails a pty open now and then with ENXIO when many keepers start at once, which is
+    // not the race this is about.
+    let threads = if cfg!(target_os = "macos") { 4 } else { 16 };
+    let launches: Vec<_> = (0..threads)
         .map(|_| {
             let root = root.path().to_path_buf();
             std::thread::spawn(move || {
@@ -446,8 +449,9 @@ fn a_command_over_before_its_keeper_answers_is_still_launched() {
         .collect();
     assert!(
         failed.is_empty(),
-        "{} of 800 failed: {:?}",
+        "{} of {} failed: {:?}",
         failed.len(),
+        threads * 50,
         failed.first()
     );
 }

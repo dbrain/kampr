@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// How often the node re-reads its enrolled hubs when the device store could not be watched. A
 /// `kampr mesh join` or `leave` writes the row from another process, and that write is what wakes
@@ -189,13 +189,22 @@ pub async fn dial_hubs(node: Weak<Node>) {
     let mut read = None;
     loop {
         if let Some(read) = read {
-            match &mut store {
+            let woke = match &mut store {
                 Some(store) => {
-                    store.changes.changed_before(read + HUB_BACKSTOP).await;
+                    let written = store.changes.changed_before(read + HUB_BACKSTOP).await;
                     tokio::time::sleep_until(read + HUB_REREAD_FLOOR).await;
+                    if written {
+                        "the store was written"
+                    } else {
+                        "the backstop"
+                    }
                 }
-                None => tokio::time::sleep_until(read + HUB_POLL).await,
-            }
+                None => {
+                    tokio::time::sleep_until(read + HUB_POLL).await;
+                    "the poll"
+                }
+            };
+            debug!(woke, "re-reading the enrolled hubs");
         }
         if let Some(store) = &mut store {
             store.changes.seen();
@@ -224,6 +233,7 @@ pub async fn dial_hubs(node: Weak<Node>) {
                 )
             })
             .collect();
+        debug!(wanted = ?wanted.values().map(|h| &h.url).collect::<Vec<_>>(), running = running.len(), "read the enrolled hubs");
 
         running.retain(|key, _| {
             let keep = wanted.contains_key(key);
@@ -236,8 +246,12 @@ pub async fn dial_hubs(node: Weak<Node>) {
         if wanted.keys().all(|key| running.contains_key(key)) {
             continue;
         }
-        let Ok(identity) = node.identity() else {
-            continue;
+        let identity = match node.identity() {
+            Ok(identity) => identity,
+            Err(e) => {
+                warn!(error = %format!("{e:#}"), "cannot dial a hub without this node's key");
+                continue;
+            }
         };
         let presence = node.presence();
         let weak = Arc::downgrade(&node);
@@ -245,6 +259,7 @@ pub async fn dial_hubs(node: Weak<Node>) {
             if running.contains_key(&key) {
                 continue;
             }
+            debug!(url = %hub.url, "dialling a hub");
             let identity = identity.clone();
             let presence = presence.clone();
             let weak = weak.clone();

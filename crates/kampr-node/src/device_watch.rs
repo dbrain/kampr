@@ -51,17 +51,30 @@ pub fn store(db: &Path) -> Option<StoreWatch> {
     })
 }
 
+/// How often a watch that could not be put back on the store tries again, waking its listeners
+/// each time: while it cannot see the files it is the short timer the callers would keep.
+const REARM_RETRY: Duration = Duration::from_secs(2);
+
 fn spawn(db: &Path) -> std::io::Result<Arc<Shared>> {
     let (mut watch, stop) = Watch::new()?;
     let files = Files::of(db);
-    let mut armed = files.arm(&mut watch)?;
+    let mut armed = Some(files.arm(&mut watch)?);
     let pulse = Pulse::new();
     let bumps = pulse.clone();
     std::thread::Builder::new()
         .name("kampr-device-store".into())
         .spawn(move || {
             loop {
-                let events = match watch.wait(None) {
+                let waited = watch.wait(armed.is_none().then_some(REARM_RETRY));
+                let Some(current) = &armed else {
+                    if matches!(waited, Ok(Waited::Stopped)) {
+                        return;
+                    }
+                    armed = files.rearm(&mut watch, None);
+                    bumps.bump();
+                    continue;
+                };
+                let events = match waited {
                     Ok(Waited::Changed(events)) => events,
                     Ok(Waited::TimedOut) => continue,
                     Ok(Waited::Stopped) => return,
@@ -72,22 +85,13 @@ fn spawn(db: &Path) -> std::io::Result<Arc<Shared>> {
                 };
                 let (wake, rearm) = events
                     .iter()
-                    .map(|e| files.judge(&armed, e))
+                    .map(|e| files.judge(current, e))
                     .fold((false, false), |(w, r), (ew, er)| (w || ew, r || er));
+                tracing::debug!(events = ?events, wake, rearm, "the device store's files moved");
                 if rearm {
-                    for key in armed.keys.drain(..) {
-                        watch.remove(key);
-                    }
-                    match files.arm(&mut watch) {
-                        Ok(again) => armed = again,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "re-arming the device store's watch; only its timers are left");
-                            bumps.bump();
-                            return;
-                        }
-                    }
+                    armed = files.rearm(&mut watch, armed.take());
                 }
-                if wake {
+                if wake || armed.is_none() {
                     bumps.bump();
                 }
             }
@@ -130,16 +134,40 @@ impl Files {
         })
     }
 
+    /// A file that is gone by the time it is watched is armed as absent, so its coming back is
+    /// what the directory reports next rather than an error that ends the watch.
     fn arm(&self, watch: &mut Watch) -> std::io::Result<Armed> {
-        let ids = self.identities();
+        use std::os::unix::fs::MetadataExt;
         let mut keys = vec![watch.add(&self.dir)?];
-        for name in &self.names {
+        let mut ids = [None, None];
+        for (id, name) in ids.iter_mut().zip(&self.names) {
             let path = self.dir.join(name);
-            if path.exists() {
-                keys.push(watch.add(&path)?);
+            match watch.add(&path) {
+                Ok(key) => {
+                    keys.push(key);
+                    *id = std::fs::metadata(&path).ok().map(|m| (m.dev(), m.ino()));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    for key in keys {
+                        watch.remove(key);
+                    }
+                    return Err(e);
+                }
             }
         }
         Ok(Armed { keys, ids })
+    }
+
+    fn rearm(&self, watch: &mut Watch, armed: Option<Armed>) -> Option<Armed> {
+        for key in armed.into_iter().flat_map(|a| a.keys) {
+            watch.remove(key);
+        }
+        self.arm(watch)
+            .inspect_err(
+                |e| tracing::warn!(error = %e, "re-arming the device store's watch; trying again shortly"),
+            )
+            .ok()
     }
 
     /// Whether an event is news about the store, and whether the watch must be put on the files
