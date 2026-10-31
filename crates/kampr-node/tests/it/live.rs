@@ -2137,10 +2137,22 @@ async fn a_blocked_agent_pane_publishes_the_question_from_the_screen() {
     }
     assert!(landed, "the key an answer carries never reached the pane's pty");
 
-    // Leaving the blocked state clears the strip — the only way a client can know to drop it.
+    // Leaving the blocked state clears the strip — the only way a client can know to drop it. A
+    // blocked pane is read again on each frame, so the line typed above may republish the question
+    // before the clear arrives.
     report(&h._session, &local, "idle").await;
-    let cleared = until_pane(&mut socket, "pending", &pane, 25).await;
-    assert!(cleared["question"].is_null(), "{cleared}");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(25);
+    let cleared = loop {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        assert!(
+            !left.is_zero(),
+            "leaving the blocked state never cleared the strip"
+        );
+        let pending = until_pane(&mut socket, "pending", &pane, left.as_secs().max(1)).await;
+        if pending["question"].is_null() {
+            break pending;
+        }
+    };
     assert!(cleared["options"].as_array().unwrap().is_empty());
 }
 

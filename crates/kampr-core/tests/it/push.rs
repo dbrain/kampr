@@ -64,6 +64,9 @@ async fn a_watched_file_pulses_on_each_append_and_stops_with_its_watch() {
     std::fs::write(dir.path().join("new"), b"").unwrap();
     assert!(rx.changed_before(Instant::now() + Duration::from_secs(5)).await);
     drop(watch);
+    // A file made is several events, and the last of them may still be bumping as the watch goes.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    rx.seen();
     let start = Instant::now();
     assert!(!rx.changed_before(start + Duration::from_secs(1)).await);
     assert!(

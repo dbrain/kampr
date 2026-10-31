@@ -23,15 +23,19 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 pub const HANDOVER: &str = "KAMPR_KEEP_HANDOVER";
+/// Debug builds only: the keeper behaves as if the kernel refused to watch its child.
+pub const UNWATCHED: &str = "KAMPR_KEEP_TEST_UNWATCHED";
 const LISTEN_FDS_START: RawFd = 3;
 const CTL_TIMEOUT: Duration = Duration::from_millis(250);
 const REAP_GRACE: Duration = Duration::from_secs(2);
+const UNWATCHED_TICK: Duration = Duration::from_millis(100);
 // A process left behind that ignores the hangup holds the slave open, and the session would
 // outlive its program for as long as that process lives; a terminal closes when its program exits.
 const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(3);
 
 const NOT_FOR_THE_CHILD: &[&str] = &[
     HANDOVER,
+    UNWATCHED,
     READY_FD,
     "NOTIFY_SOCKET",
     "LISTEN_PID",
@@ -137,19 +141,9 @@ pub fn serve(dir: &Path) -> Result<()> {
         .ok()
         .and_then(|n| n.into_string().ok());
     let mut ended: Option<Instant> = None;
-    let (mut watched, mut outcome) = match kampr_watch::Exit::open(child) {
-        Ok(Some(exit)) => (Some(exit), Outcome::Running),
-        // kqueue refuses a process that has begun exiting, which a quick command has by now,
-        // possibly before it is waitable; so this waits for it rather than asking once.
-        Ok(None) => match reap(child, true) {
-            Outcome::Running => (None, Outcome::Lost),
-            outcome => {
-                ended = Some(Instant::now());
-                (None, outcome)
-            }
-        },
-        Err(_) => (None, Outcome::Lost),
-    };
+    let mut outcome = Outcome::Running;
+    let mut watching = Watching::Ticked(Instant::now());
+    look(child, &mut watching, &mut outcome, &mut ended);
 
     notify("READY=1", &[])?;
     drop(ready);
@@ -160,7 +154,15 @@ pub fn serve(dir: &Path) -> Result<()> {
         if left.is_some_and(|left| left.is_zero()) {
             break;
         }
-        let timeout = left.and_then(|left| Timespec::try_from(left).ok());
+        let tick = match watching {
+            Watching::Ticked(due) => Some(due.saturating_duration_since(Instant::now())),
+            _ => None,
+        };
+        let wake = match (left, tick) {
+            (Some(left), Some(tick)) => Some(left.min(tick)),
+            (left, tick) => left.or(tick),
+        };
+        let timeout = wake.and_then(|wake| Timespec::try_from(wake).ok());
         let (master_ready, ctl_ready, signal_ready, child_ready) = {
             let signal_fd = signals.fd();
             let mut fds = vec![
@@ -168,7 +170,7 @@ pub fn serve(dir: &Path) -> Result<()> {
                 PollFd::new(&listener, PollFlags::IN),
                 PollFd::new(&signal_fd, PollFlags::IN),
             ];
-            if let Some(exit) = &watched {
+            if let Watching::Kernel(exit) = &watching {
                 fds.push(PollFd::new(exit, PollFlags::IN));
             }
             match poll(&mut fds, timeout.as_ref()) {
@@ -180,11 +182,12 @@ pub fn serve(dir: &Path) -> Result<()> {
             (ready(0), ready(1), ready(2), ready(3))
         };
 
-        if child_ready && watched.is_some() {
+        if child_ready {
             outcome = reap(child, true);
-            watched = None;
+            watching = Watching::Done;
             ended = Some(Instant::now());
         }
+        look(child, &mut watching, &mut outcome, &mut ended);
         if signal_ready && signals.take() {
             let err = reexec(&exe, &dir, master.as_fd(), child);
             eprintln!("kampr keep: re-exec of {} failed: {err}", exe.display());
@@ -211,8 +214,17 @@ pub fn serve(dir: &Path) -> Result<()> {
         }
     }
 
-    if let Some(exit) = watched.take() {
-        outcome = reap(child, exit.wait(Some(REAP_GRACE)).unwrap_or(false));
+    match std::mem::replace(&mut watching, Watching::Done) {
+        Watching::Kernel(exit) => outcome = reap(child, exit.wait(Some(REAP_GRACE)).unwrap_or(false)),
+        Watching::Ticked(_) => {
+            let deadline = Instant::now() + REAP_GRACE;
+            outcome = reap(child, false);
+            while matches!(outcome, Outcome::Running) && Instant::now() < deadline {
+                std::thread::sleep(UNWATCHED_TICK);
+                outcome = reap(child, false);
+            }
+        }
+        Watching::Done => {}
     }
     let (code, signal, status_lost) = match outcome {
         Outcome::Reaped { code, signal } => (code, signal, false),
@@ -232,6 +244,47 @@ pub fn serve(dir: &Path) -> Result<()> {
     notify("FDSTOREREMOVE=1\nFDNAME=pty", &[])?;
     let _ = std::fs::remove_file(&ctl_path);
     Ok(())
+}
+
+enum Watching {
+    Kernel(kampr_watch::Exit),
+    /// The kernel would not watch it: XNU refuses `EVFILT_PROC` on a process that has begun
+    /// exiting, and has been seen refusing a child that had not. Never blocks before READY.
+    Ticked(Instant),
+    Done,
+}
+
+/// While the child cannot be watched, each tick asks again for a watch and asks once whether it
+/// has ended, so a quick command's status is kept and a long one costs a look per tick.
+fn look(child: u32, watching: &mut Watching, outcome: &mut Outcome, ended: &mut Option<Instant>) {
+    match watching {
+        Watching::Ticked(due) if Instant::now() >= *due => *due = Instant::now() + UNWATCHED_TICK,
+        _ => return,
+    }
+    if let Ok(Some(exit)) = watch(child) {
+        *watching = Watching::Kernel(exit);
+        return;
+    }
+    match reap(child, false) {
+        Outcome::Running => {}
+        Outcome::Lost => {
+            *outcome = Outcome::Lost;
+            *watching = Watching::Done;
+        }
+        reaped => {
+            *outcome = reaped;
+            *watching = Watching::Done;
+            *ended = Some(Instant::now());
+        }
+    }
+}
+
+fn watch(child: u32) -> io::Result<Option<kampr_watch::Exit>> {
+    #[cfg(debug_assertions)]
+    if std::env::var_os(UNWATCHED).is_some() {
+        return Ok(None);
+    }
+    kampr_watch::Exit::open(child)
 }
 
 fn ready_pipe() -> Option<OwnedFd> {
@@ -350,6 +403,7 @@ fn child_env(spec: &Spec) -> Vec<(OsString, OsString)> {
 
 // `exited` is the kernel having said so, after which a blocking wait returns at once; on macOS the
 // kqueue note can come a moment before the zombie is waitable, and a NOHANG there would miss it.
+// Nothing else may block: a child the kernel has not said has ended may be running.
 // waitpid rather than waitid: its status is the one std decodes on every platform.
 fn reap(child: u32, exited: bool) -> Outcome {
     let Some(pid) = i32::try_from(child).ok().and_then(Pid::from_raw) else {
