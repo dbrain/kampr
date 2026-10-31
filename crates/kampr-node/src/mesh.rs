@@ -21,6 +21,11 @@ const HUB_BACKSTOP: Duration = Duration::from_secs(60);
 /// The least time between two reads woken by store writes, which the node's own device bookkeeping
 /// also makes.
 const HUB_REREAD_FLOOR: Duration = Duration::from_millis(250);
+/// A read woken by a write looks once more this long after. SQLite makes a commit visible through
+/// its mmap'd wal-index, which no file event reports, so the write that woke a read can land
+/// before the commit it belongs to: on macOS the read came 0.2 ms after the first write and
+/// found nothing, and nothing woke it again.
+const HUB_AFTER_WRITE: Duration = Duration::from_millis(300);
 
 /// How long an inbound handshake may take before the socket is hung up. It holds one of the
 /// handshake permits for exactly this long, so a socket that opens and then says nothing costs a
@@ -187,17 +192,25 @@ pub async fn dial_hubs(node: Weak<Node>) {
         None => return,
     };
     let mut read = None;
+    let mut after_write = false;
     loop {
         if let Some(read) = read {
             let woke = match &mut store {
                 Some(store) => {
-                    let written = store.changes.changed_before(read + HUB_BACKSTOP).await;
-                    tokio::time::sleep_until(read + HUB_REREAD_FLOOR).await;
-                    if written {
-                        "the store was written"
+                    let wait = if after_write {
+                        HUB_AFTER_WRITE
                     } else {
-                        "the backstop"
-                    }
+                        HUB_BACKSTOP
+                    };
+                    let written = store.changes.changed_before(read + wait).await;
+                    tokio::time::sleep_until(read + HUB_REREAD_FLOOR).await;
+                    let woke = match (written, after_write) {
+                        (true, _) => "the store was written",
+                        (false, true) => "a look after a write",
+                        (false, false) => "the backstop",
+                    };
+                    after_write = written;
+                    woke
                 }
                 None => {
                     tokio::time::sleep_until(read + HUB_POLL).await;
