@@ -14,6 +14,7 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
+mod convo;
 mod reflow;
 mod structure;
 
@@ -1322,6 +1323,99 @@ async fn a_claude_under_a_shell_has_its_conversation_title_and_marker_served() {
     );
 }
 
+/// A `claude` that has opened its session and written nothing yet: the marker names the session,
+/// and the transcript is the test's to write.
+fn unwritten_claude(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join("claude");
+    let script = r#"#!/bin/sh
+home=$1; id=$2
+cwd=$(pwd -P)
+start=$(cut -d' ' -f22 /proc/$$/stat 2>/dev/null || LC_ALL=C TZ=UTC ps -o lstart= -p $$ | sed 's/^ *//; s/ *$//')
+mkdir -p "$home/.claude/projects/$(printf %s "$cwd" | tr / -)" "$home/.claude/sessions"
+printf '{"pid":%s,"sessionId":"%s","cwd":"%s","procStart":"%s","version":"2.1.239","kind":"interactive","entrypoint":"cli","status":"idle"}' $$ "$id" "$cwd" "$start" > "$home/.claude/sessions/$$.json"
+printf 'claude is up\n'
+while :; do sleep 1; done
+"#;
+    std::fs::write(&path, script).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// **A transcript appearing, and a title landing in it, are file writes and nothing else says so.**
+/// The herd re-searched for a missing transcript at most every 5 s and re-read titles on a 30 s
+/// sweep; both now land when the file does.
+#[tokio::test]
+async fn a_transcript_and_its_title_reach_the_herd_as_they_are_written() {
+    let h = Harness::start().await;
+    let home = h.home.as_ref().unwrap().path().to_path_buf();
+    let claude = unwritten_claude(&h.work());
+    let id = "77777777-7777-4777-8777-777777777777";
+    let line = format!("{} {} {id}", claude.display(), home.display());
+    let mut client = h.client().await;
+    let pane = client
+        .create(
+            &["sh", "-c", &line],
+            json!({ "cwd": h.work().display().to_string() }),
+        )
+        .await;
+    client
+        .pane(&pane, |p| p["agent"] == "claude" && p["converses"] == json!(true))
+        .await;
+    let quiet = tokio::time::Instant::now() + Duration::from_millis(600);
+    while let left = quiet.saturating_duration_since(tokio::time::Instant::now())
+        && !left.is_zero()
+    {
+        client.pump(left).await;
+    }
+    assert_eq!(
+        client.pane(&pane, |_| true).await["has_conversation"],
+        json!(false),
+        "nothing has been written, so there is no conversation yet"
+    );
+
+    let cwd = h.work().canonicalize().unwrap().display().to_string();
+    let transcript = home
+        .join(".claude/projects")
+        .join(cwd.replace('/', "-"))
+        .join(format!("{id}.jsonl"));
+    let said = json!({
+        "type": "user", "uuid": "u-1", "cwd": cwd,
+        "timestamp": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap(),
+        "message": { "role": "user", "content": "hello" },
+    });
+    let written = tokio::time::Instant::now();
+    std::fs::write(&transcript, format!("{said}\n")).unwrap();
+    client.pane(&pane, |p| p["has_conversation"] == json!(true)).await;
+    let appeared = written.elapsed();
+    assert!(
+        appeared < Duration::from_millis(400),
+        "the transcript reached the herd {appeared:?} after it was written"
+    );
+
+    let titled = tokio::time::Instant::now();
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&transcript)
+        .unwrap();
+    std::io::Write::write_all(
+        &mut file,
+        format!(
+            "{}\n",
+            json!({ "type": "ai-title", "aiTitle": "written just now", "sessionId": id })
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    drop(file);
+    client.pane(&pane, |p| p["title"] == "written just now").await;
+    let retitled = titled.elapsed();
+    assert!(
+        retitled < Duration::from_millis(400),
+        "the title reached the herd {retitled:?} after it was written"
+    );
+}
+
 /// **The moves are counted from the native screen, not asked of herdr.** A cursor dialog read as no
 /// dialog at all gets the bare digit Claude used to be sent, and a commit with no question standing
 /// is refused; either way the keys the harness reads are not these four.
@@ -1385,6 +1479,125 @@ async fn a_dialog_on_a_native_claude_is_answered_with_the_moves_its_cursor_needs
             client.others
         );
     }
+}
+
+/// **A dialog is read off the frame that paints it.** Claude says it is blocked over `OSC 7501`
+/// before its dialog has finished painting, so the first read finds nothing; the next is the
+/// pane's next frame, not a retry timer's.
+#[tokio::test]
+async fn a_dialog_painted_after_the_blocked_report_is_published_from_its_first_frame() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Harness::start().await;
+    let work = h.work();
+    let claude = work.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\nprintf 'claude is up\\n'\nwhile [ ! -e blocked ]; do sleep 0.01; done\n\
+         printf '\\033]7501;state=blocked:app=claude-code:kind=permission\\007'\n\
+         while [ ! -e paint ]; do sleep 0.01; done\ncat \"$1\"\nexec sleep 600\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dialog = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/dialogs/claude-single.txt")
+        .display()
+        .to_string();
+    let mut client = h.client().await;
+    let id = client
+        .create(
+            &[&claude.display().to_string(), &dialog],
+            json!({ "cwd": work.display().to_string(), "cols": 120, "rows": 40 }),
+        )
+        .await;
+    client.pane(&id, |p| p["agent"] == "claude").await;
+    client.watch(&id, false).await;
+    client.shows(&id, "claude is up").await;
+
+    std::fs::write(work.join("blocked"), b"").unwrap();
+    client.pane(&id, |p| p["agent_status"] == "blocked").await;
+    let quiet = tokio::time::Instant::now() + Duration::from_millis(150);
+    while let left = quiet.saturating_duration_since(tokio::time::Instant::now())
+        && !left.is_zero()
+    {
+        client.pump(left).await;
+    }
+
+    std::fs::write(work.join("paint"), b"").unwrap();
+    let painted = std::time::Instant::now();
+    client
+        .until("the dialog published", |c| {
+            c.others
+                .iter()
+                .find(|v| v["t"] == "pending" && v["pane"] == json!(id) && !v["question"].is_null())
+                .map(|_| ())
+        })
+        .await;
+    let took = painted.elapsed();
+    assert!(
+        took < Duration::from_millis(200),
+        "the dialog was published {took:?} after it was painted"
+    );
+}
+
+/// **Held input goes on the frame that shows the harness reading.** A booting Claude's input is held
+/// until its screen shows a composer or a dialog, and the hold is released by that frame rather
+/// than found on a later look.
+#[tokio::test]
+async fn input_held_for_a_booting_harness_goes_on_the_frame_that_shows_it_reading() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = Harness::home();
+    std::fs::create_dir_all(home.path().join(".claude/projects")).unwrap();
+    let h = Harness::start_in(home).await;
+    let work = h.work();
+    let claude = work.join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\nstty raw -echo\nfor r in 1 2 3 4 5; do\n\
+         printf '\\033[2J\\033[HREADY%s' $r\n\
+         while [ ! -e paint$r ]; do sleep 0.005; done\n\
+         printf '\\033[2J\\033[H'; cat \"$1\"; t0=$(date +%s%N)\n\
+         head -c 1 >/dev/null; t1=$(date +%s%N)\n\
+         echo $(( (t1 - t0) / 1000000 )) >> waited\ndone\nexec sleep 600\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let dialog = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/dialogs/claude-single.txt")
+        .display()
+        .to_string();
+    let mut client = h.client().await;
+    let id = client
+        .create(
+            &[&claude.display().to_string(), &dialog],
+            json!({ "cwd": work.display().to_string(), "cols": 120, "rows": 40 }),
+        )
+        .await;
+    client
+        .pane(&id, |p| p["agent"] == "claude" && p["cmd"] == "claude")
+        .await;
+    client.watch(&id, false).await;
+    for round in 1..=5 {
+        client.shows(&id, &format!("READY{round}")).await;
+        client.type_text(&id, "x").await;
+        let settle = tokio::time::Instant::now() + Duration::from_millis(100);
+        while let left = settle.saturating_duration_since(tokio::time::Instant::now())
+            && !left.is_zero()
+        {
+            client.pump(left).await;
+        }
+        std::fs::write(work.join(format!("paint{round}")), b"").unwrap();
+    }
+    let waited = client
+        .until("every round answered", |_| {
+            let text = std::fs::read_to_string(work.join("waited")).ok()?;
+            let waits: Vec<u64> = text.lines().filter_map(|l| l.parse().ok()).collect();
+            (waits.len() == 5).then_some(waits)
+        })
+        .await;
+    assert!(
+        waited.iter().sum::<u64>() < 5 * 28,
+        "held input reached the harness {waited:?} ms after it showed a dialog"
+    );
 }
 
 /// **No herdr anywhere is a first-class node.** `online` stays herdr's own answer, and the node says

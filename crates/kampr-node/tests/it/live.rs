@@ -2746,14 +2746,17 @@ async fn every_herdr_session_on_the_host_is_its_own_node() {
     let reset = until(&mut socket, "grid.reset", 20).await;
     assert_eq!(reset["pane"], target.as_str());
 
-    // Dropping a session takes its node down without taking the herd with it.
+    // Dropping a session takes its node down without taking the herd with it. Its socket going is
+    // seen at once, so the node usually leaves the herd as a stopped session does (#465) before
+    // its provider has had a chance to call it offline; either is the node down.
     second.stop().await;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let mut fell_over = false;
     while tokio::time::Instant::now() < deadline && !fell_over {
-        fell_over = node.herd().nodes.iter().any(|n| n.id == extra && !n.online);
+        fell_over = node.herd().nodes.iter().all(|n| n.id != extra || !n.online);
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(fell_over, "the second session going away is one node offline");
+    assert!(fell_over, "the second session going away is one node down");
     assert!(
         node.herd().nodes.iter().any(|n| n.id == base && n.online),
         "and never the first"

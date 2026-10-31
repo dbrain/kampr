@@ -1,6 +1,7 @@
 use crate::caps::{SessionEntry, SessionListError, sessions as list_sessions};
 use crate::config::Config;
 use kampr_core::desk::{Desk, DeskHosts};
+use kampr_core::push::FileWatch;
 use kampr_core::registry::RegistryConfig;
 use kampr_core::{Composite, HerdrConfig, HerdrProvider, PaneRegistry};
 use kampr_fleet::FleetProvider;
@@ -15,9 +16,15 @@ use tokio::sync::watch;
 use tracing::{info, warn};
 
 /// A named herdr session is a whole separate server with its own socket (probe #49), so it is a
-/// separate node in the herd model rather than more panes on this one. Polled rather than
-/// subscribed because sessions are created by the CLI and are absent from the socket API.
+/// separate node in the herd model rather than more panes on this one. Sessions are created by the
+/// CLI and are absent from the socket API, so their sockets coming and going under
+/// `sessions/<name>/` is the news; this listing is the net for a server killed without removing
+/// its socket (probe #427), which no file event reports.
 const DISCOVERY_POLL: Duration = Duration::from_secs(15);
+/// How long after a socket event the listing is re-read until it agrees: a stopped server's socket
+/// goes ~250 ms before `session list` stops calling it running (probe #241).
+const DISCOVERY_SETTLE: Duration = Duration::from_millis(1000);
+const DISCOVERY_RETRY: Duration = Duration::from_millis(100);
 const KEEPER_UPGRADES: Duration = Duration::from_secs(60);
 
 /// One herdr session: its own socket, its own provider, its own emulators.
@@ -420,13 +427,72 @@ pub async fn discover(sessions: Arc<Sessions>) {
     if sessions.config.herdr.enabled == Some(false) {
         return;
     }
-    let mut poll = tokio::time::interval(DISCOVERY_POLL);
-    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let root = sessions_dir(sessions.primary.herdr.socket());
+    let mut watched: Option<(Vec<PathBuf>, FileWatch)> = None;
+    let mut socket_moved = false;
     loop {
-        poll.tick().await;
-        // The sweep has nothing to promise anybody: the next tick is the retry.
+        let paths = discovery_paths(&root);
+        if watched.as_ref().is_none_or(|(had, _)| *had != paths) {
+            watched = match kampr_core::push::watch_files(&paths) {
+                Ok(watch) => Some((paths, watch)),
+                Err(e) => {
+                    warn!(error = %e, dir = %root.display(), "cannot watch herdr's sessions; listing them on a timer");
+                    None
+                }
+            };
+        }
+        let mut changes = watched.as_ref().map(|(_, watch)| watch.changes());
+        let mut set = sessions.changes();
+        set.borrow_and_update();
+        // The sweep has nothing to promise anybody: the next event or tick is the retry.
         let _ = sessions.reconcile().await;
+        if socket_moved {
+            let settle = tokio::time::Instant::now() + DISCOVERY_SETTLE;
+            while !set.has_changed().unwrap_or(false) && tokio::time::Instant::now() < settle {
+                tokio::time::sleep(DISCOVERY_RETRY).await;
+                let _ = sessions.reconcile().await;
+            }
+        }
+        let deadline = tokio::time::Instant::now() + DISCOVERY_POLL;
+        socket_moved = match &mut changes {
+            Some(changes) => changes.changed_before(deadline).await,
+            None => {
+                tokio::time::sleep_until(deadline).await;
+                false
+            }
+        };
     }
+}
+
+/// Where herdr keeps its named sessions: beside the default socket, or above a named one.
+fn sessions_dir(primary: &Path) -> PathBuf {
+    let dir = primary.parent().unwrap_or(Path::new("/"));
+    match dir.parent().filter(|p| p.ends_with("sessions")) {
+        Some(sessions) => sessions.to_path_buf(),
+        None => dir.join("sessions"),
+    }
+}
+
+/// The sessions directory and each session's own, where a socket comes and goes; or, until the
+/// first session makes it, the directory it will appear in.
+fn discovery_paths(root: &Path) -> Vec<PathBuf> {
+    if !root.is_dir() {
+        return root
+            .parent()
+            .filter(|p| p.is_dir())
+            .map(|p| vec![p.to_path_buf()])
+            .unwrap_or_default();
+    }
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    paths.sort();
+    paths.insert(0, root.to_path_buf());
+    paths
 }
 
 /// Herdr keeps a named session at `<config>/herdr/sessions/<name>/herdr.sock`; anything else is

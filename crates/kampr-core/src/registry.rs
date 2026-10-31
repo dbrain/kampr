@@ -1,4 +1,5 @@
 use crate::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider};
+use crate::push::{Pulse, PulseRx};
 use crate::scrollback::{Ingest, ScrollbackDoc, ScrollbackRing};
 use crate::wire::Cursor;
 use anyhow::Result;
@@ -204,6 +205,7 @@ struct PaneState {
 struct Activity {
     frames: AtomicU64,
     woken: Notify,
+    drawn: Pulse,
 }
 
 impl Activity {
@@ -228,6 +230,7 @@ struct PaneEntry {
     /// held changes nothing a client could see, and waking every socket for it would put the poll
     /// back with extra steps.
     history_rev: Arc<tokio::sync::watch::Sender<u64>>,
+    drawn: Pulse,
     status: Arc<Mutex<HistoryStatus>>,
     tx: broadcast::Sender<PaneUpdate>,
     /// Whether [`pump`] is still running. The entry owns a `Sender` of its own so the broadcast
@@ -357,6 +360,13 @@ impl PaneRegistry {
         Some(self.lookup(pane_id)?.history_rev.subscribe())
     }
 
+    /// Bumps once each frame of a watched pane has reached the grid [`Self::screen`] reads, so a
+    /// reader of the screen can wait for it to move rather than poll it. `None` for an unwatched
+    /// pane, which has no grid.
+    pub fn frames(&self, pane_id: &str) -> Option<PulseRx> {
+        Some(self.lookup(pane_id)?.drawn.subscribe())
+    }
+
     /// The pane's visible grid as plain text, one string per row with trailing blanks trimmed,
     /// and the caret that goes with it.
     ///
@@ -440,6 +450,7 @@ impl PaneRegistry {
         let history = Arc::new(Mutex::new(ScrollbackRing::new(self.config.scrollback_max_rows)));
         let history_rev = Arc::new(tokio::sync::watch::channel(0u64).0);
         let activity = Arc::new(Activity::default());
+        let drawn = activity.drawn.clone();
         let status = Arc::new(Mutex::new(HistoryStatus {
             poll: self.config.history.fastest,
             rows_per_sec: 0.0,
@@ -470,6 +481,7 @@ impl PaneRegistry {
             state,
             history,
             history_rev,
+            drawn,
             status,
             tx,
             alive,
@@ -727,12 +739,14 @@ async fn pump(
                         new_links: Arc::new(new_links),
                     });
                 }
+                activity.drawn.bump();
             }
         }
     }
 }
 
-/// Grows a pane's ring while it is watched, at a cadence set by the pane itself.
+/// Grows a pane's ring while it is watched: when the provider announces that its history moved
+/// ([`crate::push::PaneChanges::history`]), and otherwise at a cadence set by the pane itself.
 ///
 /// **The fast path exists to keep [`Ingest::Gap`] rare, and is not an optimisation target.** Two
 /// reads can only be stitched while they overlap, and they stop overlapping once more than
@@ -760,9 +774,13 @@ async fn accumulate_history(
     let mut seen_frames = activity.count();
     let mut rate = RowRate::default();
     let mut failures = 0usize;
-    let mut topology = provider.topology();
+    let mut topology = PulseRx::from(provider.topology());
+    let mut announced = provider.pane_changes(&pane_id).history;
     loop {
-        topology.borrow_and_update();
+        topology.seen();
+        if let Some(history) = &mut announced {
+            history.seen();
+        }
         let outcome = provider.read_scrollback(&pane_id).await;
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(previous);
@@ -869,7 +887,7 @@ async fn accumulate_history(
         }
 
         let rows_per_sec = rate.observe(added, elapsed);
-        let next = if gapped {
+        let next = if gapped || (announced.is_some() && !failed) {
             policy.fastest
         } else {
             policy.interval_for_rate(rows_per_sec)
@@ -887,6 +905,17 @@ async fn accumulate_history(
             next_ms = next.as_millis(),
             "history poll"
         );
+        // A provider that announces its history needs no estimate: it is read when it says so, no
+        // oftener than `fastest`, so a flood is still read at most that often and a gap left by it
+        // is refetched. `idle` stays as the backstop for an announcement that never comes.
+        if let Some(history) = announced.as_mut().filter(|_| !failed) {
+            tokio::time::sleep_until(now + policy.fastest).await;
+            tokio::select! {
+                _ = history.changed_before(now + policy.idle) => {}
+                _ = topology.changed(), if no_ring => {}
+            }
+            continue;
+        }
         // A pane that has gone quiet waits on its own output rather than on a timer, which is
         // what makes an idle pane free: a frame cuts that wait short, because output *starting* is
         // the one moment the estimate cannot know about yet.
@@ -912,18 +941,12 @@ async fn accumulate_history(
                         // of its own, which can land after the pane's last frame: then this is the
                         // only news that the ring exists, and the frames that would have woken the
                         // poller have all been spent on reads that were told there was none.
-                        _ = topology_moved(&mut topology), if no_ring => {}
+                        _ = topology.changed(), if no_ring => {}
                     }
                 }
                 false => tokio::time::sleep(remainder).await,
             }
         }
-    }
-}
-
-async fn topology_moved(rx: &mut tokio::sync::watch::Receiver<u64>) {
-    if rx.changed().await.is_err() {
-        std::future::pending::<()>().await;
     }
 }
 

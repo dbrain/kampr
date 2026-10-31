@@ -105,15 +105,6 @@ pub struct HerdrConfig {
     /// truth, so collapsing a burst costs one interval of event latency on the new panes and
     /// nothing else.
     pub resubscribe_min: Duration,
-    /// How often the harness processes are checked for having exited.
-    ///
-    /// **Far shorter than the sweep, because it is a different question.** The sweep asks herdr
-    /// what the herd looks like and costs a socket round trip; this asks procfs whether a pid
-    /// this node already holds is still that process, and costs a `stat` per agent pane. Nothing
-    /// announces a harness exiting — and a pane whose agent was quit goes on advertising that
-    /// agent's conversation until something notices — so it is the one thing worth looking for
-    /// oftener than herdr is worth asking.
-    pub liveness: Duration,
     /// The name this node writes back into herdr for every pane, or `None` to write none.
     ///
     /// **`None` is the default and the shipped state.** A title Kampr computes lands on the pane's
@@ -165,7 +156,6 @@ impl Default for HerdrConfig {
             settle: Duration::from_millis(60),
             width_poll: Duration::from_secs(3),
             resubscribe_min: Duration::from_millis(500),
-            liveness: Duration::from_millis(100),
             report_names: None,
             desk_agents: None,
             send_argv: false,
@@ -241,6 +231,8 @@ struct Inner {
     /// because finding one costs a socket round trip, and because a pane's *identity* has to be
     /// as stable as the pane while the process behind it lives.
     processes: Mutex<HashMap<String, Running>>,
+    /// Bumped when `processes` names a different set of pids, so [`liveness`] re-arms its exits.
+    held: crate::push::Pulse,
     /// The foreground job in each pane, agent or shell. Held rather than derived because it comes
     /// from the same `pane.process_info` round trip the harness does, and because six panes in one
     /// directory are otherwise indistinguishable.
@@ -406,6 +398,7 @@ impl HerdrProvider {
             health: health_tx,
             widths: Mutex::new(HashMap::new()),
             processes: Mutex::new(HashMap::new()),
+            held: crate::push::Pulse::new(),
             commands: Mutex::new(HashMap::new()),
             pids: Mutex::new(HashMap::new()),
             rtt: Mutex::new(Rtt::default()),
@@ -758,6 +751,24 @@ impl Inner {
     ///
     /// Returns whether anything moved, because a pane whose agent was restarted looks identical
     /// in the snapshot and is a different conversation.
+    /// Marks every held harness that has exited as gone, and publishes it if any had.
+    fn reap(&self) {
+        let died = {
+            let mut processes = self.processes.lock().unwrap();
+            let mut died = false;
+            for running in processes.values_mut() {
+                if !running.alive() {
+                    running.harness = Harness::Absent;
+                    died = true;
+                }
+            }
+            died
+        };
+        if died {
+            self.revision.send_modify(|r| *r += 1);
+        }
+    }
+
     async fn refresh_processes(&self, snapshot: &Snapshot) -> bool {
         // Which panes need their *harness* re-derived, which is not every pane and not every
         // sweep: a pid that is still the same live process is still this pane's harness, and
@@ -880,6 +891,10 @@ impl Inner {
             // to a harness has, and nothing else in the snapshot says so: a fresh agent in the
             // pane the last one was quit in is identical in every field but the process.
             moved |= replaced.is_none_or(|old| old.harness != running.harness);
+        }
+        drop(processes);
+        if moved {
+            self.held.bump();
         }
         moved || commands_moved
     }
@@ -1259,6 +1274,17 @@ impl Provider for HerdrProvider {
     fn topology(&self) -> watch::Receiver<u64> {
         self.inner.revision.subscribe()
     }
+
+    /// No history signal: herdr announces no output (probe #4/#51). Status, foreground job and
+    /// scroll state all reach this node through the snapshot, so both of those are its revision:
+    /// coarse, but every change to them moves it.
+    fn pane_changes(&self, _pane_id: &str) -> crate::push::PaneChanges {
+        crate::push::PaneChanges {
+            history: None,
+            screen: Some(self.inner.revision.subscribe().into()),
+            status: Some(self.inner.revision.subscribe().into()),
+        }
+    }
 }
 
 /// What an operator reads on a phone when a node cannot run herdr.
@@ -1502,31 +1528,50 @@ enum Ended {
 /// Notices a harness exiting, which nothing else on this node does.
 ///
 /// Herdr announces panes; the processes inside them it answers only when asked, and asking is a
-/// socket round trip — which is why the sweep that does it is measured in seconds. Whether a pid
-/// this node already holds is still alive is a `stat`, so it is asked far oftener and *published*
-/// the moment the answer changes. Publishing is the half that matters: the herd carries
+/// socket round trip — which is why the sweep that does it is measured in seconds. Each pid this
+/// node holds is instead waited on for its exit (a pidfd, or kqueue on macOS), and the change is
+/// *published* the moment it lands. Publishing is the half that matters: the herd carries
 /// `has_conversation`, the conversation cache behind it is keyed on the process, and a pane whose
 /// agent has been quit keeps advertising that agent's transcript until something rebuilds the
 /// model.
 async fn liveness(inner: Arc<Inner>) {
+    let mut held = inner.held.subscribe();
     loop {
-        tokio::time::sleep(inner.config.liveness).await;
-        let died = {
-            let mut processes = inner.processes.lock().unwrap();
-            let mut died = false;
-            for running in processes.values_mut() {
-                if !running.alive() {
-                    running.harness = Harness::Absent;
-                    died = true;
+        held.seen();
+        let pids: Vec<u32> = inner
+            .processes
+            .lock()
+            .unwrap()
+            .values()
+            .filter_map(|running| match &running.harness {
+                Harness::Running(p) if p.start.is_some() => Some(p.pid),
+                _ => None,
+            })
+            .collect();
+        let mut exits = futures_util::stream::FuturesUnordered::new();
+        let mut unwatchable = false;
+        for pid in pids {
+            match crate::push::exited(pid) {
+                Ok(exit) => exits.push(exit),
+                Err(e) => {
+                    debug!(pid, error = %e, "cannot wait on a harness's exit; rechecking it on a timer");
+                    unwatchable = true;
                 }
             }
-            died
-        };
-        if died {
-            inner.revision.send_modify(|r| *r += 1);
+        }
+        // After binding: a pid that exited, or was handed on, before its exit was armed is caught
+        // here rather than never.
+        inner.reap();
+        tokio::select! {
+            _ = held.changed() => {}
+            Some(()) = exits.next() => inner.reap(),
+            _ = tokio::time::sleep(UNWATCHABLE_RECHECK), if unwatchable => inner.reap(),
         }
     }
 }
+
+/// How often a harness whose exit cannot be waited on is looked up instead.
+const UNWATCHABLE_RECHECK: Duration = Duration::from_secs(1);
 
 /// A session's status moving, or a `kampr attach` arriving in a pane, says nothing to herdr's
 /// event stream: only the native side sees either.

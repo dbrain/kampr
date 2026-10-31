@@ -10,7 +10,7 @@
 
 use crate::env::FleetPath;
 use crate::job::Job;
-use crate::ladder::{Ladder, POLL, Seen, State};
+use crate::ladder::{Ladder, Seen, State};
 use anyhow::{Result, anyhow, bail};
 use async_trait::async_trait;
 use kampr_core::provider::{
@@ -261,7 +261,7 @@ fn drive(inner: Weak<Inner>, run: Arc<Run>, mut ladder: Ladder) {
             return;
         }
         drop(inner);
-        std::thread::sleep(POLL);
+        ladder.wait();
     }
 }
 

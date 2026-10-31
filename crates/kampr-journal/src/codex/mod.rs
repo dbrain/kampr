@@ -151,6 +151,23 @@ impl JournalAdapter for CodexAdapter {
         .ok_or_else(|| discover::not_found(cwd))
     }
 
+    /// Rollouts are filed by date, `sessions/YYYY/MM/DD`, so the newest directory at each level is
+    /// where the next one lands, and the level above it is where the next day's directory does.
+    fn watched(&self, _cwd: Option<&Path>) -> Vec<PathBuf> {
+        let mut dirs = vec![self.root.path().join("thread-writer-locks")];
+        let mut level = self.root.path().join("sessions");
+        for _ in 0..3 {
+            let newest = discover::subdirectories(&level).into_iter().max();
+            dirs.push(level);
+            match newest {
+                Some(next) => level = next,
+                None => return dirs,
+            }
+        }
+        dirs.push(level);
+        dirs
+    }
+
     fn parser(&self) -> Box<dyn TranscriptParser> {
         Box::new(CodexParser::default())
     }

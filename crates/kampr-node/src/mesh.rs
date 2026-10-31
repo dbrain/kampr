@@ -12,9 +12,15 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-/// How often the node re-reads its enrolled hubs, so a `kampr mesh join` run against a live node
-/// takes effect without a restart — and a `kampr mesh leave` drops the link.
+/// How often the node re-reads its enrolled hubs when the device store could not be watched. A
+/// `kampr mesh join` or `leave` writes the row from another process, and that write is what wakes
+/// the read otherwise.
 const HUB_POLL: Duration = Duration::from_secs(10);
+/// The backstop behind a watched store.
+const HUB_BACKSTOP: Duration = Duration::from_secs(60);
+/// The least time between two reads woken by store writes, which the node's own device bookkeeping
+/// also makes.
+const HUB_REREAD_FLOOR: Duration = Duration::from_millis(250);
 
 /// How long an inbound handshake may take before the socket is hung up. It holds one of the
 /// handshake permits for exactly this long, so a socket that opens and then says nothing costs a
@@ -176,10 +182,25 @@ pub async fn accept(
 /// would be a cycle that keeps the node — and every emulator under it — alive forever.
 pub async fn dial_hubs(node: Weak<Node>) {
     let mut running: HashMap<String, Supervised> = HashMap::new();
-    let mut poll = tokio::time::interval(HUB_POLL);
-    poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut store = match node.upgrade() {
+        Some(node) => crate::device_watch::store(&crate::config::Config::state_db(&node.state_dir)),
+        None => return,
+    };
+    let mut read = None;
     loop {
-        poll.tick().await;
+        if let Some(read) = read {
+            match &mut store {
+                Some(store) => {
+                    store.changes.changed_before(read + HUB_BACKSTOP).await;
+                    tokio::time::sleep_until(read + HUB_REREAD_FLOOR).await;
+                }
+                None => tokio::time::sleep_until(read + HUB_POLL).await,
+            }
+        }
+        if let Some(store) = &mut store {
+            store.changes.seen();
+        }
+        read = Some(tokio::time::Instant::now());
         let Some(node) = node.upgrade() else { return };
         let hubs = match node.auth.store().mesh().nodes(MeshRole::Hub).await {
             Ok(hubs) => hubs,

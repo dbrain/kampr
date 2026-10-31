@@ -92,6 +92,10 @@ impl JournalAdapter for AgyAdapter {
         Err(crate::discover::not_found(cwd))
     }
 
+    fn watched(&self, _cwd: Option<&Path>) -> Vec<PathBuf> {
+        vec![self.root.path().join("presence"), self.root.path().join("brain")]
+    }
+
     fn parser(&self) -> Box<dyn TranscriptParser> {
         Box::new(AgyParser::default())
     }

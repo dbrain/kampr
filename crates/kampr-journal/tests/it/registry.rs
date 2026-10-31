@@ -504,3 +504,70 @@ fn a_pi_pane_with_a_new_process_after_a_restart_ignores_the_record() {
         "a changed process is a new agent, and the record is the old one's"
     );
 }
+
+/// Where each harness puts its next transcript, or its record of which one a process is on, for a
+/// pane in `work`: and only the directories that exist, since a watch cannot be put on the rest.
+#[test]
+fn each_harness_names_the_directories_its_next_transcript_appears_in() {
+    let scratch = scratch_dir("watched");
+    let work = scratch.join("work");
+    let slug = work.to_string_lossy().replace('/', "-");
+    let cases: [(&str, &str, Vec<String>); 4] = [
+        (
+            "claude",
+            ".claude",
+            vec!["sessions".into(), "projects".into(), format!("projects/{slug}")],
+        ),
+        (
+            "codex",
+            ".codex",
+            vec![
+                "thread-writer-locks".into(),
+                "sessions".into(),
+                "sessions/2026".into(),
+                "sessions/2026/10".into(),
+                "sessions/2026/10/31".into(),
+            ],
+        ),
+        (
+            "agy",
+            ".gemini/antigravity",
+            vec!["presence".into(), "brain".into()],
+        ),
+        (
+            "omp",
+            ".omp/agent",
+            vec![
+                "terminal-sessions".into(),
+                "sessions".into(),
+                "sessions/-work".into(),
+            ],
+        ),
+    ];
+    for (agent, home, dirs) in cases {
+        let root = scratch.join(home);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut registry = Registry::new();
+        let tree = TranscriptRoot::new(&root).unwrap();
+        let adapter: Arc<dyn kampr_journal::JournalAdapter> = match agent {
+            "claude" => Arc::new(ClaudeAdapter::new(tree)),
+            "codex" => Arc::new(CodexAdapter::new(tree)),
+            "agy" => Arc::new(kampr_journal::AgyAdapter::new(tree)),
+            _ => Arc::new(OmpAdapter::new(tree)),
+        };
+        registry.register(adapter);
+        assert!(
+            registry.watched(Some(agent), Some(&work)).is_empty(),
+            "{agent}: named a directory that does not exist"
+        );
+        if agent == "codex" {
+            std::fs::create_dir_all(root.join("sessions/2025/12/01")).unwrap();
+        }
+        for dir in &dirs {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        let want: Vec<PathBuf> = dirs.iter().map(|d| root.join(d)).collect();
+        assert_eq!(registry.watched(Some(agent), Some(&work)), want, "{agent}");
+    }
+    assert!(Registry::new().watched(Some("claude"), Some(&work)).is_empty());
+}

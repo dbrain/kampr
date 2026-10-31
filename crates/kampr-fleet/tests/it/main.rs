@@ -81,6 +81,16 @@ impl Fleet {
             .expect("the pane")
     }
 
+    pub fn session(&self, pane_id: &str) -> kampr_keep::SessionDir {
+        let root = self.root.as_ref().expect("a root").path();
+        let id = pane_id.strip_prefix("fleet:").expect("a fleet pane");
+        kampr_keep::list(root)
+            .expect("the sessions")
+            .into_iter()
+            .find(|s| s.id().eq_ignore_ascii_case(id))
+            .expect("the run's session")
+    }
+
     pub async fn state(&self, pane_id: &str) -> State {
         self.pane(pane_id).await.fleet.expect("a fleet marker").state
     }

@@ -204,6 +204,7 @@ fn same_node(a: &NodeEntry, b: &NodeEntry) -> bool {
 
 fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
     a.updated_at == b.updated_at
+        && a.title == b.title
         && a.workspace == b.workspace
         && a.tab == b.tab
         && a.cwd == b.cwd

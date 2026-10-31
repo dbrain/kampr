@@ -88,6 +88,7 @@ fn spawn_pump(
         local: "w1:p1".into(),
         scrollback: false,
         reflow: None,
+        changes: Default::default(),
     }));
     (handle, herd_tx)
 }

@@ -48,8 +48,9 @@ A run is a native session ([`17-native-sessions.md`](./17-native-sessions.md) §
 its `spec.json` and no host. Its keeper forked the command, owns the pty and logs every byte, and it
 is the command's parent, so the keeper's `state` request is what reads `/proc/<pid>/{syscall,fd/0}`
 for the run and its descendants — the one reader yama lets through (#331). The node's ladder
-(`kampr-fleet/src/ladder.rs`) asks for that four times a second, reads the unterminated line off the
-log, and takes termios off a borrowed master; nothing in the node reads the pty itself. The screen,
+(`kampr-fleet/src/ladder.rs`) asks for that four times a second, since a job parking in `read(2)`
+raises no event, and at once when an entry of the session directory changes, which is how the
+keeper's `exit.json` reaches it; it reads the unterminated line off the log, and takes termios off a borrowed master; nothing in the node reads the pty itself. The screen,
 input and history are the native provider's, so a fleet pane is drawn, typed into and searched
 exactly like any other native session, under its old `fleet:<ULID>` id.
 

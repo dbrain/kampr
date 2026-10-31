@@ -90,15 +90,21 @@ impl Harness {
     /// what the node's own pool hits is a real error rather than an injected one: every device
     /// query answers `no such table` from here on.
     async fn break_the_store(&self, broken: bool) {
+        self.elsewhere(match broken {
+            true => "ALTER TABLE devices RENAME TO devices_gone",
+            false => "ALTER TABLE devices_gone RENAME TO devices",
+        })
+        .await;
+    }
+
+    /// One statement against the device store from a connection the node does not own, the way
+    /// `kampr setup` reaches it from another process: nothing in this one announces it.
+    async fn elsewhere(&self, sql: &'static str) {
         use sqlx::Connection;
         let mut db = sqlx::SqliteConnection::connect(&format!("sqlite://{}", self.state_db().display()))
             .await
             .expect("the state db");
-        let sql = match broken {
-            true => "ALTER TABLE devices RENAME TO devices_gone",
-            false => "ALTER TABLE devices_gone RENAME TO devices",
-        };
-        sqlx::query(sql).execute(&mut db).await.expect("a rename");
+        sqlx::query(sql).execute(&mut db).await.expect("a statement");
     }
 
     async fn token(&self, role: Role) -> String {
@@ -200,8 +206,8 @@ fn split(origin: &str) -> (String, u16) {
 }
 
 /// Drains until the peer closes. `true` means the node hung up inside the window.
-async fn closed(socket: &mut Socket, seconds: u64) -> bool {
-    tokio::time::timeout(Duration::from_secs(seconds), async {
+async fn closed(socket: &mut Socket, within: Duration) -> bool {
+    tokio::time::timeout(within, async {
         while let Some(message) = socket.next().await {
             match message {
                 Ok(tungstenite::Message::Close(_)) | Err(_) => return,
@@ -329,7 +335,7 @@ async fn a_message_larger_than_the_protocol_needs_closes_the_socket() {
         .await
         .is_err();
     assert!(
-        refused_mid_write || closed(&mut socket, 10).await,
+        refused_mid_write || closed(&mut socket, Duration::from_secs(10)).await,
         "a 32 MiB message reached the JSON parser instead of being refused"
     );
 }
@@ -376,7 +382,7 @@ async fn a_session_whose_store_stays_unreadable_closes_instead_of_trusting_its_h
         .await
         .expect("a write");
     assert!(
-        !closed(&mut socket, 2).await,
+        !closed(&mut socket, Duration::from_secs(2)).await,
         "one unreadable check is a database hiccup, not a revocation"
     );
 
@@ -387,8 +393,46 @@ async fn a_session_whose_store_stays_unreadable_closes_instead_of_trusting_its_h
             .await;
     }
     assert!(
-        closed(&mut socket, 5).await,
+        closed(&mut socket, Duration::from_secs(5)).await,
         "a store that cannot say whether this device is still authorised must not keep it connected"
+    );
+}
+
+/// A revocation made by another process (`kampr setup`) reaches the socket it revokes as soon as
+/// it is written, not at the session's next timed re-read of its row.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_revocation_written_by_another_process_closes_the_socket_at_once() {
+    let h = Harness::start(|_| {}).await;
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    assert!(!closed(&mut socket, Duration::from_millis(300)).await);
+
+    h.elsewhere("UPDATE devices SET revoked_at = unixepoch()").await;
+    assert!(
+        closed(&mut socket, Duration::from_millis(400)).await,
+        "a device revoked from another process kept its socket"
+    );
+}
+
+/// A Tier 0 token's expiry is announced by nothing at all, so the session wakes for it rather than
+/// finding it on its next look.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_closes_when_its_device_expires_not_on_its_next_look() {
+    let h = Harness::start(|_| {}).await;
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    let expires = kampr_auth::now() + 3;
+    h.elsewhere(format!("UPDATE devices SET expires_at = {expires}").leak())
+        .await;
+    let at = std::time::UNIX_EPOCH + Duration::from_secs(expires as u64);
+    let until = at.duration_since(std::time::SystemTime::now()).unwrap();
+    assert!(
+        !closed(&mut socket, until.saturating_sub(Duration::from_millis(200))).await,
+        "closed before the device expired"
+    );
+    assert!(
+        closed(&mut socket, Duration::from_millis(600)).await,
+        "an expired device kept its socket"
     );
 }
 
@@ -514,7 +558,7 @@ async fn a_herd_rebuilt_while_the_greeting_is_still_being_written_still_reaches_
     tokio::task::yield_now().await;
     h.node.publish_herd(herd_of(&["w1:p1", "w1:p2"]));
 
-    let (_, mut from_node) = client_side.split();
+    let (_to_node, mut from_node) = client_side.split();
     let mut seen: Vec<String> = Vec::new();
     let found = tokio::time::timeout(Duration::from_secs(5), async {
         while let Some(text) = from_node.recv().await {

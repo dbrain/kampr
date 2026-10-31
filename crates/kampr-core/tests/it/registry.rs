@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_trait::async_trait;
 use kampr_core::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
+use kampr_core::push::{PaneChanges, Pulse};
 use kampr_core::registry::{HistoryPolicy, PaneRegistry, PaneUpdate, RegistryConfig, RowRate, Watcher};
 use kampr_core::wire::Cursor;
 use std::collections::HashMap;
@@ -22,6 +23,7 @@ struct Scripted {
     no_ring: std::sync::atomic::AtomicBool,
     harness: std::sync::atomic::AtomicBool,
     announce: std::sync::Mutex<Option<(u16, u16)>>,
+    history: Option<Pulse>,
 }
 
 impl Default for Scripted {
@@ -39,6 +41,7 @@ impl Default for Scripted {
             no_ring: std::sync::atomic::AtomicBool::new(false),
             harness: std::sync::atomic::AtomicBool::new(false),
             announce: std::sync::Mutex::default(),
+            history: None,
         }
     }
 }
@@ -108,6 +111,13 @@ impl Provider for Scripted {
 
     fn harness_owns_the_screen(&self, _pane_id: &str) -> bool {
         self.harness.load(Ordering::SeqCst)
+    }
+
+    fn pane_changes(&self, _pane_id: &str) -> PaneChanges {
+        PaneChanges {
+            history: self.history.as_ref().map(Pulse::subscribe),
+            ..PaneChanges::default()
+        }
     }
 }
 
@@ -894,6 +904,48 @@ async fn a_ring_the_provider_learns_of_after_the_output_stopped_is_still_read() 
     assert_eq!(lines_of(&doc), ["1", "2", "3"]);
 }
 
+/// A provider that announces its history is read when it says so and not on the rate's timer:
+/// the estimate exists for herdr, which announces nothing, and on a pane that announces it only
+/// ever delays the rows (up to `quiet`) or reads a pane that has not moved.
+#[tokio::test(start_paused = true)]
+async fn a_provider_that_announces_history_is_read_on_the_announcement_alone() {
+    let pulse = Pulse::new();
+    let p = Arc::new(Scripted {
+        history: Some(pulse.clone()),
+        ..Scripted::default()
+    });
+    let numbered = |to: usize| -> Vec<String> { (1..=to).map(|i| format!("line-{i}")).collect() };
+    p.reads.lock().await.push_back(read(&numbered(3), 1));
+    let slow = HistoryPolicy {
+        row_budget: 4,
+        fastest: Duration::from_millis(20),
+        quiet: Duration::from_secs(10),
+        idle: Duration::from_secs(600),
+    };
+    let (reg, _w) = watched(p.clone(), slow).await;
+    held(&reg, "p", |doc| doc.total_rows == 2).await;
+
+    for to in [5, 9] {
+        p.reads.lock().await.push_back(read(&numbered(to), 1));
+        let asked = tokio::time::Instant::now();
+        pulse.bump();
+        held(&reg, "p", |doc| doc.total_rows == to as u32 - 1).await;
+        assert!(
+            asked.elapsed() < Duration::from_millis(200),
+            "read {:?} after the announcement",
+            asked.elapsed()
+        );
+    }
+
+    let settled = p.reads_done.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(60)).await;
+    assert_eq!(
+        p.reads_done.load(Ordering::SeqCst),
+        settled,
+        "nothing announced, nothing read"
+    );
+}
+
 /// Probe #112: a watched pane logged `pane re-wrapped; ring restarted` over and over while its
 /// `from_top` climbed by the ring's whole depth each time. A pane whose measured width moves once
 /// owes one restart, not one per read — and every read after it must go back to stitching.
@@ -1404,4 +1456,37 @@ async fn reopening_a_pane_whose_feeder_died_opens_a_live_one() {
         "a re-watch re-attached to a pane with nothing feeding it",
     );
     drop(w);
+}
+
+#[tokio::test]
+async fn a_frame_reaching_the_grid_bumps_the_panes_frame_pulse() {
+    let p = Arc::new(Scripted::default());
+    let reg = PaneRegistry::with_config(
+        p.clone(),
+        RegistryConfig {
+            first_grid_wait: Duration::from_millis(10),
+            ..RegistryConfig::default()
+        },
+    );
+    assert!(reg.frames("p").is_none(), "an unwatched pane has no grid to move");
+    let _w = reg.watch("p").await.unwrap();
+    let mut frames = reg.frames("p").expect("a watched pane's frames");
+    frames.seen();
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 3 }).await.unwrap();
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"typed".to_vec(),
+    })
+    .await
+    .unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    assert!(
+        frames.changed_before(deadline).await,
+        "a frame never bumped the pulse"
+    );
+    assert!(
+        reg.screen("p").expect("a screen").rows[0].contains("typed"),
+        "the pulse came before the grid it announces"
+    );
 }

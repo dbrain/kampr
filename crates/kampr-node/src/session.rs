@@ -42,16 +42,22 @@ use tracing::{debug, warn};
 /// now that cadence and no slower.
 const SCROLLBACK_FLOOR: Duration = Duration::from_millis(100);
 
+/// How soon a reflowed watch notices that a harness started or a full-screen program took the
+/// screen when the pane said nothing else; output and a native pane's `screen` pulse re-check at
+/// once.
+const REFLOW_RECHECK: Duration = Duration::from_secs(1);
+/// A native pane's `screen` pulse moves on every job change, so its re-check is only a backstop:
+/// for a harness its wrapper starts after becoming the job, which no job change announces.
+const REFLOW_BACKSTOP: Duration = Duration::from_secs(30);
 /// How often, and how many times, a blocked pane is re-read for a question its screen had not
 /// finished painting. Bounded so a harness whose dialog Kampr cannot parse costs a handful of
-/// reads rather than one every half second for as long as it sits there.
-/// How soon a reflowed watch notices that a harness started or a full-screen program took the
-/// screen when the pane said nothing else; output re-checks at once.
-const REFLOW_RECHECK: Duration = Duration::from_secs(1);
+/// reads rather than one every half second for as long as it sits there. A frame whose grid shows
+/// a new dialog is read at once; this is for the dialog the stream's grid cannot be parsed for,
+/// a reflowed view's re-wrapped one.
 const PENDING_RETRY: Duration = Duration::from_millis(500);
 const PENDING_ATTEMPTS: u32 = 12;
 
-/// How long input waits for a harness to start reading its keys, and how often it looks.
+/// How long input waits for a harness to start reading its keys.
 ///
 /// Claude 2.1.268 drew its composer 0.8-4.5 s after it was started, and a reply sent the frame
 /// after the box appeared submitted every time (#535). The ceiling bounds what a harness that never
@@ -62,12 +68,21 @@ const PENDING_ATTEMPTS: u32 = 12;
 /// client marks `typed` — keys pressed at the grid, where the operator can see what they land on —
 /// never starts one.
 const BOOT_HOLD: Duration = Duration::from_secs(8);
+/// A pane nobody streams has no grid and so no frames to wake on: its screen is asked for.
 const BOOT_LOOK: Duration = Duration::from_millis(50);
+/// A streamed pane is re-read on its frames; this is for a stream that ends mid-hold.
+const BOOT_BACKSTOP: Duration = Duration::from_millis(500);
 
-/// How often a live session re-reads its own device row. The broadcast covers a revocation made
-/// in this process; this covers one made by `kampr setup` in another, and a Tier 0 expiry that
-/// nothing announces at all.
+/// How often a live session re-reads its own device row when the store cannot be watched. The
+/// broadcast covers a revocation made in this process, the store's watch one made by `kampr setup`
+/// in another, and a deadline at the device's expiry a Tier 0 token that nothing announces.
 const DEVICE_RECHECK: Duration = Duration::from_secs(2);
+/// The re-read a watched store still gets, for a write the watch cannot see: the file replaced
+/// under a restore leaves the watch on the inode the pool no longer has.
+const DEVICE_BACKSTOP: Duration = Duration::from_secs(30);
+/// One commit is several writes to `-wal`; a session re-reads once per commit rather than once
+/// per write, which matters because three failed reads in a row close it.
+const DEVICE_SETTLE: Duration = Duration::from_millis(20);
 
 /// How many consecutive re-reads of the session's own device row may fail before the socket is
 /// closed.
@@ -265,9 +280,15 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
 
     let mut lost = crate::lost::LostFeed::subscribe(&node);
     let mut changes = node.auth.device_changes();
-    let mut recheck = tokio::time::interval(DEVICE_RECHECK);
-    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    recheck.tick().await;
+    let store = crate::device_watch::store(&crate::config::Config::state_db(&node.state_dir));
+    let mut store_rx = store.as_ref().map(|w| w.changes.clone());
+    let recheck = match store {
+        Some(_) => DEVICE_BACKSTOP,
+        None => DEVICE_RECHECK,
+    };
+    // Now rather than one interval out: a write between the handshake's read of the row and the
+    // watch above is news nothing will announce.
+    let mut look_at = tokio::time::Instant::now();
 
     loop {
         tokio::select! {
@@ -288,7 +309,14 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
                     break;
                 }
             }
-            _ = recheck.tick() => {
+            written = device_due(&mut store_rx, look_at, &session.device) => {
+                if written {
+                    tokio::time::sleep(DEVICE_SETTLE).await;
+                    if let Some(rx) = &mut store_rx {
+                        rx.seen();
+                    }
+                }
+                look_at = tokio::time::Instant::now() + recheck;
                 if !session.refresh().await {
                     break;
                 }
@@ -313,6 +341,22 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
     herd_task.abort();
     outbox.close();
     let _ = writer.await;
+}
+
+/// True on a write to the store, false at the next look or the device's expiry.
+async fn device_due(
+    store: &mut Option<kampr_core::push::PulseRx>,
+    look_at: tokio::time::Instant,
+    device: &Device,
+) -> bool {
+    let until = crate::device_watch::expiry(device).map_or(look_at, |e| e.min(look_at));
+    match store {
+        Some(rx) => rx.changed_before(until).await,
+        None => {
+            tokio::time::sleep_until(until).await;
+            false
+        }
+    }
 }
 
 struct PaneHandle {
@@ -854,6 +898,7 @@ impl Session {
             local: local.clone(),
             scrollback,
             reflow,
+            changes: crate::wake::native_changes(&session, &local),
         }))];
         // Taken from the node rather than made here: on a re-watch this is the transcript already
         // found, already parsed and already folded, and taking it is what makes it this handle's
@@ -1676,8 +1721,15 @@ impl Session {
                 }
                 hold.notify.notified().await;
             };
-            let mut look = tokio::time::interval(BOOT_LOOK);
+            let mut status = crate::wake::native_changes(&session, &local).status;
+            let mut frames = None;
             let written = loop {
+                if frames.is_none() {
+                    frames = session.registry.frames(&local);
+                }
+                for rx in [&mut frames, &mut status].into_iter().flatten() {
+                    rx.seen();
+                }
                 if tokio::time::Instant::now() >= hold.deadline {
                     if !warned {
                         warn!(pane = %pane, "the harness never started reading its keys; the input goes anyway");
@@ -1688,7 +1740,12 @@ impl Session {
                 if Self::reading(&session, &local, &hold).await {
                     break session.registry.write(&local, input).await;
                 }
-                look.tick().await;
+                let look = match frames {
+                    Some(_) => BOOT_BACKSTOP,
+                    None => BOOT_LOOK,
+                };
+                let until = (tokio::time::Instant::now() + look).min(hold.deadline);
+                crate::wake::either_before(&mut frames, &mut status, until).await;
             };
             if let Err(e) = written {
                 wire.error(offline_code(&session, &local), &e.to_string(), Some(&pane));
@@ -2844,6 +2901,7 @@ pub struct PaneStreamCtx {
     pub scrollback: bool,
     /// The width a reflowed view was asked for, if one was.
     pub reflow: Option<u16>,
+    pub changes: kampr_core::push::PaneChanges,
 }
 
 /// One pane's stream for one client.
@@ -2862,6 +2920,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
         local,
         scrollback,
         reflow,
+        changes,
     } = ctx;
     // A reflowed view is followed only while one can be served; otherwise this socket follows the
     // pane's own grid, which every other surface (pending, the composer) reads, and is told why.
@@ -2881,8 +2940,14 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     if watcher.is_ready() && !wire.send_view(&global, watcher.initial(), mode) {
         return;
     }
-    let mut recheck = tokio::time::interval(REFLOW_RECHECK);
+    let mut screen_moved = changes.screen;
+    let mut recheck = tokio::time::interval(match screen_moved {
+        Some(_) => REFLOW_BACKSTOP,
+        None => REFLOW_RECHECK,
+    });
     recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut status_moved = changes.status;
+    let mut frames = registry.frames(&following);
 
     // A pane that cannot be streamed carries its reason in the herd, and the herd is state rather
     // than news: a client joining a pane that has been unstreamable for a week would otherwise be
@@ -2969,6 +3034,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
             };
             switches = switches.wrapping_add(1);
             sent_rows = 0;
+            frames = registry.frames(&following);
             history_moved = registry.scrollback_changes(&following);
             history_due = scrollback;
             if watcher.is_ready() && !wire.send_view(&global, watcher.initial(), mode) {
@@ -3008,6 +3074,18 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 }
             }
             _ = recheck.tick(), if reflow.is_some() => {}
+            _ = crate::wake::pulsed(&mut screen_moved), if reflow.is_some() => {}
+            _ = crate::wake::either(&mut frames, &mut status_moved), if asking > 0 => {
+                let shown = registry
+                    .screen(&following)
+                    .and_then(|s| pending::detect_for(harness.as_deref(), &s.rows.join("\n")));
+                if shown.is_some() && shown != asked {
+                    match send_pending(&screen, &wire, &global, &local, harness.as_deref(), true, &mut asked).await {
+                        None => return,
+                        Some(published) => asking = keep_asking(published, asking),
+                    }
+                }
+            }
             _ = ask.tick(), if asking > 0 => {
                 asking -= 1;
                 match send_pending(&screen, &wire, &global, &local, harness.as_deref(), true, &mut asked).await {
@@ -3567,6 +3645,7 @@ mod tests {
                 local: LOCAL.into(),
                 scrollback: self.scrollback,
                 reflow: self.reflow,
+                changes: Default::default(),
             }))];
             self.panes.insert(
                 PANE.to_string(),

@@ -1,0 +1,16 @@
+[package]
+name = "kampr-watch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+libc.workspace = true
+rustix = { workspace = true, features = ["event", "fs", "process"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

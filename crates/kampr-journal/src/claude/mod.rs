@@ -166,6 +166,13 @@ impl JournalAdapter for ClaudeAdapter {
             .ok_or_else(|| discover::not_found(cwd))
     }
 
+    fn watched(&self, cwd: Option<&Path>) -> Vec<PathBuf> {
+        let projects = self.root.path().join("projects");
+        let mut dirs = vec![self.root.path().join("sessions"), projects.clone()];
+        dirs.extend(cwd.map(|cwd| projects.join(slug(cwd))));
+        dirs
+    }
+
     fn parser(&self) -> Box<dyn TranscriptParser> {
         Box::new(ClaudeParser::default())
     }

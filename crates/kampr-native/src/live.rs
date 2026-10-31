@@ -1,18 +1,29 @@
+use crate::alarm::Alarm;
 use crate::procs;
 use crate::replay::{self, Origin};
 use crate::screen::{Feed, Screen};
 use kampr_core::provider::{AgentStatus, PaneEvent, ProgramState, ProgramStatus};
+use kampr_core::push::{PaneChanges, Pulse};
 use kampr_keep::{Replay, SessionDir, SizedReader};
 use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch};
 
 const SCROLLBACK_ROWS: usize = 10_000;
 const LIVE_DEPTH: usize = 512;
 const CHUNK: usize = 64 * 1024;
-const TICK: Duration = Duration::from_millis(250);
+const RETRY: Duration = Duration::from_millis(250);
+/// `Live::stop` cannot reach into the keeper's log wait, so a stopped session whose directory stays
+/// (a dropped provider, a node shutting down) ends its tail by this.
+const SAFETY_NET: Duration = Duration::from_secs(60);
+/// A shell forks the job after it echoes the line that names it, so the look waits this long.
+const LOOK: Duration = Duration::from_millis(50);
+/// A job's leader is a zombie, and still the terminal's foreground, until the shell reaps it and
+/// takes the terminal back.
+const CHASE_STEP: Duration = Duration::from_millis(10);
+const CHASE_FOR: Duration = Duration::from_secs(1);
 const CLAIMED: Duration = Duration::from_secs(2);
 /// Claude's and codex's spinners repaint several times a second, so a working harness never goes
 /// this long without output; a prompt that is only blinking its cursor writes nothing at all.
@@ -25,11 +36,22 @@ const ECHO: Duration = Duration::from_millis(300);
 pub(crate) struct Live {
     pub dir: SessionDir,
     state: Mutex<State>,
+    resized: Condvar,
     events: broadcast::Sender<PaneEvent>,
     master: Mutex<Option<OwnedFd>>,
     activity: Mutex<Activity>,
     topology: watch::Sender<u64>,
+    pulses: Pulses,
+    alarm: Alarm,
+    jobs: AtomicU64,
     stop: AtomicBool,
+}
+
+#[derive(Default)]
+struct Pulses {
+    history: Pulse,
+    screen: Pulse,
+    status: Pulse,
 }
 
 struct State {
@@ -40,6 +62,27 @@ struct State {
     replayed: bool,
     title: String,
     alternate: bool,
+    history: History,
+}
+
+/// What `read_scrollback` answers depends on; when it moves, [`Pulses::history`] is bumped.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+struct History {
+    first: u32,
+    rows: u32,
+    alternate: bool,
+    size: (u16, u16),
+}
+
+impl History {
+    fn of(screen: &Screen) -> Self {
+        Self {
+            first: screen.first_row(),
+            rows: screen.history_rows(),
+            alternate: screen.alternate_screen(),
+            size: screen.size(),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -49,10 +92,13 @@ struct Activity {
     output: Option<Instant>,
     working: bool,
     done: bool,
-    published: Option<AgentStatus>,
+    /// The status word and the report count it was published at: a report changes which source the
+    /// herd reads the status from even when its word is the one output had already earned.
+    published: Option<(AgentStatus, u64)>,
     typed_at_report: Option<u64>,
-    job_seen: Option<Instant>,
     job: Option<(u32, Option<String>)>,
+    look: Option<Instant>,
+    chase: Option<(u32, Instant)>,
 }
 
 pub(crate) struct Joined {
@@ -74,7 +120,9 @@ impl Live {
                 replayed: false,
                 title: String::new(),
                 alternate: false,
+                history: History::default(),
             }),
+            resized: Condvar::new(),
             events: broadcast::channel(LIVE_DEPTH).0,
             master: Mutex::new(None),
             activity: Mutex::new(Activity {
@@ -82,6 +130,9 @@ impl Live {
                 ..Activity::default()
             }),
             topology,
+            pulses: Pulses::default(),
+            alarm: Alarm::new().expect("an alarm"),
+            jobs: AtomicU64::new(0),
             stop: AtomicBool::new(false),
         });
         let tail = live.clone();
@@ -89,11 +140,17 @@ impl Live {
             .name(format!("kampr-native-{}", live.dir.id()))
             .spawn(move || tail.tail())
             .expect("a tail thread");
+        let clock = live.clone();
+        std::thread::Builder::new()
+            .name(format!("kampr-native-{}", live.dir.id()))
+            .spawn(move || clock.clock())
+            .expect("a clock thread");
         live
     }
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
+        self.alarm.ring();
     }
 
     pub fn join(&self) -> Joined {
@@ -132,9 +189,27 @@ impl Live {
         if let Some(bytes) = state.screen.frame_diff() {
             let _ = self.events.send(PaneEvent::Bytes { full: true, bytes });
         }
+        self.history_moved(&mut state);
         drop(state);
+        self.resized.notify_all();
         self.activity.lock().unwrap().resized = Some(Instant::now());
         true
+    }
+
+    fn history_moved(&self, state: &mut State) {
+        let now = History::of(&state.screen);
+        if state.history != now {
+            state.history = now;
+            self.pulses.history.bump();
+        }
+    }
+
+    pub fn changes(&self) -> PaneChanges {
+        PaneChanges {
+            history: Some(self.pulses.history.subscribe()),
+            screen: Some(self.pulses.screen.subscribe()),
+            status: Some(self.pulses.status.subscribe()),
+        }
     }
 
     pub fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
@@ -149,6 +224,7 @@ impl Live {
         }
         drop(activity);
         self.tick();
+        self.look_by(Instant::now() + LOOK);
         Ok(())
     }
 
@@ -156,10 +232,11 @@ impl Live {
     /// asked for when the caller next looks.
     pub fn claim(&self, cols: u16, rows: u16, holder: &str) -> std::io::Result<()> {
         kampr_keep::claim_size(&self.dir, cols, rows, holder)?;
-        let deadline = Instant::now() + CLAIMED;
-        while self.with_screen(Screen::size) != (cols, rows) && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let state = self.state.lock().unwrap();
+        let _ = self
+            .resized
+            .wait_timeout_while(state, CLAIMED, |s| s.screen.size() != (cols, rows))
+            .unwrap();
         Ok(())
     }
 
@@ -201,10 +278,12 @@ impl Live {
 
     fn tick(&self) {
         let status = self.status();
+        let reports = self.state.lock().unwrap().screen.program_reports();
         let mut activity = self.activity.lock().unwrap();
-        if activity.published != Some(status) {
-            activity.published = Some(status);
+        if activity.published != Some((status, reports)) {
+            activity.published = Some((status, reports));
             drop(activity);
+            self.pulses.status.bump();
             self.bump();
         }
     }
@@ -217,34 +296,112 @@ impl Live {
     /// rather than its own last look: a job that lives between two of its looks, as `cat` ended at
     /// once by ctrl-d does, is otherwise published and never taken back.
     pub(crate) fn published_job(&self, job: Option<(u32, Option<String>)>) {
-        self.activity.lock().unwrap().job = job;
+        let mut activity = self.activity.lock().unwrap();
+        if activity.job != job {
+            activity.job = job;
+            drop(activity);
+            self.jobs.fetch_add(1, Ordering::Release);
+            self.alarm.ring();
+        }
+    }
+
+    /// Moves whenever the foreground job does, and before `screen` is bumped for it, so an answer
+    /// cached against it is stale by the time a woken reader asks.
+    pub fn job_revision(&self) -> u64 {
+        self.jobs.load(Ordering::Acquire)
+    }
+
+    fn look_by(&self, at: Instant) {
+        {
+            let mut activity = self.activity.lock().unwrap();
+            if activity.look.is_some_and(|look| look <= at) {
+                return;
+            }
+            activity.look = Some(at);
+        }
+        self.alarm.ring_by(at);
     }
 
     /// A job that starts or ends may print nothing the status sees, as a `cat` ended by ctrl-d
-    /// does when the shell's prompt lands inside the echo window, and the herd would go on naming it.
+    /// does when the shell's prompt lands inside the echo window, and the herd would go on naming
+    /// it. Looked for after output or input, and when the job's leader ends.
     fn follow_job(&self) {
-        let now = Instant::now();
-        {
-            let mut activity = self.activity.lock().unwrap();
-            if activity
-                .job_seen
-                .is_some_and(|at| now.saturating_duration_since(at) < TICK)
-            {
-                return;
-            }
-            activity.job_seen = Some(now);
-        }
         let job = self
             .dir
             .keeper()
             .and_then(|k| procs::foreground(k.child))
             .map(|fg| (fg.pid, procs::job(&fg)));
+        let now = Instant::now();
         let mut activity = self.activity.lock().unwrap();
+        activity.chase = activity
+            .chase
+            .filter(|(pid, until)| now < *until && job.as_ref().is_some_and(|(at, _)| at == pid));
+        if activity.chase.is_some() {
+            activity.look = Some(now + CHASE_STEP);
+        }
         if activity.job != job {
             activity.job = job;
             drop(activity);
+            self.jobs.fetch_add(1, Ordering::Release);
+            self.pulses.screen.bump();
             self.bump();
         }
+    }
+
+    /// The window's end, the job's next look and the job leader's end are all this thread waits
+    /// for, so a session nobody types into and that prints nothing never wakes it.
+    fn clock(self: Arc<Self>) {
+        let mut watched = None;
+        let mut exit = None;
+        while !self.stop.load(Ordering::Relaxed) {
+            let (until, job) = self.schedule();
+            if job != watched {
+                watched = job;
+                exit = job.and_then(|pid| kampr_watch::Exit::open(pid).ok().flatten());
+            }
+            match self.alarm.wait(until, exit.as_ref()) {
+                Ok(true) => {
+                    exit = None;
+                    let now = Instant::now();
+                    let mut activity = self.activity.lock().unwrap();
+                    activity.chase = watched.map(|pid| (pid, now + CHASE_FOR));
+                    activity.look = Some(now);
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    tracing::debug!(session = %self.dir.id(), error = %e, "waiting on a native session's clock");
+                    std::thread::sleep(RETRY);
+                }
+            }
+            let look = {
+                let mut activity = self.activity.lock().unwrap();
+                let due = activity.look.is_some_and(|at| at <= Instant::now());
+                if due {
+                    activity.look = None;
+                }
+                due
+            };
+            if look {
+                self.follow_job();
+            }
+            self.tick();
+        }
+    }
+
+    fn schedule(&self) -> (Option<Instant>, Option<u32>) {
+        let now = Instant::now();
+        let activity = self.activity.lock().unwrap();
+        let window = activity
+            .output
+            .map(|at| at + WORKING)
+            .filter(|end| activity.working && *end > now);
+        let until = window.into_iter().chain(activity.look).min();
+        let job = activity
+            .job
+            .as_ref()
+            .filter(|(_, name)| name.is_some())
+            .map(|(pid, _)| *pid);
+        (until, job)
     }
 
     fn master(&self) -> std::io::Result<OwnedFd> {
@@ -274,6 +431,11 @@ impl Live {
     }
 
     fn tail(self: Arc<Self>) {
+        self.follow_log();
+        self.stop();
+    }
+
+    fn follow_log(&self) {
         let Some(mut reader) = self.resume() else {
             return;
         };
@@ -306,14 +468,13 @@ impl Live {
                 Ok(Replay::CaughtUp) => {
                     self.caught_up();
                     self.tick();
-                    self.follow_job();
                     self.checkpoint(false);
                     if self.dir.exit().is_some() && reader.end().is_ok_and(|end| end <= reader.offset()) {
                         self.checkpoint(true);
                         return;
                     }
-                    if reader.wait(TICK).is_err() {
-                        std::thread::sleep(TICK);
+                    if reader.wait(SAFETY_NET).is_err() {
+                        std::thread::sleep(RETRY);
                     }
                 }
                 Err(e) => {
@@ -321,7 +482,7 @@ impl Live {
                         return;
                     }
                     tracing::debug!(session = %self.dir.id(), error = %e, "reading a native session's log");
-                    std::thread::sleep(TICK);
+                    std::thread::sleep(RETRY);
                 }
             }
         }
@@ -343,6 +504,9 @@ impl Live {
                         Origin::Start | Origin::MidStream(_) => None,
                     };
                     let _ = self.events.send(PaneEvent::Reset { cols, rows });
+                    self.history_moved(&mut state);
+                    drop(state);
+                    self.resized.notify_all();
                     return Some(resumed.reader);
                 }
                 Err(e) => {
@@ -350,7 +514,7 @@ impl Live {
                         return None;
                     }
                     tracing::warn!(session = %self.dir.id(), error = %e, "cannot read a native session's log");
-                    std::thread::sleep(TICK);
+                    std::thread::sleep(RETRY);
                 }
             }
         }
@@ -389,15 +553,18 @@ impl Live {
 
     fn caught_up(&self) {
         let mut state = self.state.lock().unwrap();
-        if state.replayed {
-            return;
+        if !state.replayed {
+            state.replayed = true;
+            state.title = state.screen.title().to_string();
+            state.alternate = state.screen.alternate_screen();
+            if let Some(bytes) = state.screen.frame_diff() {
+                let _ = self.events.send(PaneEvent::Bytes { full: false, bytes });
+            }
+            drop(state);
+            self.look_by(Instant::now());
+            state = self.state.lock().unwrap();
         }
-        state.replayed = true;
-        state.title = state.screen.title().to_string();
-        state.alternate = state.screen.alternate_screen();
-        if let Some(bytes) = state.screen.frame_diff() {
-            let _ = self.events.send(PaneEvent::Bytes { full: false, bytes });
-        }
+        self.history_moved(&mut state);
     }
 
     /// Only bytes the program writes from now on are answered: a query in the replayed log was
@@ -420,6 +587,10 @@ impl Live {
                 state.title = state.screen.title().to_string();
                 state.alternate = state.screen.alternate_screen();
             }
+            if alternate {
+                self.pulses.screen.bump();
+            }
+            self.history_moved(&mut state);
             (fed, title || alternate)
         };
         {
@@ -443,6 +614,8 @@ impl Live {
             self.bump();
         }
         self.tick();
+        // The clock this wakes also takes up the output window's new end.
+        self.look_by(Instant::now() + LOOK);
     }
 
     /// A hosting terminal answers for itself, `OSC 7501` through `kampr attach`, every query that

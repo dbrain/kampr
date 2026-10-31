@@ -1,3 +1,4 @@
+mod alarm;
 mod answer;
 mod attach;
 mod frame;

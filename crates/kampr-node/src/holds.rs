@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{Notify, broadcast, oneshot};
 use tracing::{debug, warn};
 
 /// A release is a child exiting, which `Controller::release` already bounds at three seconds and
@@ -12,7 +12,6 @@ use tracing::{debug, warn};
 /// that is putting a pane's own size back does a second claim-and-release inside that window,
 /// which is why this is twice the grace rather than equal to it.
 const FREE_TIMEOUT: Duration = Duration::from_secs(12);
-const FREE_POLL: Duration = Duration::from_millis(25);
 const LOST_DEPTH: usize = 64;
 
 /// Names one hold, so that letting go can be *scoped*: a viewer that hands a pane on to a newer
@@ -62,6 +61,7 @@ type Held = HashMap<String, Entry>;
 /// [`ADR 0013`](../../../docs/adr/0013-a-standing-intent-to-match-the-view.md).
 pub struct PaneHolds {
     inner: Arc<Mutex<Held>>,
+    freed: Arc<Notify>,
     next: AtomicU64,
     lost: broadcast::Sender<(String, HoldToken)>,
 }
@@ -70,6 +70,7 @@ impl Default for PaneHolds {
     fn default() -> Self {
         Self {
             inner: Arc::default(),
+            freed: Arc::default(),
             next: AtomicU64::default(),
             lost: broadcast::channel(LOST_DEPTH).0,
         }
@@ -102,6 +103,7 @@ impl PaneHolds {
         let token = self.next.fetch_add(1, Ordering::Relaxed) + 1;
         let key = pane.to_string();
         let inner = Arc::clone(&self.inner);
+        let freed = Arc::clone(&self.freed);
         let displaced = self.inner.lock().expect("holds").insert(
             key.clone(),
             Entry {
@@ -156,12 +158,7 @@ impl PaneHolds {
             // Cleared here rather than in `let_go`, so `wait_until_free` means "the controller is
             // gone" rather than "somebody asked it to go". Only if it is still ours: a hold that
             // superseded this one owns the entry now.
-            let mut held = inner.lock().expect("holds");
-            let ours = held.get(&key).is_some_and(|e| e.token == token);
-            if ours {
-                held.remove(&key);
-            }
-            drop(held);
+            let ours = clear(&inner, &freed, &key, token);
             // Only when the entry was still this hold's: a claim that superseded this one owns the
             // pane now, and telling the provider that *this* hold let go would rebuild the herd
             // around a hold that is still standing.
@@ -241,12 +238,17 @@ impl PaneHolds {
     /// it is puts two controllers on one pane and herdr refuses the second outright (#21).
     pub async fn wait_until_free(&self, pane: &str) {
         let deadline = tokio::time::Instant::now() + FREE_TIMEOUT;
-        while self.is_held(pane) {
-            if tokio::time::Instant::now() >= deadline {
+        loop {
+            let freed = self.freed.notified();
+            tokio::pin!(freed);
+            freed.as_mut().enable();
+            if !self.is_held(pane) {
+                return;
+            }
+            if tokio::time::timeout_at(deadline, freed).await.is_err() {
                 warn!(pane = %pane, "a released hold did not let go in time; claiming anyway");
                 return;
             }
-            tokio::time::sleep(FREE_POLL).await;
         }
     }
 }
@@ -254,6 +256,17 @@ impl PaneHolds {
 /// The ceiling a panel hold is parked under. A matched hold passes `None` — its ceiling is the
 /// websocket session that owns it.
 pub const PANEL_LIMIT: Option<Duration> = Some(HOLD_LIMIT);
+
+fn clear(inner: &Mutex<Held>, freed: &Notify, pane: &str, token: HoldToken) -> bool {
+    let mut held = inner.lock().expect("holds");
+    let ours = held.get(pane).is_some_and(|e| e.token == token);
+    if ours {
+        held.remove(pane);
+    }
+    drop(held);
+    freed.notify_waiters();
+    ours
+}
 
 fn take_restore(inner: &Mutex<Held>, pane: &str, token: HoldToken) -> Option<Restore> {
     let mut held = inner.lock().expect("holds");
@@ -340,6 +353,26 @@ mod tests {
             lost.try_recv().is_err(),
             "a hold its own holder let go of was announced"
         );
+    }
+
+    /// A claim waiting behind a hold goes the moment the hold's controller is gone, not on a later
+    /// look at whether it has.
+    #[tokio::test(start_paused = true)]
+    async fn a_claim_waiting_on_a_hold_goes_the_moment_its_controller_is_gone() {
+        let holds = Arc::new(PaneHolds::default());
+        let (token, _rx) = park_bare(&holds, "w1:p1");
+        let started = tokio::time::Instant::now();
+        let waiter = tokio::spawn({
+            let holds = holds.clone();
+            async move {
+                holds.wait_until_free("w1:p1").await;
+                tokio::time::Instant::now()
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(clear(&holds.inner, &holds.freed, "w1:p1", token));
+        let freed = waiter.await.expect("waiter");
+        assert_eq!(freed - started, Duration::ZERO);
     }
 
     /// Newest holder wins, and the earlier one does not take the later one down with it. A viewer

@@ -2504,6 +2504,7 @@ dependencies = [
  "kampr-proc",
  "kampr-term",
  "kampr-testkit",
+ "kampr-watch",
  "serde",
  "serde_json",
  "tempfile",
@@ -2525,6 +2526,7 @@ dependencies = [
  "kampr-native",
  "kampr-proc",
  "kampr-testkit",
+ "kampr-watch",
  "libc",
  "rustix",
  "serde_json",
@@ -2568,6 +2570,7 @@ version = "0.1.130"
 dependencies = [
  "anyhow",
  "kampr-proc",
+ "kampr-watch",
  "libc",
  "rustix",
  "serde",
@@ -2632,6 +2635,7 @@ dependencies = [
  "kampr-proc",
  "kampr-term",
  "kampr-testkit",
+ "kampr-watch",
  "libc",
  "memchr",
  "postcard",
@@ -2777,6 +2781,15 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "toml",
  "tracing",
+]
+
+[[package]]
+name = "kampr-watch"
+version = "0.1.130"
+dependencies = [
+ "libc",
+ "rustix",
+ "tempfile",
 ]
 
 [[package]]

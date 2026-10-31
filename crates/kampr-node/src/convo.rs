@@ -12,36 +12,64 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::watch;
+use tokio::time::Instant;
 use tracing::debug;
+use wake::{Dirs, Paced, Tail};
+
+mod wake;
 
 /// Turns in a page, as a floor rather than a ceiling. A client pages backwards from the cursor
 /// with `convo.load { before }`, and a page runs back past this to the question that opens the
 /// reply it landed in — see `FileJournal::page_before`, where the rule and its bound live.
 const PAGE: usize = 40;
 
-/// How often a followed transcript is re-read. A transcript is a file that grows, so this is the
-/// whole tail mechanism.
+/// How often a followed transcript is re-read where no watch could be put on it, and how often the
+/// launched conversation a reader opens is looked for (the session sets it and says nothing).
 const POLL: Duration = Duration::from_millis(400);
 
-/// How often the visible screen is re-read while a turn is in progress.
+/// The fastest a watched transcript is re-read: a write after a quiet spell is read at once, and a
+/// harness writing record after record is read ten times a second rather than once a record.
+const FOLLOW_FLOOR: Duration = Duration::from_millis(100);
+
+/// A watched transcript is re-read this often with nothing announced, so a write the watch missed
+/// (a file replaced under the same name between two looks) costs this much and not the turn.
+const SAFETY_NET: Duration = Duration::from_secs(5);
+
+/// The fastest the pane's own box is re-read off its frames: keystrokes echo as fast as a person
+/// types without a repaint storm reading the grid once a frame.
+const DESK_FLOOR: Duration = Duration::from_millis(25);
+
+/// How long the screen readers wait for a frame before asking the registry for the pane's frame
+/// signal again: a pane re-opened under the same id is a new signal, and the old one never fires.
+const FRAME_NET: Duration = Duration::from_secs(5);
+
+/// How often the pane is asked which transcript it is on when its harness's directories are
+/// watched, which is only for a change the watch could not see.
+const RECHECK_NET: Duration = Duration::from_secs(60);
+
+/// The fastest the visible screen is re-read for a preview while a turn is in progress, which is
+/// on each frame of the pane: a client does not want every revision of a message it is drawing.
 ///
 /// Not a re-parse of the pane: the emulator already holds the grid the client is watching, so a
-/// tick copies forty rows of text out of it and walks them upwards from the composer. It runs only
+/// read copies forty rows of text out of it and walks them upwards from the composer. It runs only
 /// while the pane reports `working`, and only for a client that asked for the conversation — an
 /// idle pane and a pane nobody is reading the conversation of both cost nothing at all.
 const LIVE_POLL: Duration = Duration::from_millis(200);
 
-/// How often the pane's own box is re-read. The reply box mirrors it as the operator types, so this
-/// is the lag between a key at the desk and the same key in the reply box (#566).
+/// How often the pane's own box is re-read where there is no frame signal to read it on, or while
+/// the socket is congested or the box is missing. The reply box mirrors it as the operator types,
+/// so a read's lag is the lag between a key at the desk and the same key in the reply box (#566).
 const DESK_POLL: Duration = Duration::from_millis(100);
 
-/// How often the pane is asked which transcript it is on *now*. `/clear` opens a new file under
-/// the same working directory and nothing announces it (#259) — but deriving the answer reads
-/// directories, so it does not happen at the follow rate.
+/// How often the pane is asked which transcript it is on *now* where its harness's directories
+/// cannot be watched. `/clear` opens a new file under the same working directory and nothing else
+/// announces it (#259) — but deriving the answer reads directories, so it does not happen at the
+/// follow rate.
 const RESOLVE_EVERY: Duration = Duration::from_secs(15);
 
-/// How often to look again while there is nothing open. A harness started a moment ago has not
-/// written its transcript yet, and the first page should not wait a whole [`RESOLVE_EVERY`].
+/// How often to look again while there is nothing open, and the fastest a change in the watched
+/// directories is looked at. A harness started a moment ago has not written its transcript yet,
+/// and the first page should not wait a whole [`RESOLVE_EVERY`].
 const RETRY_EVERY: Duration = Duration::from_secs(2);
 
 /// How many of those fast retries a pane gets before it falls back to [`RESOLVE_EVERY`]. Deriving
@@ -317,18 +345,23 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     } = ctx;
     let journal = warm.lock().unwrap().journal.clone();
 
-    let mut follow = tokio::time::interval(POLL);
-    follow.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut recheck = tokio::time::interval(RESOLVE_EVERY);
-    recheck.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    recheck.tick().await;
-    let mut retry = tokio::time::interval(RETRY_EVERY);
-    retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-
-    let mut live_poll = tokio::time::interval(LIVE_POLL);
-    live_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    let mut desk_poll = tokio::time::interval(DESK_POLL);
-    desk_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut tail = Tail::default();
+    let mut sub = Tail::default();
+    let mut dirs = Dirs::default();
+    let mut dirs_key = None;
+    let mut frames = panes.frames(&local);
+    let mut follow = Paced::new(FOLLOW_FLOOR);
+    let mut desk_read = Paced::new(DESK_FLOOR);
+    let mut desk_blank = 0usize;
+    let mut live_read = Paced::new(LIVE_POLL);
+    let mut screen_facets = Paced::new(LIVE_POLL);
+    let mut look = Paced::new(RETRY_EVERY);
+    let mut was_live = false;
+    let mut was_asking = false;
+    let mut live_settle = false;
+    let mut follow_net = Instant::now();
+    let mut recheck_at = Instant::now() + RESOLVE_EVERY;
+    let mut retry_at = Instant::now() + RETRY_EVERY;
 
     // Where the pump before this one got to, which on a re-watch is a transcript already found,
     // already parsed and already folded (#409). A cold pane answers `None` to both and everything
@@ -489,7 +522,31 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         }
         was_working = working;
 
+        if look.due() {
+            look.ran();
+            if opened.is_some() {
+                recheck(&journals, &now, &mut opened, &journal, &held, &warm).await;
+                due = true;
+            } else if misses < FAST_RETRIES {
+                due = true;
+            }
+        }
+        if Instant::now() >= recheck_at {
+            recheck_at = Instant::now()
+                + if dirs.watching() {
+                    RECHECK_NET
+                } else {
+                    RESOLVE_EVERY
+                };
+            recheck(&journals, &now, &mut opened, &journal, &held, &warm).await;
+            due = true;
+        }
+        if !dirs.watching() && opened.is_none() && misses < FAST_RETRIES && Instant::now() >= retry_at {
+            due = true;
+        }
+
         if due && opened.is_none() {
+            retry_at = Instant::now() + RETRY_EVERY;
             due = false;
             match resolve(&journals, &state_dir, &now) {
                 None => misses += 1,
@@ -551,83 +608,169 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             return;
         }
 
-        tokio::select! {
-            _ = follow.tick() => {
-                // The launched conversation the reader has open, on the same tick and by the same
-                // rule as the pane's own: whatever it has grown by, under its own name so nothing
-                // files a subagent's words as the parent's.
-                match drain_sub(&followed).await {
-                    Some((id, turns)) if !turns.is_empty() => {
-                        if !wire.send(&ServerMsg::ConvoTurn {
-                            pane: global.clone(),
-                            sub: Some(id),
-                            turns,
-                        }) {
-                            return;
-                        }
-                    }
-                    _ => {}
-                }
-                match drain(&journal).await {
-                    Ok(mut turns) if !turns.is_empty() => {
-                        // A record that carries the words the preview is showing replaces it in
-                        // this frame. Left to the next screen poll, the client files the record
-                        // under a preview still standing and draws the message twice until then (#554).
-                        if live.showing() && superseded(&journal, &panes, &local) {
-                            live.stop();
-                            turns.insert(0, kampr_journal::retired());
-                        }
-                        holding(&held, &turns);
-                        let revised = ServerMsg::ConvoTurn { pane: global.clone(), sub: None, turns };
-                        if !wire.send(&revised) {
-                            return;
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        debug!(pane = %global, error = %e, "transcript unreadable; re-deriving");
-                        opened = None;
-                        release(&journal, &held);
-                        warm.lock().unwrap().forget();
-                        due = true;
-                    }
-                }
-                // What the harness wrote down beside the turns moves while the turns do: a prompt
-                // the operator queues mid-turn is a record like any other, and it is one the
-                // client cannot see any other way until the harness gets round to it. The fold
-                // reads what the transcript has grown by, and answers `None` when nothing it
-                // carries has moved — a `convo.facets` every 400 ms per pane would be a frame for
-                // nothing.
-                if let Some(path) = opened.clone()
-                    && let Some(moved) =
-                        refold(&warm, &path, describe(&local), waiting(&panes, &local, queued), screen_seen).await
-                    && !wire.send(&ServerMsg::ConvoFacets { pane: global.clone(), facets: moved })
+        let key = (now.agent.clone(), now.cwd.clone(), opened.clone());
+        let key_moved = dirs_key.as_ref() != Some(&key);
+        dirs.follow(
+            || {
+                let mut list = journals.watched(now.agent.as_deref(), now.cwd.as_deref().map(Path::new));
+                if let Some(parent) = opened.as_deref().and_then(Path::parent)
+                    && !list.iter().any(|d| d == parent)
                 {
-                    return;
+                    list.push(parent.to_path_buf());
+                }
+                list
+            },
+            key_moved,
+        );
+        dirs_key = Some(key);
+        if tail.follow(opened.as_deref()) {
+            follow.owe();
+        }
+        if sub.follow(followed_path(&followed).as_deref()) {
+            follow.owe();
+        }
+        if frames.is_none() {
+            frames = panes.frames(&local);
+        }
+
+        if follow.due() {
+            follow.ran();
+            follow_net = Instant::now()
+                + match opened.is_none() || tail.watching() {
+                    true => SAFETY_NET,
+                    false => POLL,
+                };
+            // The launched conversation the reader has open, on the same tick and by the same
+            // rule as the pane's own: whatever it has grown by, under its own name so nothing
+            // files a subagent's words as the parent's.
+            match drain_sub(&followed).await {
+                Some((id, turns)) if !turns.is_empty() => {
+                    if !wire.send(&ServerMsg::ConvoTurn {
+                        pane: global.clone(),
+                        sub: Some(id),
+                        turns,
+                    }) {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            match drain(&journal).await {
+                Ok(mut turns) if !turns.is_empty() => {
+                    // A record that carries the words the preview is showing replaces it in
+                    // this frame. Left to the next screen read, the client files the record
+                    // under a preview still standing and draws the message twice until then (#554).
+                    if live.showing() && superseded(&journal, &panes, &local) {
+                        live.stop();
+                        turns.insert(0, kampr_journal::retired());
+                    }
+                    holding(&held, &turns);
+                    let revised = ServerMsg::ConvoTurn {
+                        pane: global.clone(),
+                        sub: None,
+                        turns,
+                    };
+                    if !wire.send(&revised) {
+                        return;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    debug!(pane = %global, error = %e, "transcript unreadable; re-deriving");
+                    opened = None;
+                    release(&journal, &held);
+                    warm.lock().unwrap().forget();
+                    due = true;
+                    continue;
                 }
             }
-            // What is in the pane's own box, read off the grid the client is already streaming —
-            // a walk of the rows and no I/O — and published only when it moves. Its own tick,
-            // and not held for a transcript: the reply box takes this up as it is typed, and a
-            // fresh session's first message is typed before anything is written down.
-            _ = desk_poll.tick(), if composer.is_some() && !wire.outbox().congested() => {
-                if let Some(moved) = desk.moved(desk_line(&panes, &local, composer))
+            screen_facets.owe();
+        }
+
+        // What the harness wrote down beside the turns moves while the turns do: a prompt the
+        // operator queues mid-turn is a record like any other, and it is one the client cannot
+        // see any other way until the harness gets round to it. The fold reads what the
+        // transcript has grown by, and answers `None` when nothing it carries has moved.
+        if screen_facets.due() {
+            screen_facets.ran();
+            if let Some(path) = opened.clone()
+                && let Some(moved) = refold(
+                    &warm,
+                    &path,
+                    describe(&local),
+                    waiting(&panes, &local, queued),
+                    screen_seen,
+                )
+                .await
+                && !wire.send(&ServerMsg::ConvoFacets {
+                    pane: global.clone(),
+                    facets: moved,
+                })
+            {
+                return;
+            }
+        }
+
+        // What is in the pane's own box, read off the grid the client is already streaming —
+        // a walk of the rows and no I/O — and published only when it moves. Not held for a
+        // transcript: the reply box takes this up as it is typed, and a fresh session's first
+        // message is typed before anything is written down.
+        if composer.is_some() && desk_read.due() {
+            if wire.outbox().congested() {
+                desk_read.owe_after(DESK_POLL);
+            } else {
+                desk_read.ran();
+                let line = desk_line(&panes, &local, composer);
+                // A box is published as gone only after `GONE_AFTER` readings without it, because
+                // Claude's caret leaves the box for the frame it repaints in (#552). Those readings
+                // are taken at the old poll's pace even when no further frame comes, or a box that
+                // went with the last frame would never be published as gone.
+                desk_blank = if line.is_some() { 0 } else { desk_blank + 1 };
+                if line.is_none() && desk_blank < kampr_journal::GONE_AFTER {
+                    desk_read.owe_after(DESK_POLL);
+                }
+                if let Some(moved) = desk.moved(line)
                     && !wire.send(&desk_frame(&global, moved))
                 {
                     return;
                 }
             }
-            // A preview is the one thing on this socket that can be dropped without loss: the
-            // record behind it is still coming, and a client that is already behind does not want
-            // a fifth revision of a message it has not drawn yet.
-            _ = live_poll.tick(), if opened.is_some() && !wire.outbox().congested() && (live_now || screen_status.is_some()) => {
+        }
+
+        // A preview is the one thing on this socket that can be dropped without loss: the record
+        // behind it is still coming, and a client that is already behind does not want a fifth
+        // revision of a message it has not drawn yet.
+        let reading_live = opened.is_some() && (live_now || screen_status.is_some());
+        if reading_live && (!was_live || asking != was_asking) {
+            live_read.owe();
+            live_settle = true;
+        }
+        was_live = reading_live;
+        was_asking = asking;
+        if reading_live && live_read.due() {
+            if wire.outbox().congested() {
+                live_read.owe_after(LIVE_POLL);
+            } else {
+                live_read.ran();
+                // A block is judged by comparing two readings (`Watch::observe`): a still one on a
+                // pane that is asking is shown, a still one on a working pane is not. A screen that
+                // stopped with the frame just read sends no other, so one more reading follows at
+                // the old pace.
+                if std::mem::take(&mut live_settle) {
+                    live_read.owe_after(LIVE_POLL);
+                }
+                let before = screen_seen;
                 let change = match panes.screen(&local) {
                     Some(screen) => {
                         let borrowed: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
                         if let Some(reader) = screen_status {
                             screen_seen = reader(&borrowed);
                         }
-                        let seen = journal.lock().unwrap().as_ref().and_then(|j| j.preview(&borrowed));
+                        let seen = journal
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .and_then(|j| j.preview(&borrowed));
                         live.observe(seen, asking)
                     }
                     None => live.stop(),
@@ -635,22 +778,108 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 if send_live(&wire, &global, change, &held).is_err() {
                     return;
                 }
-            }
-            _ = retry.tick(), if opened.is_none() && misses < FAST_RETRIES => due = true,
-            _ = recheck.tick() => {
-                let latest = resolve(&journals, &state_dir, &now);
-                if latest.as_deref().map(Journal::path) != opened.as_deref() {
-                    opened = None;
-                    release(&journal, &held);
-                    warm.lock().unwrap().forget();
+                if screen_seen != before {
+                    screen_facets.owe();
                 }
-                due = true;
             }
+        }
+
+        let wants_frames = (composer.is_some() && !desk_read.owed())
+            || (reading_live && !live_read.owed())
+            || (queued.is_some() && opened.is_some() && !screen_facets.owed());
+        let owed = [
+            Some(&follow),
+            composer.is_some().then_some(&desk_read),
+            reading_live.then_some(&live_read),
+            Some(&screen_facets),
+            Some(&look),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Paced::at)
+        .min();
+        let follow_at = match (sub.path().is_some() && !sub.watching(), follow_net) {
+            (true, net) => net.min(Instant::now() + POLL),
+            (false, net) => net,
+        };
+        let resolve_at = match !dirs.watching() && opened.is_none() && misses < FAST_RETRIES {
+            true => recheck_at.min(retry_at),
+            false => recheck_at,
+        };
+        let following = sub.path().map(Path::to_path_buf);
+        tokio::select! {
             changed = herd.changed() => {
                 if changed.is_err() {
                     return;
                 }
             }
+            _ = tail.changed() => follow.owe(),
+            _ = sub.changed() => follow.owe(),
+            _ = switched(&followed, following.as_deref()) => follow.owe(),
+            _ = tokio::time::sleep_until(follow_at) => follow.owe(),
+            _ = dirs.changed() => {
+                look.owe();
+                screen_facets.owe();
+            }
+            woke = wake::frame(frames.as_ref(), FRAME_NET, DESK_POLL), if wants_frames => {
+                match (woke, frames.as_mut()) {
+                    (true, Some(frames)) => frames.seen(),
+                    _ => frames = panes.frames(&local),
+                }
+                desk_read.owe();
+                live_read.owe();
+                live_settle = true;
+                if queued.is_some() {
+                    screen_facets.owe();
+                }
+            }
+            _ = wake::until(owed) => {}
+            _ = tokio::time::sleep_until(resolve_at) => {}
+        }
+    }
+}
+
+/// Whether the transcript the pane resolves to now is still the one open, and if not, lets it go
+/// so the next pass opens the new one. A `/clear` under a harness that names no session leaves
+/// the handle as it was and opens a new file (#259), so this is the only thing that sees it.
+///
+/// Off the executor: under a working directory the answer reads the head and tail of every
+/// candidate in it, measured at 290 ms (#412).
+async fn recheck(
+    journals: &Arc<Journals>,
+    now: &Handle,
+    opened: &mut Option<PathBuf>,
+    journal: &Open,
+    held: &Held,
+    warm: &Warmth,
+) {
+    let (journals, handle) = (journals.clone(), now.clone());
+    let Ok(latest) = tokio::task::spawn_blocking(move || located(&journals, &handle)).await else {
+        return;
+    };
+    if latest != *opened {
+        *opened = None;
+        release(journal, held);
+        warm.lock().unwrap().forget();
+    }
+}
+
+fn followed_path(followed: &Followed) -> Option<PathBuf> {
+    followed
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|(_, j)| j.path().to_path_buf())
+}
+
+/// Resolves when the reader opens a different launched conversation, or closes the one it had.
+/// `followed` is set by the session and nothing announces it, so this is looked at on the old
+/// follow tick; it is a lock and a compare, and the pump itself stays parked.
+async fn switched(followed: &Followed, from: Option<&Path>) {
+    loop {
+        tokio::time::sleep(POLL).await;
+        if followed_path(followed).as_deref() != from {
+            return;
         }
     }
 }

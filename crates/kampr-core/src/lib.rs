@@ -16,6 +16,7 @@ pub mod naming;
 pub mod procfs;
 pub mod prompt;
 pub mod provider;
+pub mod push;
 pub mod question;
 pub mod registry;
 pub mod reporter;

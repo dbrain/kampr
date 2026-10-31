@@ -11,6 +11,7 @@ async-trait.workspace = true
 kampr-core = { path = "../kampr-core" }
 kampr-keep = { path = "../kampr-keep" }
 kampr-native = { path = "../kampr-native" }
+kampr-watch = { path = "../kampr-watch" }
 libc.workspace = true
 rustix.workspace = true
 tokio.workspace = true

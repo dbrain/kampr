@@ -1,4 +1,5 @@
-//! What one run is doing, read every [`POLL`] from its keeper's directory.
+//! What one run is doing, read from its keeper's directory every [`POLL`] and whenever an entry
+//! in it changes, which is how the run's `exit.json` arrives.
 //!
 //! **Only the run's own ancestor can read its state** (#331), and the keeper is that ancestor, so
 //! the kernel's half comes from the keeper's `state` reply and the text's half from the log. A
@@ -15,7 +16,8 @@ use std::time::{Duration, Instant};
 pub use kampr_core::provider::FleetState as State;
 
 /// Four times a second: a person waiting for a host to answer notices a second, and a `state`
-/// request is one small reply about a tree that is rarely more than three deep.
+/// request is one small reply about a tree that is rarely more than three deep. A job parking in
+/// `read(2)` raises no event anywhere, so this look stays.
 pub(crate) const POLL: Duration = Duration::from_millis(250);
 
 /// The *fallback* rung, for the hosts #331/#332 describe — never the rung that decides a host is
@@ -40,6 +42,7 @@ pub(crate) enum Seen {
 
 pub(crate) struct Ladder {
     session: SessionDir,
+    changes: Option<(kampr_watch::Watch, kampr_watch::Stop)>,
     log: Option<SizedReader>,
     buf: Vec<u8>,
     tail: Tail,
@@ -55,8 +58,12 @@ pub(crate) struct Ladder {
 
 impl Ladder {
     pub fn new(session: SessionDir) -> Self {
+        let changes = kampr_watch::Watch::new()
+            .and_then(|(mut watch, stop)| watch.add(session.path()).map(|_| (watch, stop)))
+            .ok();
         Self {
             session,
+            changes,
             log: None,
             buf: vec![0u8; 64 * 1024],
             tail: Tail::default(),
@@ -68,6 +75,16 @@ impl Ladder {
             last_bytes: 0,
             settled_bytes: usize::MAX,
             was_waiting: false,
+        }
+    }
+
+    /// Until the next reading is due: an entry of the run's directory changed, or [`POLL`] passed.
+    pub fn wait(&mut self) {
+        match &mut self.changes {
+            Some((watch, _)) => {
+                let _ = watch.wait(Some(POLL));
+            }
+            None => std::thread::sleep(POLL),
         }
     }
 

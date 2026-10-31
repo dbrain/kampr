@@ -153,3 +153,30 @@ async fn a_native_claude_is_never_re_laid() {
         "{reset}"
     );
 }
+
+/// A harness typed into a reflowed shell takes the view back to the pane's own grid as soon as
+/// the session sees the job start, not when a cached answer about the foreground runs out: the
+/// echo of the line that starts it is read first, and that look finds the shell still there.
+#[tokio::test]
+async fn a_harness_started_by_input_switches_the_reflowed_view_at_once() {
+    use std::os::unix::fs::PermissionsExt;
+    let h = Harness::start().await;
+    let claude = h.work().join("claude");
+    std::fs::write(&claude, "#!/bin/sh\nwhile :; do sleep 1; done\n").unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut client = h.client().await;
+    let id = client
+        .create(&["sh", "-i"], json!({ "cols": 120, "rows": 24 }))
+        .await;
+    reflowed(&mut client, &id, 40).await;
+    reset_where(&mut client, &id, |r| r["reflow"] == "on").await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    client.type_text(&id, &format!("{}\r", claude.display())).await;
+    let typed = std::time::Instant::now();
+    reset_where(&mut client, &id, |r| r["reflow"] == "harness").await;
+    let took = typed.elapsed();
+    assert!(
+        took < Duration::from_millis(400),
+        "the view switched {took:?} after the harness was typed"
+    );
+}

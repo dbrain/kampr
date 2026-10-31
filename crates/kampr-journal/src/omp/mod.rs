@@ -383,6 +383,13 @@ impl JournalAdapter for OmpAdapter {
             .ok_or_else(|| discover::not_found(cwd))
     }
 
+    fn watched(&self, cwd: Option<&Path>) -> Vec<PathBuf> {
+        let sessions = self.sessions();
+        let mut dirs = vec![self.root.path().join(TERMINALS), sessions.clone()];
+        dirs.extend(cwd.map(|cwd| sessions.join(bucket(self.home(), &std::env::temp_dir(), cwd))));
+        dirs
+    }
+
     fn parser(&self) -> Box<dyn TranscriptParser> {
         Box::new(OmpParser::default())
     }

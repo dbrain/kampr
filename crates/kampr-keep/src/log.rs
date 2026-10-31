@@ -1,5 +1,4 @@
 use crate::sizes::{Journal, Resize};
-use crate::sys::DirWatch;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -119,13 +118,13 @@ pub(crate) struct LogReader {
     dir: PathBuf,
     offset: u64,
     open: Option<(u64, File)>,
-    watch: DirWatch,
+    watch: Follow,
 }
 
 impl LogReader {
     pub fn at(dir: impl Into<PathBuf>, offset: u64) -> io::Result<Self> {
         let dir = dir.into();
-        let watch = DirWatch::open(&dir)?;
+        let watch = Follow::new(&dir)?;
         Ok(Self {
             dir,
             offset,
@@ -185,7 +184,7 @@ impl LogReader {
     }
 
     pub fn wait(&mut self, timeout: Duration) -> io::Result<bool> {
-        self.watch.drain()?;
+        self.watch.wait(Duration::ZERO)?;
         if self.end()? > self.offset {
             return Ok(true);
         }
@@ -193,8 +192,83 @@ impl LogReader {
             return Ok(false);
         }
         self.watch.wait(timeout)?;
-        self.watch.drain()?;
         Ok(self.end()? > self.offset)
+    }
+}
+
+/// A session directory's entries and the end of its newest segment: everything a reader of the
+/// log, the sizes and the session's ending waits on. The keeper appends to a segment it holds
+/// open, which neither inotify nor kqueue reports on the directory, so the segment is watched as a
+/// file and moved to the next one when a roll adds it.
+pub(crate) struct Follow {
+    dir: PathBuf,
+    watch: kampr_watch::Watch,
+    _stop: kampr_watch::Stop,
+    dir_key: Option<kampr_watch::Key>,
+    tail: Option<(u64, kampr_watch::Key)>,
+}
+
+impl Follow {
+    pub fn new(dir: &Path) -> io::Result<Self> {
+        let (mut watch, stop) = kampr_watch::Watch::new()?;
+        let dir_key = Some(watch.add(dir)?);
+        let mut follow = Self {
+            dir: dir.to_path_buf(),
+            watch,
+            _stop: stop,
+            dir_key,
+            tail: None,
+        };
+        follow.arm()?;
+        Ok(follow)
+    }
+
+    /// True when something moved in the directory or the newest segment grew; false when `timeout`
+    /// passed first. Anything since the last wait counts, so a check made between waits loses
+    /// nothing.
+    pub fn wait(&mut self, timeout: Duration) -> io::Result<bool> {
+        let changed = match self.watch.wait(Some(timeout))? {
+            kampr_watch::Waited::Changed(events) => {
+                for event in events.iter().filter(|e| e.gone) {
+                    if self.dir_key == Some(event.key) {
+                        self.dir_key = None;
+                    }
+                    if self.tail.is_some_and(|(_, key)| key == event.key) {
+                        self.tail = None;
+                    }
+                }
+                true
+            }
+            kampr_watch::Waited::TimedOut | kampr_watch::Waited::Stopped => false,
+        };
+        self.arm()?;
+        Ok(changed)
+    }
+
+    fn arm(&mut self) -> io::Result<()> {
+        if self.dir_key.is_none() {
+            return Ok(());
+        }
+        let newest = match segments(&self.dir) {
+            Ok(offsets) => offsets.last().copied(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if newest == self.tail.map(|(segment, _)| segment) {
+            return Ok(());
+        }
+        if let Some((_, key)) = self.tail.take() {
+            self.watch.remove(key);
+        }
+        let Some(segment) = newest else {
+            return Ok(());
+        };
+        match self.watch.add(&self.dir.join(segment_name(segment))) {
+            Ok(key) => self.tail = Some((segment, key)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        Ok(())
     }
 }
 
@@ -229,5 +303,36 @@ mod tests {
         }
         assert_eq!(&got[..got.len() - 4], &data[2 * SEGMENT as usize..]);
         assert_eq!(&got[got.len() - 4..], b"more");
+    }
+
+    #[test]
+    fn a_caught_up_reader_wakes_on_appends_to_the_segment_a_roll_started() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut log = Appender::open(dir.path(), DEFAULT_CAP).expect("open");
+        log.write(&vec![b'a'; SEGMENT as usize - 1]).expect("write");
+        let mut reader = LogReader::at(dir.path(), 0).expect("reader");
+        let mut buf = vec![0u8; SEGMENT as usize];
+        let mut catch_up =
+            |reader: &mut LogReader| while let Read::Data(_) = reader.read(&mut buf).expect("read") {};
+        catch_up(&mut reader);
+        let quiet = std::time::Instant::now();
+        assert!(!reader.wait(Duration::from_millis(100)).expect("wait"));
+        assert!(quiet.elapsed() >= Duration::from_millis(90));
+
+        // The appender stays open throughout, as the keeper's does: closing it would wake a Linux
+        // directory watch however the segment was followed.
+        for (bytes, past) in [(&b"bc"[..], SEGMENT + 1), (&b"d"[..], SEGMENT + 2)] {
+            let writer = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(50));
+                log.write(bytes).expect("write");
+                log
+            });
+            let woke = std::time::Instant::now();
+            assert!(reader.wait(Duration::from_secs(5)).expect("wait"));
+            assert!(woke.elapsed() < Duration::from_secs(2));
+            log = writer.join().expect("writer");
+            catch_up(&mut reader);
+            assert_eq!(reader.offset(), past);
+        }
     }
 }

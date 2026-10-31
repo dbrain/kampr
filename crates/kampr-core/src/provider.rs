@@ -344,6 +344,12 @@ pub trait Provider: Send + Sync + 'static {
     /// Bumps whenever the pane list or its geometry may have changed.
     fn topology(&self) -> watch::Receiver<u64>;
 
+    /// The changes to this pane the provider can announce, so a caller waits on them instead of
+    /// polling. Each is subscribed as of this call. The default announces nothing.
+    fn pane_changes(&self, _pane_id: &str) -> crate::push::PaneChanges {
+        crate::push::PaneChanges::default()
+    }
+
     /// Whether a harness owns this pane's screen — which is *why* [`Self::read_scrollback`] has no
     /// ring to offer, as distinct from a pane that has simply not scrolled yet.
     ///
@@ -467,6 +473,12 @@ impl Provider for Composite {
     fn reflow(&self, pane_id: &str) -> Reflow {
         self.route(pane_id)
             .map_or(Reflow::Unsupported, |p| p.reflow(pane_id))
+    }
+
+    fn pane_changes(&self, pane_id: &str) -> crate::push::PaneChanges {
+        self.route(pane_id)
+            .map(|p| p.pane_changes(pane_id))
+            .unwrap_or_default()
     }
 
     fn topology(&self) -> watch::Receiver<u64> {

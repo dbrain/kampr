@@ -359,3 +359,59 @@ fn a_root_another_uid_could_replace_is_refused() {
     std::os::unix::fs::symlink(sticky.join("s"), &link).expect("symlink");
     assert!(list(&link).is_err(), "followed a symlinked root");
 }
+
+/// The launch learns of a keeper that died before answering when it dies, not when the wait for its
+/// answer runs out.
+#[test]
+fn a_keeper_that_dies_before_answering_fails_its_launch_at_once() {
+    let root = root();
+    let started = std::time::Instant::now();
+    let err = kampr_keep::spawn(
+        root.path(),
+        sh("exec cat"),
+        Launch::Detached,
+        std::path::Path::new("/bin/false"),
+    )
+    .expect_err("a keeper that never answered");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "took {:?}: {err:#}",
+        started.elapsed()
+    );
+}
+
+/// A resize drains the master before it journals, so output that arrived in the same wake as the
+/// request is gone by the time the loop would read it; reading it after the request blocked the
+/// keeper on an empty master, and no request was answered until the program wrote again.
+#[test]
+fn output_and_a_resize_arriving_together_leave_the_keeper_answering() {
+    let root = root();
+    let live = Live::spawn(root.path(), sh("exec cat"), Launch::Detached);
+    let master = borrow(&live.session).expect("borrow");
+    let keeper = live.keeper_pid() as i32;
+    unsafe { libc::kill(keeper, libc::SIGSTOP) };
+    let stopped = || {
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &keeper.to_string()])
+            .output()
+            .is_ok_and(|out| out.stdout.trim_ascii_start().starts_with(b"T"))
+    };
+    assert!(until(SOON, stopped), "the keeper never stopped");
+    rustix::io::write(&master, b"x\n").expect("write");
+    std::thread::sleep(Duration::from_millis(200));
+    let resize = std::thread::spawn({
+        let session = live.session.clone();
+        move || claim_size(&session, 100, 30, "together")
+    });
+    std::thread::sleep(Duration::from_millis(200));
+    unsafe { libc::kill(keeper, libc::SIGCONT) };
+    resize.join().expect("resize thread").expect("resize");
+
+    let asked = std::time::Instant::now();
+    kampr_keep::state(&live.session).expect("the keeper answered");
+    assert!(
+        asked.elapsed() < Duration::from_secs(2),
+        "answered after {:?}",
+        asked.elapsed()
+    );
+}

@@ -655,9 +655,9 @@ async fn a_harness_that_exits_stops_being_the_panes_harness_without_asking_herdr
         Harness::Absent,
         "the pane still names a pid that is gone"
     );
-    tokio::time::timeout(Duration::from_secs(2), topology.changed())
+    tokio::time::timeout(Duration::from_millis(200), topology.changed())
         .await
-        .expect("the harness exiting was never published, so nothing rebuilds the herd")
+        .expect("the harness exiting was not published at once, so nothing rebuilds the herd")
         .expect("the provider went away");
     assert_eq!(
         (fake.count("session.snapshot"), fake.count("pane.process_info")),

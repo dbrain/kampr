@@ -16,10 +16,11 @@ kampr-journal = { path = "../kampr-journal" }
 kampr-keep = { path = "../kampr-keep" }
 kampr-proc = { path = "../kampr-proc" }
 kampr-term = { path = "../kampr-term" }
+kampr-watch = { path = "../kampr-watch" }
 libc.workspace = true
 memchr.workspace = true
 postcard.workspace = true
-rustix = { workspace = true, features = ["event", "fs", "termios"] }
+rustix = { workspace = true, features = ["event", "termios"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -1,20 +1,14 @@
 #[cfg(target_os = "linux")]
 mod imp {
     use anyhow::{Result, bail};
-    use rustix::event::{PollFd, PollFlags, Timespec, poll};
-    use rustix::fs::inotify;
     use rustix::net::{RecvFlags, SendFlags};
-    use rustix::process::{Pid, PidfdFlags, WaitId, pidfd_open};
     use std::io;
-    use std::mem::MaybeUninit;
     use std::os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd};
     use std::os::unix::net::UnixStream;
-    use std::path::{Path, PathBuf};
-    use std::time::Duration;
+    use std::path::PathBuf;
 
     pub const RECV: RecvFlags = RecvFlags::CMSG_CLOEXEC;
     pub const SEND: SendFlags = SendFlags::NOSIGNAL;
-    pub const TICK: Option<Duration> = None;
 
     pub fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
         Ok(rustix::net::sockopt::socket_peercred(stream)?.uid.as_raw())
@@ -42,31 +36,6 @@ mod imp {
     }
 
     pub fn child_pre_exec() {}
-
-    pub struct Child {
-        pidfd: OwnedFd,
-    }
-
-    impl Child {
-        pub fn watch(pid: u32) -> Option<Self> {
-            let pidfd = pidfd_open(Pid::from_raw(pid as i32)?, PidfdFlags::empty()).ok()?;
-            Some(Self { pidfd })
-        }
-
-        pub fn fd(&self) -> Option<BorrowedFd<'_>> {
-            Some(self.pidfd.as_fd())
-        }
-
-        pub fn id(&self) -> WaitId<'_> {
-            WaitId::PidFd(self.pidfd.as_fd())
-        }
-
-        pub fn settle(&self, grace: Duration) {
-            let timeout = Timespec::try_from(grace).ok();
-            let mut fds = [PollFd::new(&self.pidfd, PollFlags::IN)];
-            let _ = poll(&mut fds, timeout.as_ref());
-        }
-    }
 
     pub struct Usr1 {
         fd: OwnedFd,
@@ -108,68 +77,23 @@ mod imp {
             got
         }
     }
-
-    pub struct DirWatch {
-        inotify: OwnedFd,
-    }
-
-    impl DirWatch {
-        pub fn open(dir: &Path) -> io::Result<Self> {
-            let inotify = inotify::init(inotify::CreateFlags::CLOEXEC | inotify::CreateFlags::NONBLOCK)?;
-            inotify::add_watch(
-                &inotify,
-                dir,
-                inotify::WatchFlags::MODIFY
-                    | inotify::WatchFlags::CREATE
-                    | inotify::WatchFlags::MOVED_TO
-                    | inotify::WatchFlags::DELETE_SELF,
-            )?;
-            Ok(Self { inotify })
-        }
-
-        pub fn wait(&self, left: Duration) -> io::Result<()> {
-            let spec = Timespec::try_from(left).map_err(io::Error::other)?;
-            let mut fds = [PollFd::new(&self.inotify, PollFlags::IN)];
-            match poll(&mut fds, Some(&spec)) {
-                Ok(_) | Err(rustix::io::Errno::INTR) => Ok(()),
-                Err(e) => Err(e.into()),
-            }
-        }
-
-        pub fn drain(&self) -> io::Result<()> {
-            let mut buf = [MaybeUninit::<u8>::uninit(); 4096];
-            let mut reader = inotify::Reader::new(&self.inotify, &mut buf);
-            loop {
-                match reader.next() {
-                    Ok(_) => {}
-                    Err(rustix::io::Errno::AGAIN) => return Ok(()),
-                    Err(rustix::io::Errno::INTR) => {}
-                    Err(e) => return Err(e.into()),
-                }
-            }
-        }
-    }
 }
 
-// No pidfd, signalfd or inotify here: the child is polled with waitid on a tick, SIGUSR1 is ignored
-// (which, like Linux's blocked mask, survives the re-exec) and counted through kqueue, and a log
-// follower re-reads the directory on a tick.
+// No signalfd here: SIGUSR1 is ignored (which, like Linux's blocked mask, survives the re-exec) and
+// counted through kqueue.
 #[cfg(not(target_os = "linux"))]
 mod imp {
     use anyhow::{Result, bail};
     use rustix::net::{RecvFlags, SendFlags};
-    use rustix::process::{Pid, WaitId};
+    use rustix::process::Pid;
     use std::io;
     use std::os::fd::{AsFd, BorrowedFd, FromRawFd, OwnedFd};
     use std::os::unix::io::AsRawFd;
     use std::os::unix::net::UnixStream;
-    use std::path::{Path, PathBuf};
-    use std::time::{Duration, Instant};
+    use std::path::PathBuf;
 
     pub const RECV: RecvFlags = RecvFlags::empty();
     pub const SEND: SendFlags = SendFlags::empty();
-    pub const TICK: Option<Duration> = Some(Duration::from_millis(100));
-    const FOLLOW_TICK: Duration = Duration::from_millis(50);
 
     pub fn peer_uid(stream: &UnixStream) -> io::Result<u32> {
         let (mut uid, mut gid) = (0, 0);
@@ -194,41 +118,6 @@ mod imp {
 
     pub fn child_pre_exec() {
         unsafe { libc::signal(libc::SIGUSR1, libc::SIG_DFL) };
-    }
-
-    pub struct Child {
-        pid: Pid,
-    }
-
-    impl Child {
-        pub fn watch(pid: u32) -> Option<Self> {
-            Some(Self {
-                pid: Pid::from_raw(pid as i32)?,
-            })
-        }
-
-        pub fn fd(&self) -> Option<BorrowedFd<'_>> {
-            None
-        }
-
-        pub fn id(&self) -> WaitId<'_> {
-            WaitId::Pid(self.pid)
-        }
-
-        pub fn settle(&self, grace: Duration) {
-            let deadline = Instant::now() + grace;
-            while Instant::now() < deadline
-                && rustix::process::waitid(
-                    self.id(),
-                    rustix::process::WaitIdOptions::EXITED
-                        | rustix::process::WaitIdOptions::NOHANG
-                        | rustix::process::WaitIdOptions::NOWAIT,
-                )
-                .is_ok_and(|s| s.is_none())
-            {
-                std::thread::sleep(TICK.unwrap_or_default());
-            }
-        }
     }
 
     pub struct Usr1 {
@@ -284,23 +173,6 @@ mod imp {
                 }
                 got |= event.ident == libc::SIGUSR1 as libc::uintptr_t;
             }
-        }
-    }
-
-    pub struct DirWatch;
-
-    impl DirWatch {
-        pub fn open(_dir: &Path) -> io::Result<Self> {
-            Ok(Self)
-        }
-
-        pub fn wait(&self, left: Duration) -> io::Result<()> {
-            std::thread::sleep(left.min(FOLLOW_TICK));
-            Ok(())
-        }
-
-        pub fn drain(&self) -> io::Result<()> {
-            Ok(())
         }
     }
 }

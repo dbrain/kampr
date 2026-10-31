@@ -25,11 +25,16 @@ pub const BUILD: &str = env!("CARGO_PKG_VERSION");
 ///
 /// **The model is event-driven; this is the sweep behind it.** Every structural change reaches it
 /// through the provider's own subscription, a herdr going away reaches it through the health
-/// watch, and a viewer arriving reaches it through the registry — so what is left for a timer is
-/// only what none of those carry: each node's round trip, and a pane whose transcript appeared
-/// after it was last looked for. Neither is worth a rebuild every three seconds on a box nobody is
-/// connected to.
+/// watch, a viewer arriving through the registry, and a transcript or harness record being written
+/// through a watch on the files — so what is left for a timer is only what none of those carry:
+/// each node's round trip, a harness installed after the node started, and a watched file deleted
+/// and made again before the rebuild its deletion woke. None is worth a rebuild every three
+/// seconds on a box nobody is connected to.
 const HERD_RECONCILE: Duration = Duration::from_secs(30);
+
+/// The least time between two rebuilds woken by file writes. A working harness appends to its
+/// transcript many times a second, and a herd rebuilt at that rate is a herd pushed at it.
+const FILE_FLOOR: Duration = Duration::from_millis(250);
 
 pub struct Node {
     pub config: Config,
@@ -382,7 +387,10 @@ async fn refresh_herd(
     let mut mesh = peers.subscribe();
     let conversations = Conversations::default();
     let names = Names::default();
+    let mut files = crate::herd_files::HerdFiles::default();
     loop {
+        let started = tokio::time::Instant::now();
+        files.seen();
         // Subscribed *before* the model is built. A viewer joining — or a session appearing —
         // while `build_model` is still running would otherwise be seen by neither this round nor
         // the wait that follows it, and what is behind that wait is a sweep measured in tens of
@@ -416,18 +424,28 @@ async fn refresh_herd(
         settle(&mut stamps, &out.reads, &mut model);
         out.herd.send_replace(Arc::new(model));
 
-        // A transcript appearing on disk is the one change nothing signals — no herdr event, no
-        // provider revision, no watcher — so the sweep shortens to the retry floor for exactly as
-        // long as some pane is still waiting for one, and goes back to slow when none is.
-        let sweep = match conversations.pending() {
+        // A transcript appearing on disk is signalled by nothing but the file, so the directories
+        // it will appear in are watched, and a watch armed on a new set gets one recheck for a
+        // write since the search that named it. The retry floor stays while a pane waits anyway:
+        // a native pane's job exec'ing without output and a 7501 report that leaves the status
+        // word alone move the herd with no wake of their own, and this sweep is what finds them.
+        let rearmed = files.arm(conversations.watched());
+        let pending = conversations.pending();
+        let sweep = match pending {
+            true if rearmed && files.armed() => FILE_FLOOR,
             true => CONVERSATION_RETRY,
             false => HERD_RECONCILE,
         };
-        tokio::select! {
-            _ = wait_for_change(&mut changes) => {}
-            _ = moved(&mut mesh) => {}
-            _ = moved(&mut update) => {}
-            _ = tokio::time::sleep(sweep) => {}
+        let written = tokio::select! {
+            _ = wait_for_change(&mut changes) => false,
+            _ = moved(&mut mesh) => false,
+            _ = moved(&mut update) => false,
+            _ = files.changed() => true,
+            _ = tokio::time::sleep(sweep) => pending && rearmed,
+        };
+        if written {
+            tokio::time::sleep_until(started + FILE_FLOOR).await;
+            conversations.forget_misses();
         }
         // A harness installed after the node started should not need a restart to be seen.
         journals.send_replace(Arc::new(kampr_journal::registry_from_home(&home, ledger.clone())));
@@ -518,10 +536,10 @@ async fn wait_for_change(watches: &mut HerdChanges) {
 }
 
 /// How long a pane that resolved to no transcript is left alone before the directories are
-/// searched again. Deriving a transcript from a working directory is a `read_dir` and up to 64
-/// file heads, and an event-driven rebuild can fire far faster than that — so the miss is what
-/// needs a floor. A hit needs none: the answer stays true for as long as the file is there, which
-/// is a `stat`.
+/// searched again, unless a watched file was written. Deriving a transcript from a working
+/// directory is a `read_dir` and up to 64 file heads, and an event-driven rebuild can fire far
+/// faster than that — so the miss is what needs a floor. A hit needs none: the answer stays true
+/// for as long as the file is there, which is a `stat`.
 const CONVERSATION_RETRY: Duration = Duration::from_secs(5);
 
 /// Whether a pane has a conversation, which is whether a transcript resolves — not whether the
@@ -540,7 +558,12 @@ struct Conversations {
     /// applies, kept so the panel's title and `has_conversation` cannot name a different session
     /// than the one the pump is serving.
     sticky: Mutex<HashMap<String, Sticky>>,
+    /// The files the last round's answers came from, and the directories its misses will be
+    /// answered from.
+    watched: Mutex<Watched>,
 }
+
+type Watched = std::collections::BTreeSet<PathBuf>;
 
 /// What a resolution can be cached against: a pane whose harness, directory *and* session are
 /// all the same is the same conversation. The session is the last field, and it is the one that
@@ -571,10 +594,12 @@ impl Conversations {
         session: &SessionNode,
         info: &PaneInfo,
         live: &mut HashSet<ConversationKey>,
+        watched: &mut Watched,
     ) -> Option<PathBuf> {
         if !journals.serves(info.agent.as_deref()) {
             return None;
         }
+        watched.extend(journals.watched(info.agent.as_deref(), info.cwd.as_deref().map(Path::new)));
         let mut announced = crate::convo::identity(journals, session, &info.pane_id).announced;
         // The herd model's half of the stickiness the pump applies: a harness that names its
         // session only from the environment its tools carry (pi) reads nothing between tools, and
@@ -620,7 +645,10 @@ impl Conversations {
         );
         live.insert(key.clone());
         match self.seen.lock().unwrap().get(&key) {
-            Some(Resolved { path: Some(path), .. }) if path.is_file() => return Some(path.clone()),
+            Some(Resolved { path: Some(path), .. }) if path.is_file() => {
+                watched.insert(path.clone());
+                return Some(path.clone());
+            }
             Some(Resolved { path: None, at }) if at.elapsed() < CONVERSATION_RETRY => return None,
             _ => {}
         }
@@ -640,11 +668,13 @@ impl Conversations {
                 at: Instant::now(),
             },
         );
+        watched.extend(path.clone());
         path
     }
 
     /// Working directories churn and a node runs for weeks.
-    fn keep(&self, live: &HashSet<ConversationKey>, live_panes: &HashSet<String>) {
+    fn keep(&self, live: &HashSet<ConversationKey>, live_panes: &HashSet<String>, watched: Watched) {
+        *self.watched.lock().unwrap() = watched;
         let mut seen = self.seen.lock().unwrap();
         seen.retain(|key, _| live.contains(key));
         let waiting = seen.values().any(|r| r.path.is_none());
@@ -657,6 +687,15 @@ impl Conversations {
 
     fn pending(&self) -> bool {
         self.waiting.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn watched(&self) -> Watched {
+        std::mem::take(&mut *self.watched.lock().unwrap())
+    }
+
+    /// A watched file was written, so a miss may be a hit now.
+    fn forget_misses(&self) {
+        self.seen.lock().unwrap().retain(|_, r| r.path.is_some());
     }
 }
 
@@ -733,6 +772,7 @@ async fn build_model(
     let mut live = HashSet::new();
     let mut live_panes = HashSet::new();
     let mut titled = HashSet::new();
+    let mut watched = Watched::default();
     for session in sessions.all() {
         let health = session.provider.health();
         nodes.push(NodeEntry {
@@ -795,7 +835,7 @@ async fn build_model(
                 continue;
             }
             live_panes.insert(format!("{}/{}", session.node_id, info.pane_id));
-            let transcript = conversations.resolves(journals, &session, &info, &mut live);
+            let transcript = conversations.resolves(journals, &session, &info, &mut live, &mut watched);
             let muffit = info.muffit.is_some() || tui.is_some();
             let has_conversation = transcript.is_some() || muffit;
             let watchers = session.registry.watcher_count(&info.pane_id);
@@ -847,7 +887,7 @@ async fn build_model(
             panes.push(entry);
         }
     }
-    conversations.keep(&live, &live_panes);
+    conversations.keep(&live, &live_panes, watched);
     names.keep(&titled);
     HerdModel { nodes, panes }
 }

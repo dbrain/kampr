@@ -3,6 +3,7 @@ mod events;
 mod naming;
 mod observe;
 mod protocol;
+mod push;
 mod registry;
 mod reporting;
 mod scrollback;

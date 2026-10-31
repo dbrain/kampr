@@ -13,6 +13,7 @@ kampr-herdr = { path = "../kampr-herdr" }
 kampr-journal = { path = "../kampr-journal" }
 kampr-proc = { path = "../kampr-proc" }
 kampr-term = { path = "../kampr-term" }
+kampr-watch = { path = "../kampr-watch" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

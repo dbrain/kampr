@@ -90,6 +90,7 @@ pub struct NewSession {
 
 pub struct NativeProvider {
     pub(crate) inner: Arc<Inner>,
+    _watch: Option<kampr_watch::Stop>,
 }
 
 pub(crate) struct Inner {
@@ -127,14 +128,12 @@ impl NativeProvider {
         });
         inner.rescan();
         let weak: Weak<Inner> = Arc::downgrade(&inner);
-        watcher::spawn(inner.config.root.clone(), move |changes: BTreeSet<Change>| {
-            let Some(inner) = weak.upgrade() else {
-                return false;
-            };
-            inner.changed(changes);
-            true
+        let watch = watcher::spawn(inner.config.root.clone(), move |changes: BTreeSet<Change>| {
+            if let Some(inner) = weak.upgrade() {
+                inner.changed(changes);
+            }
         });
-        Ok(Self { inner })
+        Ok(Self { inner, _watch: watch })
     }
 
     pub fn root(&self) -> &Path {
@@ -747,6 +746,12 @@ impl Provider for NativeProvider {
 
     fn topology(&self) -> watch::Receiver<u64> {
         self.inner.topology.subscribe()
+    }
+
+    fn pane_changes(&self, pane_id: &str) -> kampr_core::push::PaneChanges {
+        self.live(split_view(pane_id).0)
+            .map(|live| live.changes())
+            .unwrap_or_default()
     }
 
     /// A pager takes the alternate screen for a moment and gives it back (#244); only a harness

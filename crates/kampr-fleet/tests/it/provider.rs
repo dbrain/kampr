@@ -552,3 +552,33 @@ async fn a_run_whose_leftover_child_holds_the_terminal_still_finishes() {
     );
     assert!(pid.is_some(), "{text:?}");
 }
+
+/// The ladder hears of a run's end when the keeper writes it, not on its next look: the keeper's
+/// `exit.json` lands in a directory the ladder watches.
+#[tokio::test]
+async fn a_run_that_ends_is_reported_ended_as_its_keeper_records_it() {
+    let provider = Fleet::default();
+    for _ in 0..3 {
+        let pane_id = provider.run(&sh("sleep 0.4")).await;
+        provider.wait_for(&pane_id, |s| !s.finished()).await;
+        let exit_json = provider.session(&pane_id).path().join("exit.json");
+        let mut topology = provider.topology();
+        let seen = loop {
+            if provider.state(&pane_id).await.finished() {
+                break std::time::SystemTime::now();
+            }
+            tokio::time::timeout(PATIENCE, topology.changed())
+                .await
+                .expect("the run ended")
+                .expect("the channel stayed open");
+        };
+        let written = std::fs::metadata(&exit_json)
+            .and_then(|m| m.modified())
+            .expect("exit.json");
+        let late = seen.duration_since(written).unwrap_or_default();
+        assert!(
+            late < Duration::from_millis(100),
+            "reported {late:?} after exit.json"
+        );
+    }
+}

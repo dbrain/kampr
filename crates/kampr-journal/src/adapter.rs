@@ -94,6 +94,15 @@ pub trait JournalAdapter: Send + Sync {
     /// time, is what makes "this directory's newest" mean "this run's", because every run in a
     /// directory leaves a transcript behind it.
     fn locate_by_cwd(&self, cwd: &Path, since: Option<SystemTime>) -> Result<PathBuf, JournalError>;
+
+    /// The directories where this harness puts a new transcript, or its record of which one a
+    /// process is on, for a pane in `cwd`: watched by a reader so that a `/clear` or a first
+    /// prompt is seen when it lands rather than on a timer. Empty, the default, is a harness
+    /// nobody has listed them for, and the reader keeps its timer.
+    fn watched(&self, _cwd: Option<&Path>) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     fn parser(&self) -> Box<dyn TranscriptParser>;
 
     /// What this harness wrote down beside the conversation that is about the *session* rather
@@ -298,6 +307,18 @@ impl Registry {
     /// Whether a pane running `pane_agent` must keep its session between the ticks that name it.
     pub fn sticky(&self, pane_agent: Option<&str>) -> bool {
         pane_agent.is_some_and(|agent| self.adapters.get(agent).is_some_and(|a| a.sticky()))
+    }
+
+    /// [`JournalAdapter::watched`] for the pane's harness, narrowed to the directories that exist,
+    /// since a watch can only be put on one that does.
+    pub fn watched(&self, pane_agent: Option<&str>, cwd: Option<&Path>) -> Vec<PathBuf> {
+        pane_agent
+            .and_then(|agent| self.adapters.get(agent))
+            .map(|adapter| adapter.watched(cwd))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|dir| dir.is_dir())
+            .collect()
     }
 
     /// The conversation a `sub` handle names, proved to be one the pane asking may see.

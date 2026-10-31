@@ -2,15 +2,16 @@ use crate::ctl::{HOLDER_MAX, send_fd, set_winsize};
 use crate::dir::{
     CTL, EXIT, Exit, How, Image, KEEPER, KeeperInfo, SIZE, SPEC, SessionDir, Size, Spec, now_unix, write_json,
 };
+use crate::launch::READY_FD;
 use crate::log::{Appender, DEFAULT_CAP};
 use crate::notify::notify;
 use crate::procs;
 use crate::sizes::write_size;
-use crate::sys::{self, Child, Usr1};
+use crate::sys::{self, Usr1};
 use anyhow::{Context, Result, anyhow, bail};
 use rustix::event::{PollFd, PollFlags, Timespec, poll};
 use rustix::io::{Errno, FdFlags, fcntl_getfd, fcntl_setfd};
-use rustix::process::{WaitIdOptions, getpid, getuid, waitid};
+use rustix::process::{Pid, WaitId, WaitIdOptions, getpid, getuid, waitid};
 use std::ffi::{CString, OsString};
 use std::io::{self, BufRead, BufReader, Read as _, Write};
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -31,6 +32,7 @@ const DRAIN_AFTER_EXIT: Duration = Duration::from_secs(3);
 
 const NOT_FOR_THE_CHILD: &[&str] = &[
     HANDOVER,
+    READY_FD,
     "NOTIFY_SOCKET",
     "LISTEN_PID",
     "LISTEN_FDS",
@@ -67,6 +69,7 @@ enum Outcome {
 }
 
 pub fn serve(dir: &Path) -> Result<()> {
+    let ready = ready_pipe();
     let dir = std::path::absolute(dir)?;
     let signals = Usr1::open()?;
     let exe = sys::own_exe()?;
@@ -133,28 +136,31 @@ pub fn serve(dir: &Path) -> Result<()> {
     let tty = rustix::pty::ptsname(&master, Vec::new())
         .ok()
         .and_then(|n| n.into_string().ok());
-    let mut watched = Child::watch(child);
-    let mut outcome = if watched.is_none() {
-        Outcome::Lost
-    } else {
-        Outcome::Running
+    let mut ended: Option<Instant> = None;
+    let (mut watched, mut outcome) = match kampr_watch::Exit::open(child) {
+        Ok(Some(exit)) => (Some(exit), Outcome::Running),
+        // kqueue will not watch a zombie, so a child that died before this keeper could watch it
+        // is reaped now or never.
+        Ok(None) => match reap(child, false) {
+            Outcome::Running => (None, Outcome::Lost),
+            outcome => {
+                ended = Some(Instant::now());
+                (None, outcome)
+            }
+        },
+        Err(_) => (None, Outcome::Lost),
     };
 
     notify("READY=1", &[])?;
+    drop(ready);
 
     let mut buf = vec![0u8; 64 * 1024];
-    let mut ended: Option<Instant> = None;
     loop {
         let left = ended.map(|at| DRAIN_AFTER_EXIT.saturating_sub(at.elapsed()));
         if left.is_some_and(|left| left.is_zero()) {
             break;
         }
-        let tick = sys::TICK.filter(|_| watched.is_some());
-        let wake = match (left, tick) {
-            (Some(left), Some(tick)) => Some(left.min(tick)),
-            (left, tick) => left.or(tick),
-        };
-        let timeout = wake.and_then(|wake| Timespec::try_from(wake).ok());
+        let timeout = left.and_then(|left| Timespec::try_from(left).ok());
         let (master_ready, ctl_ready, signal_ready, child_ready) = {
             let signal_fd = signals.fd();
             let mut fds = vec![
@@ -162,9 +168,8 @@ pub fn serve(dir: &Path) -> Result<()> {
                 PollFd::new(&listener, PollFlags::IN),
                 PollFd::new(&signal_fd, PollFlags::IN),
             ];
-            let child_fd = watched.as_ref().and_then(Child::fd);
-            if let Some(fd) = &child_fd {
-                fds.push(PollFd::new(fd, PollFlags::IN));
+            if let Some(exit) = &watched {
+                fds.push(PollFd::new(exit, PollFlags::IN));
             }
             match poll(&mut fds, timeout.as_ref()) {
                 Ok(_) => {}
@@ -172,25 +177,28 @@ pub fn serve(dir: &Path) -> Result<()> {
                 Err(e) => return Err(e.into()),
             }
             let ready = |i: usize| fds.get(i).is_some_and(|f| !f.revents().is_empty());
-            (
-                ready(0),
-                ready(1),
-                ready(2),
-                ready(3) || (child_fd.is_none() && watched.is_some()),
-            )
+            (ready(0), ready(1), ready(2), ready(3))
         };
 
-        if child_ready && let Some(watch) = &watched {
-            outcome = reap(watch);
-            if !matches!(outcome, Outcome::Running) {
-                watched = None;
-                ended = Some(Instant::now());
-            }
+        if child_ready && watched.is_some() {
+            outcome = reap(child, true);
+            watched = None;
+            ended = Some(Instant::now());
         }
         if signal_ready && signals.take() {
             let err = reexec(&exe, &dir, master.as_fd(), child);
             eprintln!("kampr keep: re-exec of {} failed: {err}", exe.display());
             fcntl_setfd(&master, FdFlags::CLOEXEC)?;
+        }
+        // Before any request: a resize drains the master, and a read after it would block on
+        // whatever readiness this wake reported having been drained.
+        if master_ready {
+            match rustix::io::read(&master, &mut buf) {
+                Ok(0) | Err(Errno::IO) => break,
+                Ok(n) => log.write(&buf[..n])?,
+                Err(Errno::INTR | Errno::AGAIN) => {}
+                Err(e) => return Err(e.into()),
+            }
         }
         if ctl_ready {
             let keeper = Keeper {
@@ -201,19 +209,10 @@ pub fn serve(dir: &Path) -> Result<()> {
             };
             keeper.accept_all(&listener, &mut log, &mut buf);
         }
-        if master_ready {
-            match rustix::io::read(&master, &mut buf) {
-                Ok(0) | Err(Errno::IO) => break,
-                Ok(n) => log.write(&buf[..n])?,
-                Err(Errno::INTR | Errno::AGAIN) => {}
-                Err(e) => return Err(e.into()),
-            }
-        }
     }
 
-    if let Some(watch) = watched.take() {
-        watch.settle(REAP_GRACE);
-        outcome = reap(&watch);
+    if let Some(exit) = watched.take() {
+        outcome = reap(child, exit.wait(Some(REAP_GRACE)).unwrap_or(false));
     }
     let (code, signal, status_lost) = match outcome {
         Outcome::Reaped { code, signal } => (code, signal, false),
@@ -233,6 +232,12 @@ pub fn serve(dir: &Path) -> Result<()> {
     notify("FDSTOREREMOVE=1\nFDNAME=pty", &[])?;
     let _ = std::fs::remove_file(&ctl_path);
     Ok(())
+}
+
+fn ready_pipe() -> Option<OwnedFd> {
+    let fd: RawFd = std::env::var(READY_FD).ok()?.parse().ok()?;
+    fcntl_setfd(unsafe { BorrowedFd::borrow_raw(fd) }, FdFlags::CLOEXEC).ok()?;
+    Some(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
 fn recover(session: &SessionDir) -> Result<Option<Started>> {
@@ -343,8 +348,17 @@ fn child_env(spec: &Spec) -> Vec<(OsString, OsString)> {
     env
 }
 
-fn reap(child: &Child) -> Outcome {
-    match waitid(child.id(), WaitIdOptions::EXITED | WaitIdOptions::NOHANG) {
+// `exited` is the kernel having said so, after which a blocking wait returns at once; on macOS the
+// kqueue note can come a moment before the zombie is waitable, and a NOHANG there would spin.
+fn reap(child: u32, exited: bool) -> Outcome {
+    let Some(pid) = i32::try_from(child).ok().and_then(Pid::from_raw) else {
+        return Outcome::Lost;
+    };
+    let options = match exited {
+        true => WaitIdOptions::EXITED,
+        false => WaitIdOptions::EXITED | WaitIdOptions::NOHANG,
+    };
+    match waitid(WaitId::Pid(pid), options) {
         Ok(Some(status)) => Outcome::Reaped {
             code: status.exit_status(),
             signal: status.terminating_signal(),
@@ -481,7 +495,7 @@ fn reexec(exe: &Path, dir: &Path, master: BorrowedFd<'_>, child: u32) -> io::Err
         let argv = vec![path.clone(), cstr(b"keep")?, cstr(dir.as_os_str().as_bytes())?];
         let mut envp = Vec::new();
         for (k, v) in std::env::vars_os() {
-            if [HANDOVER, "LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"]
+            if [HANDOVER, READY_FD, "LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"]
                 .iter()
                 .any(|drop| k == *drop)
             {

@@ -469,8 +469,9 @@ fn cursor(out: &mut String, (row, col, visible): (u16, u16, bool)) {
     }
 }
 
-/// How long a pane's harness answer stands: it is a walk of `/proc`, and the node asks on every
-/// frame of a reflowed watch.
+/// How long a pane's harness answer stands while its foreground job does not change: it is a walk
+/// of `/proc`, and the node asks on every frame of a reflowed watch. A wrapper that starts its
+/// harness after it has become the job is the change this still catches.
 const HARNESS_TTL: Duration = Duration::from_secs(1);
 
 pub(crate) type Shared = Arc<Mutex<View>>;
@@ -479,7 +480,7 @@ type Held = HashMap<(String, u16), Weak<Mutex<View>>>;
 #[derive(Default)]
 pub(crate) struct Views {
     views: Mutex<Held>,
-    harness: Mutex<HashMap<String, (Instant, bool)>>,
+    harness: Mutex<HashMap<String, (Instant, u64, bool)>>,
 }
 
 impl Views {
@@ -489,8 +490,9 @@ impl Views {
         }
         let mut cache = self.harness.lock().unwrap();
         let id = live.dir.id();
+        let job = live.job_revision();
         let harness = match cache.get(id) {
-            Some(&(at, harness)) if at.elapsed() < HARNESS_TTL => harness,
+            Some(&(at, seen, harness)) if seen == job && at.elapsed() < HARNESS_TTL => harness,
             _ => {
                 let harness = live
                     .dir
@@ -498,7 +500,7 @@ impl Views {
                     .filter(|_| live.dir.exit().is_none())
                     .and_then(|k| procs::foreground(k.child))
                     .is_some_and(|fg| procs::harness(&fg).is_some());
-                cache.insert(id.to_string(), (Instant::now(), harness));
+                cache.insert(id.to_string(), (Instant::now(), job, harness));
                 harness
             }
         };
