@@ -563,6 +563,10 @@ fn each_harness_names_the_directories_its_next_transcript_appears_in() {
         if agent == "codex" {
             std::fs::create_dir_all(root.join("sessions/2025/12/01")).unwrap();
         }
+        // omp files by the resolved cwd, which a directory that does not exist has none of.
+        if agent == "omp" {
+            std::fs::create_dir_all(&work).unwrap();
+        }
         for dir in &dirs {
             std::fs::create_dir_all(root.join(dir)).unwrap();
         }

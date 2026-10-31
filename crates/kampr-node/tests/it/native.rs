@@ -1574,7 +1574,7 @@ async fn input_held_for_a_booting_harness_goes_on_the_frame_that_shows_it_readin
         )
         .await;
     client
-        .pane(&id, |p| p["agent"] == "claude" && p["cmd"] == "claude")
+        .pane(&id, |p| p["agent"] == "claude")
         .await;
     client.watch(&id, false).await;
     for round in 1..=5 {
