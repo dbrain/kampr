@@ -855,6 +855,45 @@ async fn a_pane_with_no_ring_yet_is_still_read_once_it_starts_producing() {
     );
 }
 
+/// herdr's read is gated on a cached snapshot, refreshed on a sweep of its own, so a pane can
+/// finish its first burst while the snapshot still says it has never scrolled. Every read during
+/// the burst answers "no ring", the poller parks on its idle backstop because nothing more is
+/// coming, and the snapshot that would have let it read arrives to nobody: the ring stayed empty
+/// for the whole idle wait (the CI failures of
+/// `live::a_shell_pane_delivers_its_history_as_absolute_rows`).
+#[tokio::test(start_paused = true)]
+async fn a_ring_the_provider_learns_of_after_the_output_stopped_is_still_read() {
+    let p = Arc::new(Scripted::default());
+    p.no_ring.store(true, Ordering::SeqCst);
+    let (reg, _w) = watched(p.clone(), patient()).await;
+    let feed = p.feed("p").await;
+    feed.send(PaneEvent::Reset { cols: 20, rows: 2 }).await.unwrap();
+    feed.send(PaneEvent::Bytes {
+        full: true,
+        bytes: b"1\r\n2\r\n3\r\n".to_vec(),
+    })
+    .await
+    .unwrap();
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let parked = p.reads_done.load(Ordering::SeqCst);
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        p.reads_done.load(Ordering::SeqCst),
+        parked,
+        "the poller has parked"
+    );
+
+    p.reads
+        .lock()
+        .await
+        .push_back(read(&["1".into(), "2".into(), "3".into(), "v".into()], 1));
+    p.no_ring.store(false, Ordering::SeqCst);
+    p.topology.send_modify(|r| *r += 1);
+
+    let doc = held(&reg, "p", |doc| !doc.rows.is_empty()).await;
+    assert_eq!(lines_of(&doc), ["1", "2", "3"]);
+}
+
 /// Probe #112: a watched pane logged `pane re-wrapped; ring restarted` over and over while its
 /// `from_top` climbed by the ring's whole depth each time. A pane whose measured width moves once
 /// owes one restart, not one per read — and every read after it must go back to stitching.

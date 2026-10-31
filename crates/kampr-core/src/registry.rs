@@ -760,7 +760,9 @@ async fn accumulate_history(
     let mut seen_frames = activity.count();
     let mut rate = RowRate::default();
     let mut failures = 0usize;
+    let mut topology = provider.topology();
     loop {
+        topology.borrow_and_update();
         let outcome = provider.read_scrollback(&pane_id).await;
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(previous);
@@ -805,6 +807,7 @@ async fn accumulate_history(
                 ),
             }
         }
+        let no_ring = matches!(outcome, Ok(None));
         let added = match outcome {
             Ok(Some(raw)) => match ring.lock().unwrap().ingest(&raw) {
                 Ingest::Fresh { rows } => rows,
@@ -905,11 +908,22 @@ async fn accumulate_history(
                     tokio::select! {
                         _ = tokio::time::sleep(remainder) => {}
                         _ = activity.woken.notified() => {}
+                        // The provider decides "no ring" from a snapshot it refreshes on a sweep
+                        // of its own, which can land after the pane's last frame: then this is the
+                        // only news that the ring exists, and the frames that would have woken the
+                        // poller have all been spent on reads that were told there was none.
+                        _ = topology_moved(&mut topology), if no_ring => {}
                     }
                 }
                 false => tokio::time::sleep(remainder).await,
             }
         }
+    }
+}
+
+async fn topology_moved(rx: &mut tokio::sync::watch::Receiver<u64>) {
+    if rx.changed().await.is_err() {
+        std::future::pending::<()>().await;
     }
 }
 
