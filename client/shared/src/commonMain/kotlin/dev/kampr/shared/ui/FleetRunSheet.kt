@@ -278,13 +278,13 @@ internal fun RunNow(command: FleetCommand, hosts: Int, onRun: () -> Unit) {
 }
 
 @Composable
-internal fun FleetChip(label: String, isDefault: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun FleetChip(label: String, isDefault: Boolean, enabled: Boolean = true, said: String = label, onClick: () -> Unit) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.sm)
     Box(
         modifier = Modifier
             .background(if (isDefault && enabled) tokens.color.accent else tokens.color.raise, shape)
-            .action(label, onClick, shape, enabled = enabled)
+            .action(said, onClick, shape, enabled = enabled)
             .padding(horizontal = 16.dp, vertical = 9.dp),
     ) {
         DisableSelection {

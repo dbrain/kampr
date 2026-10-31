@@ -26,6 +26,7 @@ data class Cohort(
     val succeeded: Int get() = fleets.count { it.succeeded }
     val failed: Int get() = fleets.count { it.failed }
     val finished: Boolean get() = fleets.isNotEmpty() && fleets.all { it.isFinished }
+    val finishedPanes: List<String> get() = panes.filter { it.fleet?.isFinished == true }.map { it.id }
 }
 
 // The board's order. Failures sort **above** successes among the finished, because the finished

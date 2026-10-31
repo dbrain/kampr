@@ -451,6 +451,7 @@ internal fun AppScaffold(
                                     canRun = !readOnly && state.store.canManage,
                                     book = book,
                                     onBook = state::manage,
+                                    onForget = { state.manage(ManageOp.FleetForget(it)) },
                                 )
 
                                 Screen.Herd, Screen.Mosaic -> EmptyDetail(connectionStatus)
@@ -524,6 +525,7 @@ internal fun AppScaffold(
                                 canRun = !readOnly && state.store.canManage,
                                 book = book,
                                 onBook = state::manage,
+                                onForget = { state.manage(ManageOp.FleetForget(it)) },
                             )
 
                             Screen.Herd, Screen.Mosaic -> HerdLandscape(
@@ -596,6 +598,7 @@ internal fun AppScaffold(
                                 canRun = !readOnly && state.store.canManage,
                                 book = book,
                                 onBook = state::manage,
+                                onForget = { state.manage(ManageOp.FleetForget(it)) },
                             )
 
                             Screen.Herd, Screen.Mosaic -> HerdPortrait(

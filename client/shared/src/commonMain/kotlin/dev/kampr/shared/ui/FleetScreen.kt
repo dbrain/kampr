@@ -56,6 +56,7 @@ fun FleetScreen(
     // unasked on the greeting and again after every change, so this screen never asks for it.
     book: ServerMsg.FleetBook = ServerMsg.FleetBook(),
     onBook: (ManageOp) -> Unit = {},
+    onForget: (paneId: String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
@@ -74,10 +75,18 @@ fun FleetScreen(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             KText("Fleet", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
-            if (canRun && targets.isNotEmpty()) {
-                FleetChip("Run", isDefault = true) {
-                    staged = null
-                    composing = true
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val finished = cohorts.flatMap { it.finishedPanes }
+                if (canRun && finished.isNotEmpty()) {
+                    FleetChip("Clear", isDefault = false, said = "Clear every finished run") {
+                        finished.forEach(onForget)
+                    }
+                }
+                if (canRun && targets.isNotEmpty()) {
+                    FleetChip("Run", isDefault = true) {
+                        staged = null
+                        composing = true
+                    }
                 }
             }
         }
@@ -99,7 +108,7 @@ fun FleetScreen(
                 verticalArrangement = Arrangement.spacedBy(20.dp),
             ) {
                 items(cohorts, key = { it.id }) { cohort ->
-                    CohortBlock(cohort, herd, onOpenPane, onAnswer, onStop) { confirming = it }
+                    CohortBlock(cohort, herd, onOpenPane, onAnswer, onStop, onForget.takeIf { canRun }) { confirming = it }
                 }
             }
         }
@@ -240,12 +249,27 @@ private fun CohortBlock(
     onOpenPane: (String) -> Unit,
     onAnswer: (String, String) -> Unit,
     onStop: (String) -> Unit,
+    onForget: ((String) -> Unit)?,
     onBroadcast: (PendingBroadcast) -> Unit,
 ) {
     val tokens = Kampr.tokens
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         KText(cohort.command, tokens.type.cardTitle, tokens.color.accent)
-        Tally(cohort)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Tally(cohort)
+            if (onForget != null && cohort.finished) {
+                KText(
+                    "Clear",
+                    tokens.type.captionSmall,
+                    tokens.color.mute,
+                    Modifier.action("Clear ${cohort.command}", { cohort.finishedPanes.forEach(onForget) }),
+                )
+            }
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
