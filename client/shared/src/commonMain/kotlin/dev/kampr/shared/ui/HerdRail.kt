@@ -24,6 +24,7 @@ import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.groups
 import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.sections
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.NodeInfo
@@ -106,7 +107,14 @@ fun HerdRail(
         ) {
             for (group in herd.groups()) {
                 RailNodeMark(group.node)
-                for (pane in group.terminals + group.background) {
+                for ((index, section) in group.sections.withIndex()) {
+                    // No room for a name: a gap between workspaces, so two of them do not read as one.
+                    if (index > 0 && section.heading != null) Box(Modifier.height(6.dp).named("Workspace ${section.heading}"))
+                    for (pane in section.panes) {
+                        RailPane(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+                    }
+                }
+                for (pane in group.background) {
                     RailPane(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
                 }
             }

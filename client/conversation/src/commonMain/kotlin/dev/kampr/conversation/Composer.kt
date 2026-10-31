@@ -36,6 +36,7 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ComposerMirror
 import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.platform.acceptsPastedFiles

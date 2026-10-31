@@ -19,6 +19,10 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
+/// Below this a box's grid is a column or two of every line, which reads as nothing; the tab is
+/// one session at a time instead, with a strip naming the others.
+const LEAST_BOX: (u16, u16) = (24, 6);
+
 /// One pane as the last frame drew it: the box it was given, and where its live grid landed
 /// inside it. **The rect is not the grid** — a pan and a scroll move the columns and rows under
 /// it, so a click worked out of the rect alone names the wrong cell (#68, #84, #205).
@@ -285,6 +289,10 @@ impl App {
                 .render(area, frame.buffer_mut());
             return;
         }
+        if self.tiling.cramped(area, &shape, LEAST_BOX) {
+            self.draw_flat(frame, area, &mosaic, layout);
+            return;
+        }
         let tiles = self.tiling.lay(area, &shape);
         // #375: herdr's box appears only once there are two panes to separate. A lone pane is
         // flush, and the 2 rows and 2 columns the border was costing go to the fit ladder.
@@ -297,6 +305,41 @@ impl App {
             }
         }
         if let Some(at) = caret
+            && !self.router.modal()
+        {
+            frame.set_cursor_position(at);
+        }
+    }
+
+    fn draw_flat(&mut self, frame: &mut Frame, area: Rect, mosaic: &[String], layout: &mut Layout) {
+        let t = self.options.theme;
+        let shown = self
+            .focus
+            .clone()
+            .filter(|f| mosaic.contains(f))
+            .unwrap_or_else(|| mosaic[0].clone());
+        let spans: Vec<Span> = {
+            let state = self.client.state();
+            mosaic
+                .iter()
+                .flat_map(|pane| {
+                    let name = state.herd.pane(pane).map(label).unwrap_or_else(|| pane.clone());
+                    let style = match *pane == shown {
+                        true => Style::default()
+                            .fg(t.on_accent)
+                            .bg(t.accent)
+                            .add_modifier(Modifier::BOLD),
+                        false => Style::default().fg(t.dim).bg(t.bar),
+                    };
+                    [Span::styled(format!(" {name} "), style), Span::raw(" ")]
+                })
+                .collect()
+        };
+        let [strip, body] = Split::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+        Paragraph::new(Line::from(spans))
+            .style(Style::default().bg(t.bar))
+            .render(strip, frame.buffer_mut());
+        if let Some(at) = self.draw_pane(frame, body, &shown, false, layout)
             && !self.router.modal()
         {
             frame.set_cursor_position(at);

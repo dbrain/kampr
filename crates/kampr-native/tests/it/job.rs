@@ -74,6 +74,7 @@ async fn shell() -> (Root, NativeProvider, String) {
             rows: 24,
             env: vec![("PS1".into(), "$ ".into()), ("ENV".into(), "/dev/null".into())],
             cohort: None,
+            workspace: None,
         })
         .await
         .expect("a session");

@@ -331,7 +331,9 @@ impl Manage {
         match action {
             NewWorkspace => Some(self.menu(herd, entry)),
             NewTab => workspace.map(|at| Next::Send(json!({ "op": "tab.create", "at": at }))),
-            RenameTab => tab.map(|at| rename(at, "tab", entry.and_then(|e| e.tab.clone()), Empty::Refuse)),
+            RenameTab => tab
+                .filter(|_| entry.is_some_and(of_herdr))
+                .map(|at| rename(at, "tab", entry.and_then(|e| e.tab.clone()), Empty::Refuse)),
             CloseTab => tab.map(|at| close(at, "tab")),
             RenameWorkspace => workspace.map(|at| {
                 rename(
@@ -373,40 +375,14 @@ impl Manage {
 
     /// Everything the wire carries, in one list, because the keymap has eleven binds and the
     /// node accepts fourteen ops. The rows a node has not answered for are absent.
+    ///
+    /// Kampr's rows come first and keep the plain keys; herdr's are the extra, on the shifted key
+    /// where a node offers both, and every op one makes names herdr, because a node sends an op
+    /// with no target to Kampr.
     fn menu(&self, herd: &Herd, entry: Option<&PaneEntry>) -> Next {
-        let mut rows = Vec::new();
-        let nodes = reachable(herd);
-        if !nodes.is_empty() {
-            rows.push(Row {
-                key: Some('w'),
-                label: "workspace".into(),
-                note: "a new workspace on a machine".into(),
-                next: on_a_node(&nodes, "new workspace on", |node| {
-                    Next::Ask(Ask {
-                        prompt: format!("What is the workspace on {node} called?"),
-                        hint: "enter with nothing typed lets herdr name it".into(),
-                        op: json!({ "op": "workspace.create", "node": node }),
-                        field: "label",
-                        empty: Empty::Omit,
-                    })
-                }),
-            });
-        }
-        if let Some(at) = entry.and_then(|e| e.workspace_id.as_deref()) {
-            rows.push(Row {
-                key: Some('t'),
-                label: "tab".into(),
-                note: "a new tab in this workspace".into(),
-                next: Next::Ask(Ask {
-                    prompt: "What is the tab called?".into(),
-                    hint: "enter with nothing typed lets herdr name it".into(),
-                    // `at` for tab.create is a WORKSPACE id; nodes take a tab id and derive it.
-                    op: json!({ "op": "tab.create", "at": at }),
-                    field: "label",
-                    empty: Empty::Omit,
-                }),
-            });
-        }
+        let mut rows = native(herd, entry);
+        let kampr = kampr_nodes(herd);
+        rows.extend(self.kampr_rows(&kampr, entry));
         if let Some(at) = entry {
             rows.push(Row {
                 key: Some('s'),
@@ -431,25 +407,64 @@ impl Manage {
                 },
             });
         }
-        if let Some(row) = self.agents(entry) {
+        let extra = |c: char| match kampr.is_empty() {
+            true => c,
+            false => c.to_ascii_uppercase(),
+        };
+        let nodes = reachable(herd);
+        if !nodes.is_empty() {
+            rows.push(Row {
+                key: Some(extra('w')),
+                label: "herdr workspace".into(),
+                note: "a new herdr workspace on a machine".into(),
+                next: on_a_node(&nodes, "new herdr workspace on", |node| {
+                    Next::Ask(Ask {
+                        prompt: format!("What is the herdr workspace on {node} called?"),
+                        hint: "enter with nothing typed lets herdr name it".into(),
+                        op: json!({ "op": "workspace.create", "node": node, "provider": "herdr" }),
+                        field: "label",
+                        empty: Empty::Omit,
+                    })
+                }),
+            });
+        }
+        if let Some(at) = entry
+            .filter(|e| of_herdr(e))
+            .and_then(|e| e.workspace_id.as_deref())
+        {
+            rows.push(Row {
+                key: Some(extra('t')),
+                label: "herdr tab".into(),
+                note: "a new tab in this herdr workspace".into(),
+                next: Next::Ask(Ask {
+                    prompt: "What is the tab called?".into(),
+                    hint: "enter with nothing typed lets herdr name it".into(),
+                    // `at` for tab.create is a WORKSPACE id; nodes take a tab id and derive it.
+                    op: json!({ "op": "tab.create", "at": at, "provider": "herdr" }),
+                    field: "label",
+                    empty: Empty::Omit,
+                }),
+            });
+        }
+        if let Some(mut row) = self.agents(entry) {
+            row.key = Some(extra('a'));
             rows.push(row);
         }
         if let Some(next) = self.worktrees(herd) {
             rows.push(Row {
-                key: Some('g'),
-                label: "worktree".into(),
-                note: "a git worktree, made or opened".into(),
+                key: Some(extra('g')),
+                label: "herdr worktree".into(),
+                note: "a git worktree in a herdr workspace, made or opened".into(),
                 next,
             });
         }
-        rows.extend(native(herd, entry));
-        if let Some(row) = self.sessions() {
+        if let Some(row) = self.sessions(herd) {
             rows.push(row);
         }
         if let Some(row) = self.layouts(entry) {
             rows.push(row);
         }
-        if let Some(at) = entry.map(|e| e.id.as_str()) {
+        if let Some(at) = entry.filter(|e| of_herdr(e)).map(|e| e.id.as_str()) {
             rows.push(Row {
                 key: Some('f'),
                 label: "focus".into(),
@@ -462,6 +477,8 @@ impl Manage {
                 note: "give this pane the tab, at the desk".into(),
                 next: zoom(at),
             });
+        }
+        if let Some(at) = entry.map(|e| e.id.as_str()) {
             rows.push(Row {
                 key: Some('r'),
                 label: "size".into(),
@@ -475,11 +492,142 @@ impl Manage {
         }
     }
 
+    /// Workspaces, tabs, agents and worktrees as Kampr sessions. An op here names no provider: the
+    /// node sends one with no target, or a Kampr target, to Kampr.
+    fn kampr_rows(&self, nodes: &[&NodeEntry], entry: Option<&PaneEntry>) -> Vec<Row> {
+        let mut rows = Vec::new();
+        if nodes.is_empty() {
+            return rows;
+        }
+        let kept = entry.filter(|e| e.provider.as_deref() == Some("native"));
+        if let Some(row) = self.kampr_agents(nodes, kept) {
+            rows.push(row);
+        }
+        rows.push(Row {
+            key: Some('w'),
+            label: "workspace".into(),
+            note: "a new Kampr workspace, with a session in it".into(),
+            next: on_a_node(nodes, "new workspace on", |node| {
+                Next::Ask(Ask {
+                    prompt: format!("What is the workspace on {node} called?"),
+                    hint: "enter with nothing typed names it after its directory".into(),
+                    op: json!({ "op": "workspace.create", "node": node }),
+                    field: "label",
+                    empty: Empty::Omit,
+                })
+            }),
+        });
+        if let Some(at) = kept.and_then(|e| e.workspace_id.as_deref()) {
+            rows.push(Row {
+                key: Some('t'),
+                label: "tab".into(),
+                note: "another session, as a new tab in this workspace".into(),
+                next: Next::Ask(Ask {
+                    prompt: "What runs in the new tab?".into(),
+                    hint: "enter with nothing typed starts the login shell".into(),
+                    op: json!({ "op": "tab.create", "at": at }),
+                    field: "command",
+                    empty: Empty::Omit,
+                }),
+            });
+        }
+        let home = entry
+            .filter(|e| nodes.iter().any(|n| n.id == e.node_id))
+            .map(|e| e.node_id.clone());
+        let worktree = |node: &str| {
+            let mut create = json!({ "op": "worktree.create", "node": node });
+            match (kept, entry.and_then(|e| e.cwd.as_deref())) {
+                (Some(kept), _) => create["at"] = json!(kept.id),
+                (None, Some(cwd)) => create["cwd"] = json!(cwd),
+                (None, None) => {}
+            }
+            Next::Pick {
+                title: "worktree".into(),
+                rows: vec![
+                    Row {
+                        key: Some('c'),
+                        label: "create".into(),
+                        note: "a new branch, and a workspace on it".into(),
+                        next: Next::Ask(Ask {
+                            prompt: format!("Which branch is the worktree on {node} for?"),
+                            hint: "made from the repository this pane is in".into(),
+                            op: create,
+                            field: "branch",
+                            empty: Empty::Refuse,
+                        }),
+                    },
+                    Row {
+                        key: Some('o'),
+                        label: "open".into(),
+                        note: "a worktree that is already on disk".into(),
+                        next: Next::Ask(Ask {
+                            prompt: format!("Which path on {node}?"),
+                            hint: "the worktree's own directory, not the repository's".into(),
+                            op: json!({ "op": "worktree.open", "node": node }),
+                            field: "path",
+                            empty: Empty::Refuse,
+                        }),
+                    },
+                ],
+            }
+        };
+        rows.push(Row {
+            key: Some('g'),
+            label: "worktree".into(),
+            note: "a git worktree, made or opened, as a Kampr workspace".into(),
+            next: match &home {
+                Some(node) => worktree(node),
+                None => on_a_node(nodes, "worktree on", worktree),
+            },
+        });
+        rows
+    }
+
+    /// The harnesses the node can run as a Kampr session. Beside a Kampr session they split it,
+    /// as herdr's start in the pane they are given; anywhere else they stand alone.
+    fn kampr_agents(&self, nodes: &[&NodeEntry], kept: Option<&PaneEntry>) -> Option<Row> {
+        let node = self.caps.node.as_str();
+        if self.caps.native_agents.is_empty() || !nodes.iter().any(|n| n.id == node) {
+            return None;
+        }
+        let at = kept.filter(|e| e.node_id == node).map(|e| e.id.clone());
+        let rows = self
+            .caps
+            .native_agents
+            .iter()
+            .enumerate()
+            .map(|(i, kind)| {
+                let mut op = json!({ "op": "agent.start", "node": node, "kind": kind, "args": [] });
+                if let Some(at) = &at {
+                    op["at"] = json!(at);
+                }
+                Row {
+                    key: digit(i),
+                    label: kind.clone(),
+                    note: String::new(),
+                    next: Next::Send(op),
+                }
+            })
+            .collect();
+        Some(Row {
+            key: Some('a'),
+            label: "agent".into(),
+            note: match at {
+                Some(_) => "a harness, as a Kampr session beside this one".into(),
+                None => "a harness, as a Kampr session".into(),
+            },
+            next: Next::Pick {
+                title: "agent".into(),
+                rows,
+            },
+        })
+    }
+
     /// **The kinds are the node's**, and a peer's harnesses are its own — `caps` answers for one
     /// node, so offering its list against another node's pane would be a guess wearing an
     /// answer's clothes.
     fn agents(&self, entry: Option<&PaneEntry>) -> Option<Row> {
-        let entry = entry?;
+        let entry = entry.filter(|e| of_herdr(e))?;
         if self.caps.agent_kinds.is_empty() || entry.node_id != self.caps.node {
             return None;
         }
@@ -493,18 +641,20 @@ impl Manage {
                 key: digit(i),
                 label: kind.clone(),
                 note: String::new(),
-                next: Next::Send(json!({ "op": "agent.start", "at": at, "kind": kind, "args": [] })),
+                next: Next::Send(
+                    json!({ "op": "agent.start", "at": at, "kind": kind, "args": [], "provider": "herdr" }),
+                ),
             })
             .collect();
         Some(Row {
             key: Some('a'),
-            label: "agent".into(),
+            label: "herdr agent".into(),
             note: format!(
-                "{} kinds this node named, in this pane",
+                "{} kinds this node's herdr named, in this pane",
                 self.caps.agent_kinds.len()
             ),
             next: Next::Pick {
-                title: "agent".into(),
+                title: "herdr agent".into(),
                 rows,
             },
         })
@@ -513,8 +663,11 @@ impl Manage {
     /// A **stopped** session can be started and a running one stopped. Neither is offered as
     /// somewhere to put a workspace or a pane: a session that is running and not `served` never
     /// joins this herd, so anything made in it would be invisible here for ever.
-    fn sessions(&self) -> Option<Row> {
+    fn sessions(&self, herd: &Herd) -> Option<Row> {
         if self.caps.sessions.is_empty() || self.caps.node.is_empty() {
+            return None;
+        }
+        if herd.nodes.iter().any(|n| n.id == self.caps.node && !herdr_on(n)) {
             return None;
         }
         let node = self.caps.node.as_str();
@@ -539,9 +692,11 @@ impl Manage {
                              before it answers (#241), so what it says has already happened."
                                 .into(),
                         ],
-                        op: json!({ "op": "session.stop", "node": node, "name": name }),
+                        op: json!({ "op": "session.stop", "node": node, "name": name, "provider": "herdr" }),
                     },
-                    false => Next::Send(json!({ "op": "session.create", "node": node, "name": name })),
+                    false => Next::Send(
+                        json!({ "op": "session.create", "node": node, "name": name, "provider": "herdr" }),
+                    ),
                 };
                 Row {
                     key: digit(i),
@@ -558,7 +713,7 @@ impl Manage {
             next: Next::Ask(Ask {
                 prompt: "What is the new session called?".into(),
                 hint: "letters, digits, dash and underscore — it reaches a command line".into(),
-                op: json!({ "op": "session.create", "node": node }),
+                op: json!({ "op": "session.create", "node": node, "provider": "herdr" }),
                 field: "name",
                 empty: Empty::Refuse,
             }),
@@ -577,24 +732,41 @@ impl Manage {
     /// The tree is opaque to this client: an export is held exactly as it arrived, and
     /// `layout.apply` takes the whole reply or just its `root` — the node accepts either.
     fn layouts(&self, entry: Option<&PaneEntry>) -> Option<Row> {
-        let at = entry?.tab_id.as_deref()?;
+        let entry = entry?;
+        let at = entry.tab_id.as_deref()?;
+        let herdr = of_herdr(entry);
+        let named = |mut op: Value| {
+            if herdr {
+                op["provider"] = json!("herdr");
+            }
+            op
+        };
         let mut rows = vec![Row {
             key: Some('e'),
             label: "export".into(),
             note: "hold this tab's split tree".into(),
-            next: Next::Send(json!({ "op": "layout.export", "at": at })),
+            next: Next::Send(named(json!({ "op": "layout.export", "at": at }))),
         }];
         if let Some(layout) = &self.exported {
             rows.push(Row {
                 key: Some('a'),
                 label: "apply".into(),
-                note: "put the held tree on this tab".into(),
+                note: match herdr {
+                    true => "put the held tree on this tab".into(),
+                    false => "start the held tree as a new tab".into(),
+                },
                 next: Next::Confirm {
-                    lines: vec![
-                        format!("Lay {at} out as the held tree?"),
-                        "Every pane in the tab is moved and resized, here and at the desk.".into(),
-                    ],
-                    op: json!({ "op": "layout.apply", "at": at, "layout": layout }),
+                    lines: match herdr {
+                        true => vec![
+                            format!("Lay {at} out as the held tree?"),
+                            "Every pane in the tab is moved and resized, here and at the desk.".into(),
+                        ],
+                        false => vec![
+                            "Start the held tree as a new tab?".into(),
+                            "A session is started for every pane in it.".into(),
+                        ],
+                    },
+                    op: named(json!({ "op": "layout.apply", "at": at, "layout": layout })),
                 },
             });
         }
@@ -627,7 +799,7 @@ impl Manage {
                     next: Next::Ask(Ask {
                         prompt: format!("Which branch is the worktree on {node} for?"),
                         hint: "herdr branches it off the repository's default base".into(),
-                        op: json!({ "op": "worktree.create", "node": node }),
+                        op: json!({ "op": "worktree.create", "node": node, "provider": "herdr" }),
                         field: "branch",
                         empty: Empty::Refuse,
                     }),
@@ -639,7 +811,7 @@ impl Manage {
                     next: Next::Ask(Ask {
                         prompt: format!("Which path on {node}?"),
                         hint: "the worktree's own directory, not the repository's".into(),
-                        op: json!({ "op": "worktree.open", "node": node }),
+                        op: json!({ "op": "worktree.open", "node": node, "provider": "herdr" }),
                         field: "path",
                         empty: Empty::Refuse,
                     }),
@@ -932,7 +1104,8 @@ pub const MATCH_MIN_ROWS: u16 = 24;
 /// which sends nothing and is `prefix m`. A pane that has it armed never opens this menu at all.
 fn pane_rows(entry: &PaneEntry, matched: Matched) -> Vec<Row> {
     let at = entry.id.as_str();
-    vec![
+    let herdr = of_herdr(entry);
+    let rows = vec![
         Row {
             key: Some('r'),
             label: "rename".into(),
@@ -975,7 +1148,10 @@ fn pane_rows(entry: &PaneEntry, matched: Matched) -> Vec<Row> {
             note: "end it, and whatever it is running".into(),
             next: close(at, "pane"),
         },
-    ]
+    ];
+    rows.into_iter()
+        .filter(|r| herdr || !matches!(r.label.as_str(), "focus" | "zoom"))
+        .collect()
 }
 
 /// A pane id carries its workspace and **never its tab**, so a pane whose entry has no `tab_id`
@@ -989,7 +1165,10 @@ fn tab_rows(entry: &PaneEntry) -> Vec<Row> {
             note: "another tab in this workspace".into(),
             next: Next::Ask(Ask {
                 prompt: "What is the tab called?".into(),
-                hint: "enter with nothing typed lets herdr name it".into(),
+                hint: match of_herdr(entry) {
+                    true => "enter with nothing typed lets herdr name it".into(),
+                    false => "enter with nothing typed numbers it".into(),
+                },
                 op: json!({ "op": "tab.create", "at": at }),
                 field: "label",
                 empty: Empty::Omit,
@@ -999,12 +1178,14 @@ fn tab_rows(entry: &PaneEntry) -> Vec<Row> {
     let Some(at) = entry.tab_id.as_deref() else {
         return rows;
     };
-    rows.push(Row {
-        key: Some('r'),
-        label: "rename".into(),
-        note: "a tab needs a name".into(),
-        next: rename(at, "tab", entry.tab.clone(), Empty::Refuse),
-    });
+    if of_herdr(entry) {
+        rows.push(Row {
+            key: Some('r'),
+            label: "rename".into(),
+            note: "a tab needs a name".into(),
+            next: rename(at, "tab", entry.tab.clone(), Empty::Refuse),
+        });
+    }
     rows.push(Row {
         key: Some('c'),
         label: "close".into(),
@@ -1177,22 +1358,33 @@ fn digit(i: usize) -> Option<char> {
 fn reachable(herd: &Herd) -> Vec<&NodeEntry> {
     herd.nodes
         .iter()
-        .filter(|n| n.online || n.kind == "local")
+        .filter(|n| herdr_on(n) && (n.online || n.kind == "local"))
         .collect()
+}
+
+fn kampr_nodes(herd: &Herd) -> Vec<&NodeEntry> {
+    herd.nodes
+        .iter()
+        .filter(|n| n.is_reachable() && n.native == Some(true))
+        .collect()
+}
+
+pub(crate) fn herdr_on(node: &NodeEntry) -> bool {
+    node.herdr != Some(false)
+}
+
+fn of_herdr(entry: &PaneEntry) -> bool {
+    entry.provider.is_none()
 }
 
 fn native(herd: &Herd, entry: Option<&PaneEntry>) -> Vec<Row> {
     let mut rows = Vec::new();
-    let nodes: Vec<&NodeEntry> = herd
-        .nodes
-        .iter()
-        .filter(|n| n.is_reachable() && n.native == Some(true))
-        .collect();
+    let nodes = kampr_nodes(herd);
     if !nodes.is_empty() {
         rows.push(Row {
             key: Some('p'),
             label: "kampr".into(),
-            note: "a session Kampr keeps, herdr or not".into(),
+            note: "a session Kampr keeps".into(),
             next: on_a_node(&nodes, "new kampr session on", |node| {
                 Next::Ask(Ask {
                     prompt: format!("What runs in the new session on {node}?"),
@@ -1214,7 +1406,8 @@ fn native(herd: &Herd, entry: Option<&PaneEntry>) -> Vec<Row> {
             note: "delete this ended session and its log".into(),
             next: Next::Send(json!({ "op": "native.forget", "at": entry.id })),
         });
-    } else if entry.detached == Some(true) {
+    } else if entry.detached == Some(true) && herd.nodes.iter().any(|n| n.id == entry.node_id && herdr_on(n))
+    {
         rows.push(Row {
             key: Some('h'),
             label: "on desk".into(),
@@ -1321,4 +1514,51 @@ fn title_of(action: Action) -> String {
         _ => "manage",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kampr_core::provider::PaneInfo;
+
+    /// Focus and zoom are herdr's desk; a session Kampr keeps has neither, and the node refuses
+    /// both on one.
+    #[test]
+    fn a_kampr_sessions_pane_menu_offers_nothing_only_herdr_can_do() {
+        let info = PaneInfo {
+            pane_id: "n:s1".into(),
+            ..PaneInfo::default()
+        };
+        let mut entry = PaneEntry::new("n", &info, false);
+        let labels = |entry: &PaneEntry| -> Vec<String> {
+            pane_rows(entry, Matched::default())
+                .into_iter()
+                .map(|r| r.label)
+                .collect()
+        };
+        assert!(labels(&entry).contains(&"zoom".to_string()));
+        entry.provider = Some("native".into());
+        let kept = labels(&entry);
+        assert!(!kept.iter().any(|l| l == "focus" || l == "zoom"), "{kept:?}");
+        assert!(kept.iter().any(|l| l == "close"), "{kept:?}");
+    }
+
+    /// A Kampr tab's name is its number, so the node refuses a rename of one; the menu offers none.
+    #[test]
+    fn a_kampr_tab_offers_no_rename_and_says_nothing_of_herdr() {
+        let info = PaneInfo {
+            pane_id: "n:s1".into(),
+            tab_id: Some("k:s1".into()),
+            workspace_id: Some("kw:main".into()),
+            ..PaneInfo::default()
+        };
+        let mut entry = PaneEntry::new("n", &info, false);
+        entry.provider = Some("native".into());
+        let rows = tab_rows(&entry);
+        let labels: Vec<&str> = rows.iter().map(|r| r.label.as_str()).collect();
+        assert!(!labels.contains(&"rename"), "{labels:?}");
+        assert!(labels.contains(&"close"), "{labels:?}");
+        let said = format!("{:?}", rows.iter().map(|r| &r.next).collect::<Vec<_>>());
+        assert!(!said.contains("herdr"), "{said}");
+    }
 }

@@ -69,6 +69,12 @@ pub enum Row {
         subtitle: Option<String>,
         pane: String,
     },
+    /// Only in a workspace with more than one tab: one tab is the workspace, and saying so again is
+    /// a row spent on nothing.
+    Tab {
+        name: String,
+        pane: String,
+    },
     Pane {
         name: String,
         status: AgentStatus,
@@ -83,7 +89,7 @@ pub enum Row {
 impl Row {
     pub fn pane(&self) -> Option<&str> {
         match self {
-            Self::Workspace { pane, .. } | Self::Pane { pane, .. } => Some(pane),
+            Self::Workspace { pane, .. } | Self::Tab { pane, .. } | Self::Pane { pane, .. } => Some(pane),
             _ => None,
         }
     }
@@ -246,20 +252,27 @@ pub fn spaces(herd: &Herd, questions: &impl Fn(&str) -> Option<String>) -> Vec<R
         let (mut live, remembered): (Vec<&PaneEntry>, Vec<&PaneEntry>) = group
             .panes
             .iter()
-            .partition(|p| node.online || p.provider.as_deref() == Some("native"));
+            .partition(|p| node.online || !crate::manage::herdr_on(node) || p.provider.is_some());
         // `groups()` ranks by status first, and a workspace whose panes are not all in one state
         // was drawn as a header per run of them. Priority is the other order; this one is shape.
-        live.sort_by(|a, b| space(a).cmp(space(b)).then_with(|| a.id.cmp(&b.id)));
-        if !node.online {
+        live.sort_by(|a, b| {
+            space(a)
+                .cmp(space(b))
+                .then_with(|| a.tab_id.cmp(&b.tab_id))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        if !node.online && crate::manage::herdr_on(node) {
             rows.push(Row::Absence(match remembered.is_empty() {
                 true => "no herdr".to_string(),
                 false => format!("no herdr · {}", absence(&remembered)),
             }));
         }
         let mut workspace = None;
-        for pane in live {
-            let space = space(pane);
-            if workspace != Some(space) {
+        let mut tab = None;
+        for pane in live.iter().copied() {
+            let here = space(pane);
+            if workspace != Some(here) {
+                tab = None;
                 rows.push(Row::Workspace {
                     subtitle: pane
                         .workspace
@@ -267,10 +280,27 @@ pub fn spaces(herd: &Herd, questions: &impl Fn(&str) -> Option<String>) -> Vec<R
                         .and(pane.cwd.as_deref())
                         .map(short)
                         .map(str::to_string),
-                    name: space.to_string(),
+                    name: here.to_string(),
                     pane: pane.id.clone(),
                 });
-                workspace = Some(space);
+                workspace = Some(here);
+            }
+            let tabs = live
+                .iter()
+                .filter(|p| space(p) == here)
+                .filter_map(|p| p.tab_id.as_deref())
+                .collect::<std::collections::BTreeSet<_>>()
+                .len();
+            if tabs > 1 && tab != pane.tab_id.as_deref() {
+                tab = pane.tab_id.as_deref();
+                rows.push(Row::Tab {
+                    name: pane
+                        .tab
+                        .clone()
+                        .or_else(|| pane.tab_id.clone())
+                        .unwrap_or_default(),
+                    pane: pane.id.clone(),
+                });
             }
             push_pane(&mut rows, pane, None, true, questions);
         }
@@ -506,6 +536,11 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
                 .map(|sub| (format!("{} ", elide(sub, 12)), base.fg(t.mute))),
             width,
             base,
+        ))
+        .style(base),
+        Row::Tab { name, .. } => Line::from(Span::styled(
+            format!("   ▸ {}", elide(name, width.saturating_sub(5) as usize)),
+            lift(base.fg(t.mute)),
         ))
         .style(base),
         Row::Pane {

@@ -31,6 +31,8 @@ pub struct Spec {
     pub created_unix: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cohort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<String>,
 }
 
 impl Spec {
@@ -46,6 +48,7 @@ impl Spec {
             log_cap: None,
             created_unix: now_unix(),
             cohort: None,
+            workspace: None,
         }
     }
 }

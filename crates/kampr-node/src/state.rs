@@ -162,15 +162,38 @@ impl Node {
 
     pub async fn caps(&self) -> serde_json::Value {
         let primary = self.sessions.primary();
-        let served: Vec<String> = self.sessions.all().iter().map(|s| s.name.clone()).collect();
-        self.caps
-            .get(
-                &self.config.node_id,
-                &primary.herdr,
-                &self.config.herdr.binary,
-                &served,
-            )
-            .await
+        let mut caps = match primary.provider.enabled() {
+            false => serde_json::json!({
+                "t": "caps", "node": self.config.node_id, "agent_kinds": [], "sessions": [],
+            }),
+            true => {
+                let served: Vec<String> = self.sessions.all().iter().map(|s| s.name.clone()).collect();
+                self.caps
+                    .get(
+                        &self.config.node_id,
+                        &primary.herdr,
+                        &self.config.herdr.binary,
+                        &served,
+                    )
+                    .await
+            }
+        };
+        let native: Vec<String> = match primary.native {
+            Some(_) => crate::structure::native_agents(&self.config)
+                .into_iter()
+                .map(|(kind, _)| kind)
+                .collect(),
+            None => Vec::new(),
+        };
+        let mut kinds: Vec<serde_json::Value> = caps["agent_kinds"].as_array().cloned().unwrap_or_default();
+        for kind in &native {
+            if !kinds.iter().any(|k| k == kind) {
+                kinds.push(serde_json::json!(kind));
+            }
+        }
+        caps["agent_kinds"] = serde_json::json!(kinds);
+        caps["native_agents"] = serde_json::json!(native);
+        caps
     }
 
     /// The adapters this node has, which is what `caps.conversation` and every pane's
@@ -722,6 +745,7 @@ async fn build_model(
             reachable: Some(true),
             native: session.native.as_ref().map(|_| true),
             muffit: session.muffit.as_ref().map(|_| true),
+            herdr: Some(session.provider.enabled()),
             // **Not a call of its own.** The provider's sweep round-trips this herdr already, so
             // the number is read rather than asked for — one `ping` per session per rebuild was
             // 19/min with four panes busy, for a figure the node was in a position to know

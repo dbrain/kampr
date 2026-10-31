@@ -114,6 +114,7 @@ impl FleetProvider {
                 rows: geometry.rows,
                 env: path.map(|p| ("PATH".to_string(), p)).into_iter().collect(),
                 cohort: Some(cohort.to_string()),
+                workspace: None,
             })
             .await?;
         let session = native

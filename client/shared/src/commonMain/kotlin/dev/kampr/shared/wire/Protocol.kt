@@ -137,7 +137,12 @@ data class NodeInfo(
     // Whether this node can make muffit sessions (docs/18). Null is a node too old to say, for
     // which only the connected node's `hello.caps.muffit` can answer.
     val muffit: Boolean? = null,
+    // False is a node with herdr off, by config or by herdr not being installed there. Null is an
+    // older node, for which herdr is as on as it always was.
+    val herdr: Boolean? = null,
 ) {
+    val herdrOn: Boolean get() = herdr != false
+
     // The fallback is not `online`. A local node is answering by construction — it is the socket
     // this device is talking over, and a node that could not answer would not be in this frame —
     // so its *herdr* being down is no evidence at all about the node. Reading `online` there
@@ -208,7 +213,17 @@ data class PaneInfo(
     val detached: Boolean = false,
     @SerialName("size_holder") val sizeHolder: String? = null,
     val exited: NativeExit? = null,
+    // Where the pane sits in its tab's split tree (#616), herdr's tab or a group of Kampr sessions
+    // split from one another; the tree is rebuilt from every pane's path in `tileTree`.
+    val tile: Tile? = null,
 )
+
+@Serializable
+data class Tile(val group: String, val path: List<Cut> = emptyList())
+
+// `split` is herdr's word, `right` or `down`; `ratio` is the first half's share in thousandths.
+@Serializable
+data class Cut(val split: String, val ratio: Int, val second: Boolean = false)
 
 @Serializable
 data class NativeExit(val code: Int? = null, val signal: Int? = null)
@@ -595,10 +610,13 @@ sealed interface ServerMsg {
     // Somebody else took a pane this session was holding at a view's size (ADR 0013).
     data class HoldLost(val pane: String) : ServerMsg
 
+    // `nativeAgents` is what `agent.start` can run as a Kampr session; null is a node too old to
+    // start one without herdr.
     data class NodeCaps(
         val node: String,
         val agentKinds: List<String>,
         val sessions: List<SessionInfo>,
+        val nativeAgents: List<String>? = null,
     ) : ServerMsg
 
     // `node` is what the node is about when it is about a node rather than a pane, and it is the

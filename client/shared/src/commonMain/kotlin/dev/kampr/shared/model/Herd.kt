@@ -56,8 +56,12 @@ data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>) {
 fun Herd.createdPane(id: String): PaneInfo? {
     panes.firstOrNull { it.id == id }?.let { return it }
     return panes.firstOrNull { it.tabId == id }
-        ?: panes.firstOrNull { (it.workspaceId ?: workspaceIdOf(it.id)) == id }
+        ?: panes.firstOrNull { it.workspaceKey == id }
 }
+
+// Herdr's workspace is in its pane ids and a Kampr session's is not: one in no workspace has none,
+// rather than the `<node>/n` a herdr id's grammar would make of it.
+val PaneInfo.workspaceKey: String? get() = workspaceId ?: if (provider == null) workspaceIdOf(id) else null
 
 enum class AgentStatus { Idle, Working, Blocked, Done, Unknown }
 
@@ -88,7 +92,7 @@ private val paneOrder = compareBy<PaneInfo>(
 // a pane that went working -> idle while *unfocused*: an unread marker, and a finished turn
 // nobody has seen wants the operator more than one still running does. Kept in step with
 // `sidebar.rs`'s `rank`, which PaneOrderTest and its Rust twin both pin.
-private fun statusRank(status: AgentStatus): Int = when (status) {
+internal fun statusRank(status: AgentStatus): Int = when (status) {
     AgentStatus.Blocked -> 0
     AgentStatus.Done -> 1
     AgentStatus.Working -> 2

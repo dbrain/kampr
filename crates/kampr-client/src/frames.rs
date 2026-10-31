@@ -129,6 +129,8 @@ pub struct PendingOption {
 pub struct NodeCaps {
     pub node: String,
     pub agent_kinds: Vec<String>,
+    /// The harnesses `agent.start` can run as a Kampr session, herdr or not.
+    pub native_agents: Vec<String>,
     pub sessions: Vec<SessionCaps>,
 }
 

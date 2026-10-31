@@ -6,6 +6,10 @@ import androidx.compose.ui.unit.dp
 
 const val MAX_CELLS = 4
 
+// A tab opened whole may hold more than the operator would put together by hand; it is drawn as its
+// own split tree, so the grid's limit is not its limit.
+const val MAX_TAB_CELLS = 8
+
 // A cell narrower than this stops being a terminal and starts being a column of hyphens. Two of
 // them plus the gap is the whole test for whether the window can hold a second column.
 val MIN_CELL_WIDTH = 380.dp

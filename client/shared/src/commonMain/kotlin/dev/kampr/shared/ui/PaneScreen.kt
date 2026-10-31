@@ -174,6 +174,8 @@ fun PaneScreenMobile(
     onBack: () -> Unit,
     onView: (PaneView) -> Unit,
     modifier: Modifier = Modifier,
+    tab: List<PaneInfo> = emptyList(),
+    onTab: (String) -> Unit = {},
 ) {
     val tokens = Kampr.tokens
     val density = LocalDensity.current
@@ -260,6 +262,7 @@ fun PaneScreenMobile(
                     if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
                 }
             }
+            TabStrip(tab, pane.id, onTab, onSideBySide = null, Modifier.absolutePadding(left = safe.left, right = safe.right))
             gone?.let { GoneStrip(it, Modifier.fillMaxWidth()) }
         }
 
@@ -378,6 +381,9 @@ fun PaneScreenDesktop(
     gone: PaneGone? = null,
     onView: (PaneView) -> Unit,
     modifier: Modifier = Modifier,
+    tab: List<PaneInfo> = emptyList(),
+    onTab: (String) -> Unit = {},
+    onSideBySide: (() -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
     val density = LocalDensity.current
@@ -458,6 +464,7 @@ fun PaneScreenDesktop(
                 NewAction(pane.id, target = LANDSCAPE_TOUCH)
                 PaneManageAction(pane.id, target = LANDSCAPE_TOUCH)
             }
+            TabStrip(tab, pane.id, onTab, onSideBySide, Modifier.absolutePadding(left = safe.left, right = safe.right))
             gone?.let { GoneStrip(it, Modifier.fillMaxWidth()) }
         }
 

@@ -32,6 +32,7 @@ import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.NodeGroup
 import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.groups
+import dev.kampr.shared.model.sections
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
 
@@ -97,8 +98,11 @@ fun HerdPortrait(
                             if (group.panes.isEmpty()) {
                                 NodeQuiet(group.node, Modifier.padding(start = 6.dp, bottom = 4.dp))
                             }
-                            for (pane in group.terminals) {
-                                PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                            for (section in group.sections) {
+                                section.heading?.let { WorkspaceHeading(it, Modifier.padding(start = 6.dp, top = 6.dp)) }
+                                for (pane in section.panes) {
+                                    PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                }
                             }
                             if (group.background.isNotEmpty()) {
                                 BackgroundHeading(Modifier.padding(start = 6.dp, top = 6.dp))
@@ -186,8 +190,11 @@ fun HerdLandscape(
                                         if (group.panes.isEmpty()) {
                                             NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
                                         }
-                                        for (pane in group.terminals) {
-                                            PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                        for (section in group.sections) {
+                                            section.heading?.let { WorkspaceHeading(it, Modifier.padding(start = 8.dp, top = 6.dp)) }
+                                            for (pane in section.panes) {
+                                                PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
+                                            }
                                         }
                                         if (group.background.isNotEmpty()) {
                                             BackgroundHeading(Modifier.padding(start = 8.dp, top = 6.dp))
@@ -326,8 +333,11 @@ fun HerdSidebar(
                             if (group.panes.isEmpty()) {
                                 NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
                             }
-                            for (pane in group.terminals) {
-                                PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+                            for (section in group.sections) {
+                                section.heading?.let { WorkspaceHeading(it, Modifier.padding(start = 8.dp, top = 8.dp, bottom = 2.dp)) }
+                                for (pane in section.panes) {
+                                    PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
+                                }
                             }
                             if (group.background.isNotEmpty()) {
                                 BackgroundHeading(Modifier.padding(start = 8.dp, top = 8.dp, bottom = 2.dp))

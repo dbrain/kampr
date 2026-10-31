@@ -150,6 +150,9 @@ pub struct HerdrConfig {
     /// the session's, not a pane of its own: it is left out of the herd and told the session's
     /// status instead (docs/17 §4).
     pub desk: Option<DeskHosts>,
+    /// Off is a node with no herdr to serve: nothing connects, sweeps or reports on its behalf,
+    /// and its herd reads as empty rather than down.
+    pub enabled: bool,
 }
 
 impl Default for HerdrConfig {
@@ -168,6 +171,7 @@ impl Default for HerdrConfig {
             send_argv: false,
             primary: true,
             desk: None,
+            enabled: true,
         }
     }
 }
@@ -413,9 +417,18 @@ impl HerdrProvider {
             resized: watch::channel(0).0,
             stream_fault: Mutex::new(None),
         });
-        let topology_task = tokio::spawn(topology(inner.clone()));
-        let liveness_task = tokio::spawn(liveness(inner.clone()));
-        let desk_task = tokio::spawn(desk(inner.clone()));
+        let (topology_task, liveness_task, desk_task) = match inner.config.enabled {
+            true => (
+                tokio::spawn(topology(inner.clone())),
+                tokio::spawn(liveness(inner.clone())),
+                tokio::spawn(desk(inner.clone())),
+            ),
+            false => (
+                tokio::spawn(async {}),
+                tokio::spawn(async {}),
+                tokio::spawn(async {}),
+            ),
+        };
         Self {
             inner,
             topology_task,
@@ -487,6 +500,10 @@ impl HerdrProvider {
     /// deliberate call from a path that knows this node set one.
     pub async fn restore_desk(&self) {
         self.inner.desk_agents.restore(&self.inner.herdr).await;
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.inner.config.enabled
     }
 
     pub fn health(&self) -> Health {

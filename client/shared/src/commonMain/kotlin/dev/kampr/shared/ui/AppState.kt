@@ -14,6 +14,7 @@ import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.model.newCohortId
 import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.readDone
+import dev.kampr.shared.model.tabOf
 import dev.kampr.shared.model.unreadDone
 import dev.kampr.shared.net.AttachmentApi
 import dev.kampr.shared.net.AuthApi
@@ -752,7 +753,17 @@ class AppState(
             openPane(pane.id)
             return
         }
-        mosaicSeed = MosaicSeed(listOf(from, pane.id), wanted.stacked)
+        val tab = herd.tabOf(pane.id).map { it.id }
+        mosaicSeed = if (from in tab) MosaicSeed(tab, false) else MosaicSeed(listOf(from, pane.id), wanted.stacked)
+        go(Screen.Mosaic)
+    }
+
+    // A tab whole, drawn as it is split. Only where there is room for it: a phone flips between the
+    // tab's panes instead.
+    fun openTab(paneId: String) {
+        val tab = store.herd.value.tabOf(paneId).map { it.id }
+        if (tab.size < 2) return
+        mosaicSeed = MosaicSeed(tab, false)
         go(Screen.Mosaic)
     }
 

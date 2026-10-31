@@ -181,6 +181,11 @@ pub struct NodeEntry {
     /// addressed at it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub muffit: Option<bool>,
+    /// `Some(false)` is a node with herdr off, by its config or by herdr not being installed:
+    /// nothing herdr-shaped is offered on it and nothing says herdr is missing. `None` is an older
+    /// node, for which herdr is as on as it always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rtt_ms: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

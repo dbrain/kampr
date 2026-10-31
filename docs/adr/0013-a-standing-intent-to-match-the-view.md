@@ -193,6 +193,19 @@ A lease the client is told it lost leaves a release already on its way, naming n
 would be the panel's release of whatever stands, which is the hold that took the pane, so the node
 acks it and drops it.
 
+### A native session keeps the last view's size (amended 2026-10-31)
+
+The operator, on a desk browser: *"can a pane hold its last size until a new client attaches? i
+keep switching panes on wasm desktop and it resizes every time"*. The hub's audit log had each pane
+left behind released `MATCH_LINGER_MS` later and claimed again on the way back — every switch was
+the found size put back and the view's size put on again.
+
+So on a **native** session, point 3 no longer applies: letting go of a hold leaves the session at
+the size it was held at, unless a desk's attach is showing it, which is owed its own size as
+before. The next viewer's claim or a new attach is what sizes it next. A `grow` still measures
+against the size found under its own hold. Herdr panes are unchanged: herdr hands an attached desk
+its geometry back itself (#19), and the restore still runs for a headless one.
+
 ### Consent, and not nagging
 
 The panel's confirmation names the consequence before anything is claimed, and it fires on the

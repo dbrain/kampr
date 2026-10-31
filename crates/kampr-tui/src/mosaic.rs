@@ -114,6 +114,21 @@ pub struct Tiling {
 }
 
 impl Tiling {
+    /// Whether `area` is too small for the shape as its keeper lays it out. The operator's own
+    /// ratios are left out: a divider dragged to make one box tiny is a choice, not a small screen.
+    pub fn cramped(&self, area: Rect, shape: &Shape, least: (u16, u16)) -> bool {
+        let plain = Tiling {
+            arrange: self.arrange,
+            ratios: HashMap::new(),
+        };
+        shape.panes() > 1
+            && plain
+                .lay(area, shape)
+                .boxes
+                .iter()
+                .any(|b| b.width < least.0 || b.height < least.1)
+    }
+
     pub fn lay(&self, area: Rect, shape: &Shape) -> Tiles {
         let mut tiles = Tiles {
             boxes: vec![Rect::default(); shape.panes()],

@@ -152,6 +152,7 @@ object Wire {
                 node = obj.str("node").orEmpty(),
                 agentKinds = obj.strings("agent_kinds"),
                 sessions = obj.decodeList<SessionInfo>("sessions"),
+                nativeAgents = obj["native_agents"]?.let { obj.strings("native_agents") },
             )
 
             "error" -> ServerMsg.Failure(

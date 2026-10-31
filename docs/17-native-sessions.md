@@ -250,6 +250,14 @@ cached by content so a scrolling screen re-lays only its new lines). The view se
 
 ### 4. The herdr compat layer: a session hosted in a herdr pane
 
+**Herdr is optional, and off where it is not installed** (2026-10-31). `[herdr] enabled` in
+`config.toml` is absent by default, which is on exactly when the herdr binary resolves or its
+socket exists. Off, the node connects to nothing, runs no session discovery, logs nothing about
+herdr, reports `herdr: false` on its node entry so clients offer nothing of herdr's and say nothing
+about it missing, refuses herdr ops with `herdr_unavailable` ("herdr is off on this node"), and
+`kampr doctor` reports the herdr line as ok. Kampr sessions are the default everywhere; what
+follows is for an operator who also runs herdr.
+
 The desk keeps using herdr. A native session appears there as an ordinary herdr pane whose program
 is a client of the keeper, the same way `tmux attach` would run inside herdr. We do not fork herdr,
 we do not impersonate its socket, and we never touch `herdr-client.sock`.
@@ -328,6 +336,14 @@ with its exit status, until it is forgotten.
 - New manage ops: `native.create {args | command, cwd?, label?, desk?, at?}` (with `desk`, it is also hosted
   beside `at`), `native.desk`, `native.close`, `native.forget` — `session.*` was already herdr's
   named sessions.
+- Kampr sessions have herdr's containers too (2026-10-31). A **workspace** is a name the node
+  keeps in the root's `workspaces.json`, joined by a session's `spec.workspace` id (`kw:<slug>`);
+  a **tab** is one split tree from `layouts.json`, or a session standing alone, named `k:<first
+  session>` and numbered oldest first. `workspace.create`, `tab.create`, `agent.start`,
+  `worktree.create/open`, `layout.export/apply`, and `rename`/`close` on a workspace or tab all work
+  on them, and go to Kampr unless they name something of herdr's or say `provider: "herdr"`
+  (docs/04). Herdr's named sessions are answered by workspaces: a group of sessions on one machine,
+  not another node. `pane.zoom` and `focus` stay herdr's, being about what its desk shows.
 - `kampr new [--desk] -- <cmd>`, `kampr attach <id>`, `kampr ls`.
 - `kampr doctor` gains a `keep` line: sessions kept, units healthy, fd store populated, and any
   keeper still running a binary that has since been replaced (a `USR1` the node has not yet sent).

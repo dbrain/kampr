@@ -145,6 +145,7 @@ fn node() -> NodeEntry {
         reachable: Some(true),
         native: Some(true),
         muffit: Some(true),
+        herdr: Some(true),
         rtt_ms: Some(1.5),
         herdr_version: Some("0.9.1".into()),
         build: Some("0.1.0".into()),

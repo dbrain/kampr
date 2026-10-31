@@ -88,6 +88,13 @@ pub struct ManageOp {
     /// `muffit.create` in a Kampr session running muffit's TUI rather than with no terminal.
     #[serde(default)]
     pub terminal: Option<bool>,
+    /// The workspace a new Kampr session joins, by id or by name; a new name makes one.
+    #[serde(default)]
+    pub workspace: Option<String>,
+    /// `herdr` or `native`, for a structure op that would otherwise go where its `at` points, or
+    /// to Kampr when it points nowhere.
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 
 const MUFFIT_LISTED: Duration = Duration::from_secs(3);
@@ -206,7 +213,7 @@ pub fn native_argv(op: &ManageOp) -> Vec<String> {
     }
 }
 
-fn native_geometry(op: &ManageOp) -> Result<(u16, u16), ManageError> {
+pub(crate) fn native_geometry(op: &ManageOp) -> Result<(u16, u16), ManageError> {
     let (cols, rows) = match (op.cols, op.rows) {
         (Some(cols), Some(rows)) => checked_size(cols, rows)?,
         (None, None) => (MIN_COLS, MIN_ROWS),
@@ -310,6 +317,7 @@ pub struct Manager<'a> {
     pub muffit_tui: &'a str,
     /// Who a native `pane.size` names as the size's holder, `phone:<device>`.
     pub holder: &'a str,
+    pub config: &'a crate::Config,
 }
 
 /// What a manage op produced, and — for a session op — the wait that has to finish before its
@@ -365,6 +373,18 @@ impl Manager<'_> {
                 reply: self.muffit_op(op).await?,
                 settle: None,
             }),
+            _ if self.kampr_structure(op) => Ok(Managed {
+                reply: self.structure_op(op).await?,
+                settle: None,
+            }),
+            "workspace.create" | "tab.create" | "agent.start" | "worktree.create" | "worktree.open"
+            | "layout.export" | "layout.apply"
+                if op.provider.as_deref() == Some("native") =>
+            {
+                Err(ManageError::BadRequest(
+                    "this node does not keep native sessions".into(),
+                ))
+            }
             // Native sessions are this machine's, not herdr's, so none of their ops wake it.
             _ if is_native_op(&op.op) || self.native_target(op).is_some() => Ok(Managed {
                 reply: self.native_op(op).await?,
@@ -502,9 +522,16 @@ impl Manager<'_> {
         Ok(json!({ "pane_id": pane }))
     }
 
-    fn native_target(&self, op: &ManageOp) -> Option<String> {
+    pub(crate) fn native_target(&self, op: &ManageOp) -> Option<String> {
         let local = op.at.as_deref()?.strip_prefix(self.node_id)?.strip_prefix('/')?;
-        local.starts_with(kampr_native::PREFIX).then(|| local.to_string())
+        [
+            kampr_native::PREFIX,
+            kampr_native::WORKSPACE_PREFIX,
+            kampr_native::TAB_PREFIX,
+        ]
+        .iter()
+        .any(|prefix| local.starts_with(prefix))
+        .then(|| local.to_string())
     }
 
     async fn native_op(&self, op: &ManageOp) -> Result<Value, ManageError> {
@@ -531,6 +558,14 @@ impl Manager<'_> {
                     label: op.label.clone(),
                     cols,
                     rows,
+                    workspace: match op.workspace.as_deref().filter(|w| !w.trim().is_empty()) {
+                        Some(wanted) => Some(
+                            native
+                                .resolve_workspace(wanted)
+                                .map_err(|e| ManageError::BadRequest(format!("{e:#}")))?,
+                        ),
+                        None => None,
+                    },
                     ..NewSession::default()
                 })
                 .await
@@ -545,6 +580,9 @@ impl Manager<'_> {
             Some(at) => ManageError::UnknownTarget(at.to_string()),
             None => ManageError::BadRequest(format!("{} needs `at`", op.op)),
         })?;
+        if !pane.starts_with(kampr_native::PREFIX) {
+            return self.container_op(native, op, &pane);
+        }
         if native.session(&pane).is_none() {
             return Err(ManageError::UnknownTarget(op.at.clone().unwrap_or_default()));
         }
@@ -597,6 +635,7 @@ impl Manager<'_> {
                 cwd,
                 cols,
                 rows,
+                workspace: native.workspace_of(pane),
                 ..NewSession::default()
             })
             .await
@@ -686,8 +725,8 @@ impl Manager<'_> {
     }
 
     /// `pane.size`'s modes on a session Kampr keeps. There is no controller to claim and no desk to
-    /// take the size back (#19 is herdr's), so a size sticks until the next claim and `match` only
-    /// has to remember what to put back.
+    /// take the size back (#19 is herdr's), so a size sticks until the next claim or attach, a
+    /// released `match` included (ADR 0013).
     async fn size_native(
         &self,
         op: &ManageOp,
@@ -773,7 +812,15 @@ impl Manager<'_> {
     /// 1 and changes nothing (#243 for a named one, #325 for the default) — so two clients tapping
     /// at once, or a wake that crosses the operator's own `herdr` at the keyboard, costs one dead
     /// child process and nothing else.
+    fn herdr_on(&self) -> Result<(), ManageError> {
+        match self.provider.enabled() {
+            true => Ok(()),
+            false => Err(ManageError::Herdr("herdr is off on this node".into())),
+        }
+    }
+
     async fn wake(&self) -> Result<(), ManageError> {
+        self.herdr_on()?;
         if self.answers().await {
             return Ok(());
         }
@@ -988,6 +1035,7 @@ impl Manager<'_> {
     /// `herdr server --session default` binding the default socket rather than making a namesake
     /// beside it, which is why [`Self::wake`] and this share one spawn.
     async fn create_session(&self, op: &ManageOp) -> Result<Managed, ManageError> {
+        self.herdr_on()?;
         let name = session_name(op)?;
         spawn_server(self.binary, &name)?;
         let failure = format!("{name} was started but never appeared in the session list");
@@ -1213,6 +1261,7 @@ impl Manager<'_> {
     /// A named session has its own socket, so stopping one is an ordinary `server.stop` addressed
     /// somewhere other than this node's own herdr.
     async fn stop_session(&self, op: &ManageOp) -> Result<Managed, ManageError> {
+        self.herdr_on()?;
         let name = session_name(op)?;
         let socket = crate::caps::sessions(self.binary)
             .await

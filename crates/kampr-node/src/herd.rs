@@ -494,6 +494,7 @@ mod tests {
                 reachable: None,
                 native: None,
                 muffit: None,
+                herdr: None,
                 rtt_ms: None,
                 herdr_version: None,
                 build: Some(build.to_string()),

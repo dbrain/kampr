@@ -1783,3 +1783,241 @@ async fn every_finished_pane_on_the_screen_is_read_not_only_the_focused_one() {
         HashSet::from(["01JNODE/w1:p1".to_string(), "01JNODE/w1:p2".to_string()])
     );
 }
+
+fn kept(id: &str) -> Value {
+    json!({
+        "id": id, "node_id": id.split('/').next().unwrap(), "provider": "native",
+        "detached": true, "cwd": "/home/dbrain", "agent_status": "idle", "rows": 4, "cols": 12
+    })
+}
+
+/// A node with herdr off is a Kampr machine and nothing else: the menu offers what it can make and
+/// says nothing about a herdr it does not have.
+#[tokio::test]
+async fn a_node_with_herdr_off_is_offered_kampr_sessions_and_nothing_of_herdr() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(
+        json!([{ "id": "01JNODE", "name": "shed", "kind": "local", "online": false,
+                 "reachable": true, "native": true, "herdr": false }]),
+        json!([kept("01JNODE/n:s1")]),
+        "full",
+        true,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    bare(&mut app);
+
+    shifted(&mut app, 'n');
+    let menu = painted(&mut app, 110, 24);
+    assert!(menu.contains("kampr"), "{menu}");
+    for herdr in ["herdr", "layout", "zoom", "focus", "on desk"] {
+        assert!(
+            !menu.contains(herdr),
+            "{herdr} offered on a node with herdr off:\n{menu}"
+        );
+    }
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+    shifted(&mut app, 'n');
+    ch(&mut app, 'p');
+    typed(&mut app, "claude");
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(
+        (&sent["op"], &sent["node"]),
+        (&json!("native.create"), &json!("01JNODE"))
+    );
+}
+
+/// Kampr's own session is the first thing made, and herdr's workspace, tab and worktree come after
+/// it on a node that has both.
+#[tokio::test]
+async fn a_kampr_session_leads_the_menu_where_herdr_is_on_too() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        json!([{ "id": "01JNODE", "name": "comingclean", "kind": "local", "online": true,
+                 "native": true, "herdr": true }]),
+        json!([pane("01JNODE/w1:p1", "work", None, "idle")]),
+        "full",
+        true,
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    bare(&mut app);
+
+    shifted(&mut app, 'n');
+    let menu = painted(&mut app, 110, 24);
+    let line = |word: &str| {
+        menu.lines()
+            .position(|l| l.contains(word))
+            .unwrap_or_else(|| panic!("no {word}:\n{menu}"))
+    };
+    assert!(
+        line("session Kampr keeps") < line("a new herdr workspace"),
+        "{menu}"
+    );
+    assert!(line("session Kampr keeps") < line("divide this pane"), "{menu}");
+    let _ = conn;
+}
+
+fn in_space(id: &str, space: &str, tab: &str) -> Value {
+    let node = id.split('/').next().unwrap();
+    let mut pane = kept(id);
+    pane["workspace"] = json!(space);
+    pane["workspace_id"] = json!(format!("{node}/kw:{space}"));
+    pane["tab"] = json!("1");
+    pane["tab_id"] = json!(format!("{node}/{tab}"));
+    pane
+}
+
+async fn kampr_desk(
+    fake: &mut Fake,
+    herdr: bool,
+    panes: Value,
+) -> (tokio::sync::broadcast::Receiver<Event>, Conn, App) {
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let mut app = app(&client);
+    conn.greet(
+        json!([{ "id": "01JNODE", "name": "shed", "kind": "local", "online": herdr,
+                 "reachable": true, "native": true, "herdr": herdr }]),
+        panes,
+        "full",
+        true,
+    );
+    pump(&mut app, &mut events, |e| matches!(e, Event::Prefs { .. })).await;
+    bare(&mut app);
+    conn.send(json!({
+        "t": "caps", "node": "01JNODE", "agent_kinds": if herdr { json!(["claude", "goose"]) } else { json!([]) },
+        "native_agents": ["claude", "codex"], "sessions": []
+    }));
+    pump(&mut app, &mut events, |e| matches!(e, Event::Caps(_))).await;
+    (events, conn, app)
+}
+
+/// The operator: *"let's go full kampr and herdr is the help you migrate/test it out piece"*. A
+/// machine with herdr off makes workspaces, agents and worktrees of Kampr's own, and none of what
+/// it sends asks for herdr.
+#[tokio::test]
+async fn a_herdr_off_machine_makes_kampr_workspaces_agents_and_worktrees() {
+    let mut fake = Fake::start().await;
+    let (_events, mut conn, mut app) =
+        kampr_desk(&mut fake, false, json!([in_space("01JNODE/n:s1", "api", "k:s1")])).await;
+
+    shifted(&mut app, 'n');
+    let menu = painted(&mut app, 110, 30);
+    assert!(!menu.contains("herdr"), "{menu}");
+    ch(&mut app, 'a');
+    let agents = painted(&mut app, 110, 30);
+    assert!(agents.contains("codex") && !agents.contains("goose"), "{agents}");
+    ch(&mut app, '1');
+    let sent = conn.op().await;
+    assert_eq!(
+        (&sent["op"], &sent["kind"], &sent["at"]),
+        (&json!("agent.start"), &json!("claude"), &json!("01JNODE/n:s1")),
+        "{sent}"
+    );
+    assert!(sent.get("provider").is_none(), "{sent}");
+
+    shifted(&mut app, 'n');
+    ch(&mut app, 'w');
+    typed(&mut app, "web");
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(
+        (&sent["op"], &sent["node"], &sent["label"]),
+        (&json!("workspace.create"), &json!("01JNODE"), &json!("web")),
+        "{sent}"
+    );
+    assert!(sent.get("provider").is_none(), "{sent}");
+
+    shifted(&mut app, 'n');
+    ch(&mut app, 't');
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(
+        (&sent["op"], &sent["at"]),
+        (&json!("tab.create"), &json!("01JNODE/kw:api")),
+        "{sent}"
+    );
+
+    shifted(&mut app, 'n');
+    ch(&mut app, 'g');
+    ch(&mut app, 'c');
+    typed(&mut app, "fix-login");
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(
+        (&sent["op"], &sent["branch"], &sent["at"]),
+        (
+            &json!("worktree.create"),
+            &json!("fix-login"),
+            &json!("01JNODE/n:s1")
+        ),
+        "{sent}"
+    );
+    assert!(sent.get("provider").is_none(), "{sent}");
+}
+
+/// Where herdr is on too, Kampr's rows keep the plain keys and herdr's are the extra, and every op
+/// a herdr row makes says so: a node routes an op with no target to Kampr.
+#[tokio::test]
+async fn herdrs_rows_are_the_extra_and_ask_for_herdr_by_name() {
+    let mut fake = Fake::start().await;
+    let (_events, mut conn, mut app) = kampr_desk(
+        &mut fake,
+        true,
+        json!([pane("01JNODE/w1:p1", "work", None, "idle")]),
+    )
+    .await;
+
+    shifted(&mut app, 'n');
+    let menu = painted(&mut app, 110, 30);
+    let line = |word: &str| {
+        menu.lines()
+            .position(|l| l.contains(word))
+            .unwrap_or_else(|| panic!("no {word}:\n{menu}"))
+    };
+    assert!(
+        line("a new Kampr workspace") < line("a new herdr workspace"),
+        "{menu}"
+    );
+
+    ch(&mut app, 'W');
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(
+        (&sent["op"], &sent["provider"]),
+        (&json!("workspace.create"), &json!("herdr")),
+        "{sent}"
+    );
+
+    shifted(&mut app, 'n');
+    ch(&mut app, 'w');
+    tap(&mut app, KeyCode::Enter);
+    let sent = conn.op().await;
+    assert_eq!(sent["op"], "workspace.create", "{sent}");
+    assert!(sent.get("provider").is_none(), "{sent}");
+
+    shifted(&mut app, 'n');
+    ch(&mut app, 'A');
+    ch(&mut app, '2');
+    let sent = conn.op().await;
+    assert_eq!(
+        (&sent["op"], &sent["kind"], &sent["at"], &sent["provider"]),
+        (
+            &json!("agent.start"),
+            &json!("goose"),
+            &json!("01JNODE/w1:p1"),
+            &json!("herdr")
+        ),
+        "{sent}"
+    );
+}

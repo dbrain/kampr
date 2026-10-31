@@ -1857,6 +1857,36 @@ A session leaves the herd by itself once it ends after `native.close`, or when i
 with status 0, as a herdr pane does when its shell exits. Any other end is kept, with its `exited`,
 until `native.forget`, which refuses a session that is still running.
 
+#### Workspaces, tabs, agents, worktrees and layouts of Kampr sessions
+
+The structure ops are Kampr's as well as herdr's (docs/17 §5). One goes to herdr when its `at`
+names something of herdr's or it says `"provider": "herdr"`, and to Kampr when its `at` names a
+Kampr session, workspace (`kw:…`) or tab (`k:…`), when it says `"provider": "native"`, or when it
+names nothing at all — Kampr first, herdr on or not. A herdr op on a node with herdr off is
+`herdr_unavailable`, "herdr is off on this node".
+
+```jsonc
+{ "t":"manage", "op":"workspace.create", "label":"api", "cwd":"~/dev/api" }       // a workspace and its first session
+{ "t":"manage", "op":"tab.create",       "at":"01J…/kw:api" }                      // a session as a new tab of it
+{ "t":"manage", "op":"native.create",    "args":["sh"], "workspace":"api" }        // joins by id or name; a new name makes one
+{ "t":"manage", "op":"agent.start",      "kind":"claude", "at":"01J…/n:01k8…", "args":["--resume"] } // split beside `at`
+{ "t":"manage", "op":"worktree.create",  "cwd":"~/dev/api", "branch":"feat/y", "base":"main" }
+{ "t":"manage", "op":"worktree.open",    "path":"~/.kampr/worktrees/api/feat-y" }
+{ "t":"manage", "op":"layout.export",    "at":"01J…/k:01k8…" }                     // ack carries `layout`
+{ "t":"manage", "op":"layout.apply",     "at":"01J…/kw:api", "layout":{ "root":{ "type":"split", … } } }
+{ "t":"manage", "op":"rename",           "at":"01J…/kw:api", "label":"backend" }
+{ "t":"manage", "op":"close",            "at":"01J…/kw:api" }                      // every session in it; a tab id closes a tab
+```
+
+Each creating op acks the first session it made as its `id`. A Kampr session's pane carries
+`workspace`, `workspace_id`, `tab` and `tab_id` as a herdr pane does: the workspace by name and
+`kw:` id, the tab numbered `1`, `2`… oldest first and named by `k:` and the session it began with.
+`agent.start` runs only the harnesses Kampr reads the conversations of whose binary is on the node's
+PATH, listed as `caps.native_agents`. A worktree is checked out at
+`~/.kampr/worktrees/<repo>/<branch, / made ->` (herdr's own shape, #617) in a workspace named for
+it. `layout.export` gives herdr's tree (#47) with each leaf's `cwd` and `command`, and
+`layout.apply` starts a session per leaf as a new tab.
+
 #### A reflowed view: `watch` with `reflow`
 
 A native pane can be watched at a width of the watcher's own (docs/17 §3). The node holds the
@@ -2122,7 +2152,8 @@ pane on a session that will never appear in the herd.
 
 ```jsonc
 { "t": "caps", "node": "01J...",
-  "agent_kinds": ["claude", "codex", "gemini", "…"],   // from server.agent_manifests, not hardcoded
+  "agent_kinds": ["claude", "codex", "gemini", "…"],   // herdr's server.agent_manifests and native_agents, not hardcoded
+  "native_agents": ["claude", "codex"],                 // what agent.start can run as a Kampr session here
   "sessions": [ { "name": "default", "running": true,  "served": true },
                 { "name": "agents",  "running": false, "served": false } ] }
 ```

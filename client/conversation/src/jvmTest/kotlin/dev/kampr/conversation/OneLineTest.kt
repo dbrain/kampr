@@ -3,6 +3,9 @@ package dev.kampr.conversation
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.ComposeUiTest
@@ -89,6 +92,32 @@ class OneLineTest {
         onNodeWithContentDescription(SEND).performClick()
         waitForIdle()
         assertEquals(listOf("push", "\r"), typedIntoThePane())
+    }
+
+    // The phone report: typed in the conversation, a look at the terminal, back, and send put the
+    // line in the pane twice. The view leaving the composition took what this box had typed into
+    // the pane with it, so a pane whose last reading had no box in it — Claude repainting for the
+    // terminal's size — was sent the whole line again on top of itself.
+    @Test
+    fun aLookAtTheTerminalBetweenTypingAndSendingTypesNothingTwice() = runComposeUiTest {
+        val (store, pane) = paneWithNoQuestion()
+        store.hears(composer(null))
+        var showing by mutableStateOf(true)
+        setContent { if (showing) Harnessed(pane) }
+        waitForIdle()
+        onNodeWithContentDescription(REPLY).performTextInput("push the")
+        waitForIdle()
+        RecordingIo.sent.clear()
+
+        showing = false
+        waitForIdle()
+        store.hears(composer(null, keys = false))
+        showing = true
+        waitForIdle()
+
+        onNodeWithContentDescription(SEND).performClick()
+        waitForIdle()
+        assertEquals(listOf("\r"), typedIntoThePane(), "the pane already held the line")
     }
 
     // The phone report: every reading of the pane lags the keys this box has just typed into it, so

@@ -8,6 +8,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
@@ -25,6 +26,7 @@ import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.NewSheet
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
+import dev.kampr.shared.wire.PROVIDER_HERDR
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import kotlin.test.Test
@@ -75,7 +77,7 @@ class AgentArgsTest {
         val args = FakeArgs()
         setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet(sent, args) } } }
 
-        onNodeWithContentDescription("Start a claude agent").performClick()
+        onNodeWithContentDescription("Start a claude agent").performScrollTo().performClick()
         onNodeWithContentDescription("Arguments for claude")
             .performTextInput("--dangerously-skip-permissions")
         // Not hidden behind a remembered setting: the sheet prints the launch it is about to make.
@@ -86,10 +88,10 @@ class AgentArgsTest {
         assertEquals(
             listOf(
                 ManageOp.AgentStart(
-                    PANE.id,
-                    "claude",
-                    null,
-                    listOf("--dangerously-skip-permissions"),
+                    kind = "claude",
+                    at = PANE.id,
+                    args = listOf("--dangerously-skip-permissions"),
+                    provider = PROVIDER_HERDR,
                 ) as ManageOp,
             ),
             sent,
@@ -105,7 +107,7 @@ class AgentArgsTest {
         val args = FakeArgs(mapOf("claude" to "--dangerously-skip-permissions"))
         setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet(sent, args) } } }
 
-        onNodeWithContentDescription("Start a claude agent").performClick()
+        onNodeWithContentDescription("Start a claude agent").performScrollTo().performClick()
         onNodeWithContentDescription("Starts claude --dangerously-skip-permissions").assertExists()
         onNodeWithContentDescription(
             "--dangerously-skip-permissions removes a confirmation step — this agent will act without asking",
@@ -124,7 +126,7 @@ class AgentArgsTest {
         val args = FakeArgs(mapOf("claude" to "--dangerously-skip-permissions"))
         setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet(sent, args) } } }
 
-        onNodeWithContentDescription("Start a codex agent").performClick()
+        onNodeWithContentDescription("Start a codex agent").performScrollTo().performClick()
         onNodeWithContentDescription("Starts codex").assertExists()
         onNodeWithContentDescription("Start codex").performClick()
         waitForIdle()
@@ -138,8 +140,8 @@ class AgentArgsTest {
         val args = FakeArgs(mapOf("claude" to "--dangerously-skip-permissions"))
         setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet(sent, args) } } }
 
-        onNodeWithContentDescription("Start a claude agent").performClick()
-        onNodeWithContentDescription("Remember these arguments for claude").performClick()
+        onNodeWithContentDescription("Start a claude agent").performScrollTo().performClick()
+        onNodeWithContentDescription("Remember these arguments for claude").performScrollTo().performClick()
         onNodeWithContentDescription("Start claude").performClick()
         waitForIdle()
 

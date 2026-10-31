@@ -262,6 +262,28 @@ fn doctor_reports_a_dead_herdr_as_broken() {
     assert!(!out.status.success(), "a node with no herd is not healthy");
 }
 
+/// Herdr is the optional extra: a machine that turned it off is not a broken one, and nothing in
+/// the report goes on to fail or warn about the herdr it does not have.
+#[test]
+fn doctor_says_herdr_is_off_and_holds_nothing_against_it() {
+    let cli = Cli::new();
+    cli.init();
+    set_config(&cli, "[herdr]\n", "[herdr]\nenabled = false\n");
+    let out = cli.run(&["doctor", "--json"]);
+    let json: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("json");
+    let herdr = check(&json, "herdr");
+    assert_eq!(herdr["status"], "ok", "{herdr:#}");
+    assert!(herdr["detail"].as_str().unwrap().contains("off"), "{herdr:#}");
+    for c in json["checks"].as_array().expect("checks") {
+        let about_herdr = ["observe", "sessions", "integrations"].contains(&c["id"].as_str().unwrap())
+            || c["detail"].as_str().unwrap_or_default().contains("herdr") && c["id"] != "herdr";
+        assert!(
+            !(about_herdr && c["status"] != "ok"),
+            "a node with herdr off was held to it: {c:#}"
+        );
+    }
+}
+
 #[test]
 fn doctor_reports_a_healthy_node_as_healthy() {
     let cli = Cli::new();

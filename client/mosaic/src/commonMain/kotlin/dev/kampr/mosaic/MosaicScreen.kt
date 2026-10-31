@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,7 +23,11 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.TILE_WHOLE
+import dev.kampr.shared.model.TileNode
 import dev.kampr.shared.model.gone
+import dev.kampr.shared.model.leaves
+import dev.kampr.shared.model.tileTree
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.Icon
@@ -93,6 +98,30 @@ fun MosaicScreen(
 private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfaces: PaneSurfaces) {
     val nodes = herd.nodes.associateBy { it.id }
     val drag = remember { MosaicDrag() }
+    val cell: @Composable (String, Modifier) -> Unit = { paneId, modifier ->
+        val at = mosaic.panes.indexOf(paneId)
+        val info = herd.panes.firstOrNull { it.id == paneId }
+        MosaicCell(
+            pane = store.pane(paneId),
+            info = info,
+            node = nodes[info?.nodeId ?: paneId.substringBefore('/')],
+            focused = mosaic.focused == paneId,
+            surfaces = surfaces,
+            onFocus = { mosaic.focus(paneId) },
+            onRemove = { mosaic.remove(paneId) },
+            modifier = modifier,
+            gone = herd.gone(paneId),
+            drag = drag,
+            place = "cell ${at + 1} of ${mosaic.panes.size}",
+            onDrop = { onto -> mosaic.move(paneId, mosaic.panes.indexOf(onto)) },
+            onMove = { delta -> mosaic.moveBy(paneId, delta) },
+        )
+    }
+    val tree = remember(mosaic.panes, herd) { tabTree(mosaic.panes, herd) }
+    if (tree != null) {
+        TileBox(tree, Modifier.fillMaxSize(), cell)
+        return
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val shape = mosaicShape(mosaic.panes.size, maxWidth, mosaic.stacked)
         var index = 0
@@ -100,25 +129,41 @@ private fun MosaicGrid(store: KamprStore, mosaic: MosaicState, herd: Herd, surfa
             for (row in shape.perRow) {
                 Row(Modifier.weight(1f).fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(GAP)) {
                     repeat(row) {
-                        val at = index++
-                        val paneId = mosaic.panes[at]
-                        val info = herd.panes.firstOrNull { it.id == paneId }
-                        MosaicCell(
-                            pane = store.pane(paneId),
-                            info = info,
-                            node = nodes[info?.nodeId ?: paneId.substringBefore('/')],
-                            focused = mosaic.focused == paneId,
-                            surfaces = surfaces,
-                            onFocus = { mosaic.focus(paneId) },
-                            onRemove = { mosaic.remove(paneId) },
-                            modifier = Modifier.weight(1f).fillMaxSize(),
-                            gone = herd.gone(paneId),
-                            drag = drag,
-                            place = "cell ${at + 1} of ${mosaic.panes.size}",
-                            onDrop = { onto -> mosaic.move(paneId, mosaic.panes.indexOf(onto)) },
-                            onMove = { delta -> mosaic.moveBy(paneId, delta) },
-                        )
+                        cell(mosaic.panes[index++], Modifier.weight(1f).fillMaxSize())
                     }
+                }
+            }
+        }
+    }
+}
+
+// The panes of one tab, exactly, are drawn as the tab is split; anything else the operator put
+// together is a grid, because there is no tree to follow.
+private fun tabTree(panes: List<String>, herd: Herd): TileNode? {
+    if (panes.size < 2) return null
+    val infos = panes.map { id -> herd.panes.firstOrNull { it.id == id } ?: return null }
+    val group = infos.first().tile?.group ?: return null
+    if (infos.any { it.tile?.group != group }) return null
+    val tree = tileTree(infos) ?: return null
+    return tree.takeIf { it.leaves().toSet() == panes.toSet() }
+}
+
+@Composable
+private fun TileBox(node: TileNode, modifier: Modifier, cell: @Composable (String, Modifier) -> Unit) {
+    when (node) {
+        is TileNode.Leaf -> cell(node.pane, modifier)
+
+        is TileNode.Split -> {
+            val first = node.ratio.toFloat() / TILE_WHOLE
+            if (node.down) {
+                Column(modifier, verticalArrangement = Arrangement.spacedBy(GAP)) {
+                    TileBox(node.first, Modifier.weight(first).fillMaxWidth(), cell)
+                    TileBox(node.second, Modifier.weight(1f - first).fillMaxWidth(), cell)
+                }
+            } else {
+                Row(modifier, horizontalArrangement = Arrangement.spacedBy(GAP)) {
+                    TileBox(node.first, Modifier.weight(first).fillMaxHeight(), cell)
+                    TileBox(node.second, Modifier.weight(1f - first).fillMaxHeight(), cell)
                 }
             }
         }

@@ -9,8 +9,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
 
-// The node answers `native.create` without herdr, so a machine whose herdr is down can still be
-// given one. Only the desk half asks it for a pane.
+// The node answers `native.create` without herdr. Only the desk half asks herdr for a pane, so it
+// is offered only where the machine has one.
 @Composable
 internal fun NativeSessionFields(
     command: TextFieldValue,
@@ -37,7 +37,11 @@ internal fun NativeSessionFields(
             )
         }
         KText(
-            "Kept by Kampr rather than herdr, so it survives herdr restarting and lives on the desk only while something shows it there.",
+            if (desk == null) {
+                "Kept running by Kampr on that machine, with or without anybody watching it."
+            } else {
+                "Kept running by Kampr on that machine, and on the desk only while something shows it there."
+            },
             tokens.type.captionSmall,
             tokens.color.mute,
             maxLines = 4,

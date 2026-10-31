@@ -291,8 +291,10 @@ pub fn fleet_path(config: &Config) -> Check {
     // be found on it, is the shape this project has paid for before (#233): the check answered its
     // own question and not the operator's. Two hosts on this herd read their login shell correctly
     // and still had no `~/.local/bin` on it (#419).
+    let herdr = config.herdr.is_on(&super::herd::socket_of(config));
     let unreachable: Vec<&str> = ["kampr", "herdr"]
         .into_iter()
+        .filter(|name| herdr || *name != "herdr")
         .filter(|name| !resolves(&path.value, name))
         .collect();
     if !unreachable.is_empty() {

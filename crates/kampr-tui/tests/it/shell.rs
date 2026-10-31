@@ -329,6 +329,35 @@ async fn a_machine_with_no_herdr_serving_native_sessions_is_not_drawn_offline() 
     assert!(spaces.contains("  kept"), "{screen}");
 }
 
+/// A node whose operator turned herdr off, or never installed it, is just a machine serving its
+/// sessions: nothing on the sidebar says herdr is missing.
+#[tokio::test]
+async fn a_machine_with_herdr_off_never_says_herdr() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let mut kept = pane("01JSHED/n:01ja", "kept", Some("claude"), "idle");
+    kept["node_id"] = json!("01JSHED");
+    kept["provider"] = json!("native");
+    conn.greet(
+        json!([{
+            "id": "01JSHED", "name": "shed", "kind": "local", "online": false,
+            "reachable": true, "native": true, "herdr": false,
+        }]),
+        json!([kept]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let screen = painted(&mut app, 110, 22);
+    let spaces = sidebar_of(&screen);
+    assert!(!spaces.contains("herdr"), "{screen}");
+    assert!(!spaces.contains("offline"), "{screen}");
+    assert!(spaces.contains("  kept"), "{screen}");
+}
+
 #[tokio::test]
 async fn a_live_grid_reaches_the_frame() {
     let mut fake = Fake::start().await;
@@ -1474,4 +1503,96 @@ async fn prefix_g_finds_a_pane_on_any_node_by_a_few_letters() {
     app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert_eq!(app.focused(), Some("01JWORKBOX/w7:p3"), "esc goes nowhere");
     assert_ne!(start.as_deref(), Some("01JWORKBOX/w7:p3"));
+}
+
+fn kept_in(id: &str, label: &str, space: &str, tab: (&str, &str), tile: Value) -> Value {
+    json!({
+        "id": id, "node_id": "01JSHED", "provider": "native", "label": label,
+        "workspace": space, "workspace_id": format!("01JSHED/kw:{space}"),
+        "tab": tab.1, "tab_id": format!("01JSHED/{}", tab.0), "tile": tile,
+        "cwd": "/home/dbrain/dev/kampr", "agent_status": "idle", "rows": 4, "cols": 12
+    })
+}
+
+fn shed() -> Value {
+    json!([{ "id": "01JSHED", "name": "shed", "kind": "local", "online": false,
+             "reachable": true, "native": true, "herdr": false }])
+}
+
+/// Kampr's own workspaces are drawn as herdr's are, and a workspace with more than one tab says
+/// which tab each pane is in.
+#[tokio::test]
+async fn a_kampr_workspace_groups_its_sessions_and_names_its_tabs() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    conn.greet(
+        shed(),
+        json!([
+            kept_in("01JSHED/n:a", "server", "api", ("k:a", "serve"), Value::Null),
+            kept_in("01JSHED/n:b", "tests", "api", ("k:b", "check"), Value::Null),
+        ]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+
+    let spaces = sidebar_of(&painted(&mut app, 110, 22));
+    assert_eq!(spaces.matches("  api").count(), 1, "{spaces}");
+    let at = |word: &str| {
+        spaces
+            .lines()
+            .position(|l| l.contains(word))
+            .unwrap_or_else(|| panic!("no {word}:\n{spaces}"))
+    };
+    assert!(
+        at("  api") < at("serve") && at("serve") < at("server"),
+        "{spaces}"
+    );
+    assert!(
+        at("server") < at("check") && at("check") < at("tests"),
+        "{spaces}"
+    );
+}
+
+/// A tree too big for the terminal is not drawn as boxes too small to read: the focused session
+/// takes the room, and a strip names the rest of the tab.
+#[tokio::test]
+async fn a_tab_too_big_for_a_small_terminal_is_flattened_to_a_strip() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let cut = |second: bool| json!({ "group": "01JSHED/k:a", "path": [{ "split": "right", "ratio": 500, "second": second }] });
+    conn.greet(
+        shed(),
+        json!([
+            kept_in("01JSHED/n:a", "server", "api", ("k:a", "1"), cut(false)),
+            kept_in("01JSHED/n:b", "tests", "api", ("k:a", "1"), cut(true)),
+        ]),
+        "full",
+    );
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let mut app = app(&client);
+    app.key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::CONTROL,
+    ));
+    app.key(crossterm::event::KeyEvent::new(
+        crossterm::event::KeyCode::Char('b'),
+        crossterm::event::KeyModifiers::NONE,
+    ));
+
+    let wide = painted(&mut app, 120, 20);
+    assert!(wide.contains("┐┌"), "two boxes side by side:\n{wide}");
+
+    let narrow = painted(&mut app, 40, 12);
+    assert!(!narrow.contains("┐┌"), "boxes too narrow to read:\n{narrow}");
+    assert!(
+        narrow
+            .lines()
+            .any(|l| l.contains("server") && l.contains("tests")),
+        "a strip names both:\n{narrow}"
+    );
 }

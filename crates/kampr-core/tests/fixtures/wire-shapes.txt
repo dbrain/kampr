@@ -276,6 +276,7 @@ server hello : object
 server herd .nodes: array
 server herd .nodes[].build: string
 server herd .nodes[].detail: string
+server herd .nodes[].herdr: bool
 server herd .nodes[].herdr_version: string
 server herd .nodes[].id: string
 server herd .nodes[].kind: string
@@ -353,6 +354,7 @@ server herd : object
 server herd.patch .added.nodes: array
 server herd.patch .added.nodes[].build: string
 server herd.patch .added.nodes[].detail: string
+server herd.patch .added.nodes[].herdr: bool
 server herd.patch .added.nodes[].herdr_version: string
 server herd.patch .added.nodes[].id: string
 server herd.patch .added.nodes[].kind: string
@@ -429,6 +431,7 @@ server herd.patch .added: object
 server herd.patch .changed.nodes: array
 server herd.patch .changed.nodes[].build: string
 server herd.patch .changed.nodes[].detail: string
+server herd.patch .changed.nodes[].herdr: bool
 server herd.patch .changed.nodes[].herdr_version: string
 server herd.patch .changed.nodes[].id: string
 server herd.patch .changed.nodes[].kind: string

@@ -9,6 +9,7 @@ import dev.kampr.shared.net.Pairing
 import dev.kampr.shared.net.createHttpClient
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
+import dev.kampr.shared.wire.PROVIDER_HERDR
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.SplitDirection
 import kotlinx.coroutines.CoroutineScope
@@ -216,7 +217,7 @@ class LiveNodeTest {
     ): PaneInfo {
         repeat(20) {
             store.clearManaged()
-            connection.manage(ManageOp.AgentStart(pane.id, "claude", "live"))
+            connection.manage(ManageOp.AgentStart(kind = "claude", at = pane.id, name = "live", provider = PROVIDER_HERDR))
             val ack = await("agent.start") { store.managed.value?.takeIf { it.op == "agent.start" } }
             if (ack.ok) {
                 return await("the agent") {

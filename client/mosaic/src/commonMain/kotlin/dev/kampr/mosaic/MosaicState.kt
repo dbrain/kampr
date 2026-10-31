@@ -59,7 +59,7 @@ class MosaicState(private val prefs: Prefs, private val connection: KamprConnect
     }
 
     fun arrange(next: List<String>, stacked: Boolean) {
-        val kept = next.distinct().take(MAX_CELLS)
+        val kept = next.distinct().take(MAX_TAB_CELLS)
         if (attached) {
             for (gone in panes - kept.toSet()) connection.unwatch(gone, OWNER)
             for (added in kept - panes.toSet()) connection.watch(added, OWNER)

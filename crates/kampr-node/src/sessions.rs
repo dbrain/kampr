@@ -75,6 +75,7 @@ impl SessionNode {
                 desk_agents: config.naming.desk_agents(),
                 primary,
                 desk: desk.map(|native| DeskHosts(native as Arc<dyn Desk>)),
+                enabled: config.herdr.enabled != Some(false),
                 ..HerdrConfig::default()
             },
         ));
@@ -287,6 +288,9 @@ impl Sessions {
             "" => Herdr::discover().map_or_else(|_| default_socket(), |h| h.socket().to_path_buf()),
             path => PathBuf::from(path),
         };
+        let mut config = config.clone();
+        config.herdr.enabled = Some(config.herdr.is_on(&socket));
+        let config = &config;
         let primary = SessionNode::open(config, &session_name_of(&socket), socket, true, None, None);
         Arc::new(Self {
             config: config.clone(),
@@ -332,6 +336,9 @@ impl Sessions {
     /// process and it can time out under load, and a reconcile that could not read one leaves the
     /// herd exactly as stale as it found it.
     pub async fn reconcile(&self) -> bool {
+        if self.config.herdr.enabled == Some(false) {
+            return true;
+        }
         self.apply(list_sessions(&self.config.herdr.binary).await)
     }
 
@@ -410,6 +417,9 @@ impl Sessions {
 }
 
 pub async fn discover(sessions: Arc<Sessions>) {
+    if sessions.config.herdr.enabled == Some(false) {
+        return;
+    }
     let mut poll = tokio::time::interval(DISCOVERY_POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {

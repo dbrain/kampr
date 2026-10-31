@@ -9,10 +9,11 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 const FILE: &str = "layouts.json";
+pub const TAB_PREFIX: &str = "k:";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
-enum Node {
+pub enum Node {
     Pane {
         pane: String,
     },
@@ -69,11 +70,33 @@ impl Layouts {
         match self.groups.iter_mut().find_map(|g| leaf(&mut g.root, at)) {
             Some(node) => *node = made,
             None => self.groups.push(Group {
-                group: format!("k:{}", at.trim_start_matches(crate::PREFIX)),
+                group: tab_of(at),
                 root: made,
             }),
         }
         self.save()
+    }
+
+    /// A tree of sessions already made, as a tab of its own named for its first.
+    pub(crate) fn add(&mut self, root: Node) -> Result<String> {
+        let group = tab_of(first(&root));
+        if matches!(root, Node::Split { .. }) {
+            self.groups.push(Group {
+                group: group.clone(),
+                root,
+            });
+            self.save()?;
+        }
+        Ok(group)
+    }
+
+    pub(crate) fn tree(&self, tab: &str) -> Option<Node> {
+        if let Some(group) = self.groups.iter().find(|g| g.group == tab) {
+            return Some(group.root.clone());
+        }
+        let pane = format!("{}{}", crate::PREFIX, tab.strip_prefix(TAB_PREFIX)?);
+        let split = self.groups.iter().any(|g| contains(&g.root, &pane));
+        (!split).then_some(Node::Pane { pane })
     }
 
     /// Drops every session not in `alive`, closing its split up behind it, and writes the file
@@ -99,6 +122,25 @@ impl Layouts {
             walk(&group.root, &group.group, &mut Vec::new(), &mut tiles);
         }
         tiles
+    }
+}
+
+/// The tab a session stands in when nothing is split from it.
+pub fn tab_of(pane: &str) -> String {
+    format!("{TAB_PREFIX}{}", pane.trim_start_matches(crate::PREFIX))
+}
+
+fn first(node: &Node) -> &str {
+    match node {
+        Node::Pane { pane } => pane,
+        Node::Split { first: half, .. } => first(half),
+    }
+}
+
+fn contains(node: &Node, pane: &str) -> bool {
+    match node {
+        Node::Pane { pane: here } => here == pane,
+        Node::Split { first, second, .. } => contains(first, pane) || contains(second, pane),
     }
 }
 

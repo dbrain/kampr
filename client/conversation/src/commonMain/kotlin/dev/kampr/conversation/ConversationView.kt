@@ -373,7 +373,6 @@ fun ConversationView(
     // much of its own box, which both reserves the band and clips it — measured, never named,
     // because the card wraps onto a different number of rows for every question it carries.
     val question = if (io.readOnly) null else pane.pending?.takeIf { it.question != null }
-    val mirror = remember(pane.id) { ComposerMirror() }
     // Keyed on the rows, and it has to be: a `remember` that outlives them closes over the list it
     // was created with, and on a real open that list is the empty one the screen composes before
     // the transcript arrives. The bar then had nothing to name for the life of the pane, while
@@ -617,10 +616,10 @@ fun ConversationView(
                 enabled = !io.readOnly,
                 answering = answer,
                 onSend = { text ->
-                    type(mirror.submit(text))
+                    type(pane.mirror.submit(text))
                     handover.value = handoverAfterSend(handover.value)
                 },
-                mirror = mirror,
+                mirror = pane.mirror,
                 // A digit answers a dialog (#413, #421, #487), so a question standing on the pane
                 // is a box nothing is typed into; the words wait in this one.
                 mirroring = !io.readOnly && answer.enabled && question == null,

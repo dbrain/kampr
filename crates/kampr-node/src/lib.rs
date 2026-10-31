@@ -34,6 +34,7 @@ pub mod served;
 pub mod session;
 pub mod sessions;
 pub mod state;
+pub mod structure;
 pub mod toast;
 pub mod update;
 pub mod upload;

@@ -12,7 +12,7 @@ val PaneInfo.isNative: Boolean get() = provider == NATIVE
 
 // `native.desk` is the one native op that needs herdr, and the node starts a cold one for it, so a
 // machine that has ever named its herdr version can host a session as well as one whose herdr is up.
-val NodeInfo.hasDesk: Boolean get() = online || herdrVersion != null
+val NodeInfo.hasDesk: Boolean get() = herdrOn && (online || herdrVersion != null)
 
 fun NodeInfo.serves(pane: PaneInfo?): Boolean = if (pane?.isNative == true || pane?.isMuffit == true) isReachable else online
 

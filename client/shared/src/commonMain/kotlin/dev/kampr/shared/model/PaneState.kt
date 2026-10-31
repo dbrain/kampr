@@ -312,6 +312,11 @@ class PaneState(val id: String, val styles: StyleTable) {
     // exists to answer.
     var draft by mutableStateOf("")
 
+    // What the draft has typed into the pane's own box, held beside it for the same reason: a
+    // composer that came back without it took a line already in the pane for one still to be
+    // typed, and sent it again on top of itself.
+    val mirror = ComposerMirror()
+
     // The node's answer to the last transcript search on this pane. On the pane rather than on the
     // store, because it is read where the transcript is: a result set naming turn ids belongs to
     // one transcript, and handing it to another pane's view would aim at turns it has never heard

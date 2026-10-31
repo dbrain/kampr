@@ -2137,18 +2137,23 @@ impl Session {
             muffit: primary.muffit.as_ref(),
             muffit_tui: self.node.config.muffit.tui_command(),
             holder: &kampr_keep::view_holder(&self.device.name),
+            config: &self.node.config,
         };
         match manager.run(&op).await {
             Ok(Managed { reply, settle }) => {
-                let owner = match op.op.as_str() {
-                    "native.create" | "muffit.create" => &primary,
-                    _ => &session,
-                };
                 // A session is named rather than addressed, so its name is the id; everything
-                // else herdr creates is a container this node qualifies with its own id.
+                // else herdr creates is a container this node qualifies with its own id. A Kampr
+                // session is the machine's, so it is named under the primary whatever was asked.
                 let id = match reply["session"].as_str() {
                     Some(name) => Some(name.to_string()),
-                    None => manage::created_id(&op.op, &reply).map(|id| owner.global_pane(&id)),
+                    None => manage::created_id(&op.op, &reply).map(|id| {
+                        let owner = match op.op.as_str() {
+                            "native.create" | "muffit.create" => &primary,
+                            _ if id.starts_with(kampr_native::PREFIX) => &primary,
+                            _ => &session,
+                        };
+                        owner.global_pane(&id)
+                    }),
                 };
                 let mut ack = json!({ "t": "managed", "op": op.op, "ok": true });
                 if let Some(id) = id {

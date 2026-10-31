@@ -28,6 +28,7 @@ import dev.kampr.shared.model.gone
 import dev.kampr.shared.model.groups
 import dev.kampr.shared.model.saidOutLoud
 import dev.kampr.shared.model.statusOf
+import dev.kampr.shared.model.tabOf
 import dev.kampr.shared.model.withoutReadDone
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.AttachmentSlice
@@ -399,6 +400,9 @@ internal fun AppScaffold(
                                     surfaces = surfaces,
                                     readOnly = readOnly,
                                     onView = state::setPaneView,
+                                    tab = herd.tabOf(screen.paneId),
+                                    onTab = state::openPane,
+                                    onSideBySide = if (mosaic.available) ({ state.openTab(screen.paneId) }) else null,
                                 )
 
                                 Screen.Setup -> SetupScreen(
@@ -470,6 +474,8 @@ internal fun AppScaffold(
                                 readOnly = readOnly,
                                 onBack = state::back,
                                 onView = state::setPaneView,
+                                tab = herd.tabOf(screen.paneId),
+                                onTab = state::openPane,
                             )
 
                             Screen.Setup -> SetupScreen(
@@ -540,6 +546,8 @@ internal fun AppScaffold(
                                 readOnly = readOnly,
                                 onBack = state::back,
                                 onView = state::setPaneView,
+                                tab = herd.tabOf(screen.paneId),
+                                onTab = state::openPane,
                             )
 
                             Screen.Setup -> SetupScreen(

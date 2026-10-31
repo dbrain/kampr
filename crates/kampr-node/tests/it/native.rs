@@ -15,6 +15,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 mod reflow;
+mod structure;
 
 const NODE: &str = "01JNATIVENODE";
 const DEVICE: &str = "native";
@@ -67,11 +68,15 @@ impl Harness {
     }
 
     async fn start_in(home: tempfile::TempDir) -> Self {
+        Self::start_with(home, |_| {}).await
+    }
+
+    async fn start_with(home: tempfile::TempDir, tweak: fn(&mut Config)) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a port");
         let port = listener.local_addr().expect("an address").port();
-        Self::on(home, listener, port).await
+        Self::on(home, listener, port, tweak).await
     }
 
     /// A new node on the same state and the same native root, with every keeper left running.
@@ -85,10 +90,15 @@ impl Harness {
                 Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
             }
         };
-        Self::on(home, listener, port).await
+        Self::on(home, listener, port, |_| {}).await
     }
 
-    async fn on(home: tempfile::TempDir, listener: tokio::net::TcpListener, port: u16) -> Self {
+    async fn on(
+        home: tempfile::TempDir,
+        listener: tokio::net::TcpListener,
+        port: u16,
+        tweak: fn(&mut Config),
+    ) -> Self {
         let config_dir = home.path().join("config");
         let state_dir = home.path().join("state");
         std::fs::create_dir_all(&state_dir).expect("a state dir");
@@ -110,6 +120,8 @@ impl Harness {
         config.native.launch = "detached".into();
         config.journals.home = home.path().display().to_string();
         config.node_id = NODE.into();
+        config.native.worktrees = home.path().join("worktrees").display().to_string();
+        tweak(&mut config);
         config.save(&config_dir).expect("a config");
 
         let origin = config.origin();
@@ -493,8 +505,11 @@ fn processes_of(session: &kampr_keep::SessionDir) -> String {
     out
 }
 
+/// The operator, switching panes on a desk browser: *"can a pane hold its last size until a new
+/// client attaches? ... it resizes every time"*. A view letting go of a pane nobody else is showing
+/// leaves it at the view's size, so coming back to it is not two resizes.
 #[tokio::test]
-async fn a_size_asked_for_reaches_the_pty_and_a_matched_one_is_put_back() {
+async fn a_size_asked_for_reaches_the_pty_and_a_released_match_keeps_it() {
     let h = Harness::start().await;
     let mut client = h.client().await;
     let id = client.create(&["sh"], json!({})).await;
@@ -510,7 +525,7 @@ async fn a_size_asked_for_reaches_the_pty_and_a_matched_one_is_put_back() {
     client.type_text(&id, "stty size\r").await;
     client.shows(&id, "30 100").await;
 
-    for (mode, cols, rows) in [("match", 120, 40), ("grow", 130, 20)] {
+    for (mode, cols, rows, kept) in [("match", 120, 40, (120, 40)), ("grow", 130, 20, (130, 40))] {
         let held = client
             .manage(json!({ "op": "pane.size", "at": id, "cols": cols, "rows": rows, "mode": mode }))
             .await;
@@ -518,26 +533,24 @@ async fn a_size_asked_for_reaches_the_pty_and_a_matched_one_is_put_back() {
         let lease = held["lease"]
             .as_u64()
             .unwrap_or_else(|| panic!("{mode}: no lease in {held}"));
-        let (want_cols, want_rows) = match mode {
-            "grow" => (130, 30),
-            _ => (cols, rows),
-        };
         client
-            .pane(&id, |p| p["cols"] == want_cols && p["rows"] == want_rows)
+            .pane(&id, |p| p["cols"] == kept.0 && p["rows"] == kept.1)
             .await;
         let released = client
             .manage(json!({ "op": "pane.size", "at": id, "mode": "release", "lease": lease }))
             .await;
         assert_eq!(released["ok"], json!(true), "{mode}: {released}");
-        client.pane(&id, |p| p["cols"] == 100 && p["rows"] == 30).await;
+        assert_eq!(released["was_held"], json!(true), "{mode}: {released}");
+        client.pump(Duration::from_millis(500)).await;
+        let pane = client.pane(&id, |_| true).await;
+        assert_eq!(
+            (pane["cols"].clone(), pane["rows"].clone()),
+            (json!(kept.0), json!(kept.1)),
+            "{mode}: letting go put a size back on a pane nobody else is showing: {pane}",
+        );
     }
     client.type_text(&id, "clear; stty size\r").await;
-    client
-        .until("the size put back", |c| {
-            let s = c.screen(&id);
-            (s.iter().any(|r| r == "30 100") && !s.iter().any(|r| r.contains("40 120"))).then_some(())
-        })
-        .await;
+    client.shows(&id, "40 130").await;
 }
 
 /// A desk's attach that started under a view's hold leaves the size alone, so the size the view
@@ -591,7 +604,7 @@ async fn a_viewer_whose_hold_is_taken_is_told_and_its_release_leaves_the_new_one
     let match_ = json!({ "cols": 90, "rows": 60, "mode": "match" });
     let plain = json!({ "cols": 90, "rows": 60 });
     let panel_release = json!({ "mode": "release" });
-    for (taking, left) in [(match_, (90, 60)), (plain, (90, 60)), (panel_release, (80, 24))] {
+    for (taking, left) in [(match_, (90, 60)), (plain, (90, 60)), (panel_release, (150, 48))] {
         let id = desk.create(&["sh"], json!({})).await;
         let mut lease = Value::Null;
         for rows in [45, 48] {
@@ -1432,6 +1445,39 @@ async fn a_node_with_no_herdr_is_serving_and_every_native_failure_says_what_fail
         errors.is_empty(),
         "a node serving native sessions was reported down: {errors:?}"
     );
+}
+
+/// The operator: *"lets make herdr optional by default, no errors or anything if its off"*. A node
+/// that finds no herdr says it has it off, so a client offers nothing of herdr's and says nothing
+/// about it missing, and a herdr op asked of it anyway is refused for being off rather than tried.
+#[tokio::test]
+async fn a_node_with_no_herdr_installed_has_herdr_off_and_refuses_its_ops_for_that() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    let node = client
+        .until("the node in the herd", |c| c.nodes.get(NODE).cloned())
+        .await;
+    assert_eq!(node["herdr"], json!(false), "{node}");
+    assert!(
+        node["detail"].is_null(),
+        "a node with herdr off explained herdr: {node}"
+    );
+
+    for op in [
+        json!({ "op": "workspace.create", "label": "w", "provider": "herdr" }),
+        json!({ "op": "session.create", "name": "extra" }),
+    ] {
+        let refused = client.manage(op.clone()).await;
+        assert_eq!(refused["ok"], json!(false), "{op}: {refused}");
+        assert_eq!(refused["code"], "herdr_unavailable", "{op}: {refused}");
+        assert!(
+            refused["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("herdr is off"),
+            "{op}: {refused}"
+        );
+    }
 }
 
 /// A fleet run is a native session with a cohort (docs/17 §2): the node that started it can go

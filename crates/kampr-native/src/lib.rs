@@ -10,9 +10,14 @@ mod provider;
 mod reflow;
 mod replay;
 mod screen;
+mod structure;
 mod watcher;
+mod workspaces;
 
 pub use attach::{AttachOptions, Ended, attach, exit_status};
 pub use kampr_keep::Launch;
+pub use layout::{Node as LayoutNode, TAB_PREFIX, tab_of};
 pub use provider::{Blocked, NativeConfig, NativeProvider, NewSession, PREFIX, login_shell};
 pub use screen::{Feed, Screen};
+pub use structure::leaves_of;
+pub use workspaces::WORKSPACE_PREFIX;

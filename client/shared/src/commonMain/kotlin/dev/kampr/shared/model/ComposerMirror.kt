@@ -1,6 +1,5 @@
-package dev.kampr.conversation
+package dev.kampr.shared.model
 
-import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.wire.EditKeys
 import kotlin.time.TimeSource
 

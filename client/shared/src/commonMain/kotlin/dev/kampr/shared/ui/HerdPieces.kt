@@ -161,12 +161,20 @@ fun NodeCountPill(online: Int, connection: ConnectionStatus, compact: Boolean, o
 fun NodeQuiet(node: NodeInfo, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
     val said = when {
+        !node.herdrOn && node.isReachable -> "nothing running on this machine"
         node.isServing && !node.online -> "nothing running on this machine · no herdr"
         !node.online && node.isReachable -> "herdr is not running on ${node.name} — New (+) starts it"
         !node.online -> node.detail ?: "this machine is not reachable"
         else -> "nothing running on this machine"
     }
     KText(said, tokens.type.captionSmall, tokens.color.mute, modifier.announce(said), maxLines = 2)
+}
+
+// A workspace, and its tab where it has more than one: what the panes under it share.
+@Composable
+fun WorkspaceHeading(name: String, modifier: Modifier = Modifier) {
+    val tokens = Kampr.tokens
+    KText(name, tokens.type.captionSmall, tokens.color.mute, modifier.asHeading().announce("Workspace $name"), maxLines = 1)
 }
 
 @Composable
@@ -241,10 +249,10 @@ fun nodeFacts(node: NodeInfo, withStatus: Boolean = false): List<String> = listO
     if (node.kind == "local") "this machine" else "peer",
     node.session.takeIf { it != "default" }?.let { "session $it" },
     if (withStatus) (if (node.isServing) "online" else "offline") else null,
-    "no herdr".takeIf { node.isServing && !node.online },
+    "no herdr".takeIf { node.herdrOn && node.isServing && !node.online },
     node.build?.let { "kampr $it" },
     node.update?.let { "$it available" },
-    node.herdrVersion?.let { "herdr $it" },
+    node.herdrVersion?.takeIf { node.herdrOn }?.let { "herdr $it" },
     node.detail,
 )
 

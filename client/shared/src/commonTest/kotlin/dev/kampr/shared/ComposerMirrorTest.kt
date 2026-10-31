@@ -1,5 +1,6 @@
-package dev.kampr.conversation
+package dev.kampr.shared
 
+import dev.kampr.shared.model.ComposerMirror
 import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.wire.EditKeys
 import kotlin.test.Test

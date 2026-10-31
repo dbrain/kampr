@@ -27,6 +27,13 @@ const PING_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub async fn checks(config: &Config, service_installed: bool) -> Vec<Check> {
     let socket = socket_of(config);
+    if !config.herdr.is_on(&socket) {
+        let why = match config.herdr.enabled {
+            Some(false) => "off in config.toml",
+            _ => "off, not installed",
+        };
+        return vec![Check::ok("herdr", format!("{why}; Kampr sessions need none"))];
+    }
     let (herdr_check, reachable) = herdr(&socket).await;
     vec![
         herdr_check,
@@ -38,7 +45,7 @@ pub async fn checks(config: &Config, service_installed: bool) -> Vec<Check> {
     ]
 }
 
-fn socket_of(config: &Config) -> PathBuf {
+pub(super) fn socket_of(config: &Config) -> PathBuf {
     match config.herdr.socket.as_str() {
         "" => Herdr::discover().map_or_else(|_| PathBuf::from("herdr.sock"), |h| h.socket().to_path_buf()),
         path => PathBuf::from(path),

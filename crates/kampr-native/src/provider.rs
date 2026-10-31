@@ -1,9 +1,10 @@
-use crate::layout::Layouts;
+use crate::layout::{Layouts, tab_of};
 use crate::live::{self, Live};
 use crate::procs;
 use crate::reflow::{self, Views};
 use crate::screen::Screen;
 use crate::watcher::{self, Change};
+use crate::workspaces::{WORKSPACE_PREFIX, Workspaces};
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use kampr_core::desk::{Desk, DeskReport, Hosting};
@@ -83,21 +84,24 @@ pub struct NewSession {
     pub rows: u16,
     pub env: Vec<(String, String)>,
     pub cohort: Option<String>,
+    /// A workspace id, as `resolve_workspace` or `new_workspace` answered it.
+    pub workspace: Option<String>,
 }
 
 pub struct NativeProvider {
-    inner: Arc<Inner>,
+    pub(crate) inner: Arc<Inner>,
 }
 
-struct Inner {
-    config: NativeConfig,
+pub(crate) struct Inner {
+    pub(crate) config: NativeConfig,
     lives: Mutex<HashMap<String, Arc<Live>>>,
     holds: Mutex<HashMap<String, Hold>>,
     lease: AtomicU64,
     lost: broadcast::Sender<(String, u64)>,
     topology: watch::Sender<u64>,
     views: Views,
-    layouts: Mutex<Layouts>,
+    pub(crate) layouts: Mutex<Layouts>,
+    pub(crate) workspaces: Mutex<Workspaces>,
 }
 
 struct Hold {
@@ -118,6 +122,7 @@ impl NativeProvider {
             topology: watch::channel(0).0,
             views: Views::default(),
             layouts: Mutex::new(Layouts::load(&config.root)),
+            workspaces: Mutex::new(Workspaces::load(&config.root)),
             config,
         });
         inner.rescan();
@@ -175,6 +180,7 @@ impl NativeProvider {
             spec.env.push((key, value));
         }
         spec.cohort = new.cohort;
+        spec.workspace = new.workspace;
         let config = self.inner.config.clone();
         let session = tokio::task::spawn_blocking(move || {
             let launch = config.launch.unwrap_or_else(Launch::auto);
@@ -224,8 +230,8 @@ impl NativeProvider {
         Ok(())
     }
 
-    /// A claim that remembers the size it found, so letting go puts the session back (ADR 0013).
-    /// A hold that displaces another carries the first one's found size forward.
+    /// A claim that remembers the size it found, which is what a `grow` under it measures against
+    /// (ADR 0013). A hold that displaces another carries the first one's found size forward.
     pub async fn hold(&self, pane: &str, cols: u16, rows: u16, holder: &str) -> Result<(u64, (u16, u16))> {
         let session = self.require(pane)?;
         let carried = self.inner.holds.lock().unwrap().remove(pane);
@@ -293,8 +299,10 @@ impl NativeProvider {
         }
         let session = self.require(pane)?;
         if session.alive() {
-            // An attach that started under the hold left the size alone (attach.rs), so the size
-            // found can be from before it; a live attach's terminal is what is showing it now.
+            // An attach that started under the hold left the size alone (attach.rs), so a live
+            // attach's terminal is showing the session at the wrong size and is owed its own.
+            // With none, the size stays: putting the found one back made every pane switch on a
+            // desk browser two resizes, and the next viewer or attach sizes it anyway.
             let mut desks = session.hosts();
             let found_by = desks
                 .iter()
@@ -303,11 +311,10 @@ impl NativeProvider {
                 Some(at) => Some(desks.swap_remove(at)),
                 None => desks.pop(),
             };
-            let (cols, rows, holder) = match desk {
-                Some(desk) => (desk.cols, desk.rows, kampr_keep::attach_holder(desk.pid)),
-                None => (hold.found.0, hold.found.1, hold.holder),
-            };
-            self.resize(pane, cols, rows, &holder).await?;
+            if let Some(desk) = desk {
+                self.resize(pane, desk.cols, desk.rows, &kampr_keep::attach_holder(desk.pid))
+                    .await?;
+            }
         }
         Ok(true)
     }
@@ -409,7 +416,7 @@ impl Drop for NativeProvider {
 }
 
 impl Inner {
-    fn bump(&self) {
+    pub(crate) fn bump(&self) {
         self.topology.send_modify(|n| *n += 1);
     }
 
@@ -565,6 +572,11 @@ impl Inner {
                 Some(fg) if !fg.argv.is_empty() => fg.argv.join(" "),
                 _ => argv_line.clone(),
             }),
+            workspace_id: spec.workspace.as_ref().map(|w| format!("{WORKSPACE_PREFIX}{w}")),
+            workspace: spec
+                .workspace
+                .as_deref()
+                .map(|w| self.workspaces.lock().unwrap().name(w).unwrap_or(w).to_string()),
             native: Some(NativePane {
                 session_id: session.id().to_string(),
                 on_desk: hosts.iter().find_map(|h| h.herdr_pane.clone()),
@@ -588,6 +600,23 @@ impl Inner {
     }
 }
 
+/// A workspace's tabs numbered as herdr numbers its own, oldest first: a tab is named for the
+/// session it began with, and session ids are ULIDs.
+fn number_tabs(panes: &mut [PaneInfo]) {
+    let mut tabs: HashMap<String, BTreeSet<String>> = HashMap::new();
+    for pane in panes.iter() {
+        if let (Some(workspace), Some(tab)) = (&pane.workspace_id, &pane.tab_id) {
+            tabs.entry(workspace.clone()).or_default().insert(tab.clone());
+        }
+    }
+    for pane in panes.iter_mut() {
+        if let (Some(workspace), Some(tab)) = (&pane.workspace_id, &pane.tab_id) {
+            let at = tabs[workspace].iter().position(|t| t == tab).unwrap_or_default();
+            pane.tab = Some((at + 1).to_string());
+        }
+    }
+}
+
 #[async_trait]
 impl Provider for NativeProvider {
     async fn list_panes(&self) -> Result<Vec<PaneInfo>> {
@@ -607,7 +636,12 @@ impl Provider for NativeProvider {
             let mut tiles = layouts.tiles();
             for pane in &mut panes {
                 pane.tile = tiles.remove(&pane.pane_id);
+                pane.tab_id = Some(match &pane.tile {
+                    Some(tile) => tile.group.clone(),
+                    None => tab_of(&pane.pane_id),
+                });
             }
+            number_tabs(&mut panes);
             panes
         })
         .await?)

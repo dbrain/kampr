@@ -9,6 +9,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
@@ -22,6 +23,7 @@ import dev.kampr.shared.ui.ManageLayer
 import dev.kampr.shared.ui.NewSheet
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
+import dev.kampr.shared.wire.PROVIDER_HERDR
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
@@ -83,7 +85,7 @@ class NewSheetAgentPaneTest {
             }
         }
 
-        onNodeWithContentDescription("Start a claude agent").performClick()
+        onNodeWithContentDescription("Start a claude agent").performScrollTo().performClick()
         waitForIdle()
         onNodeWithContentDescription("Start claude").performClick()
         waitForIdle()
@@ -97,13 +99,13 @@ class NewSheetAgentPaneTest {
             "a peer's pane was offered as somewhere to start this node's agent",
         )
 
-        onNodeWithContentDescription("Start it in kampr · bash").performClick()
+        onNodeWithContentDescription("Start it in kampr · bash").performScrollTo().performClick()
         waitForIdle()
         onNodeWithContentDescription("Start claude").performClick()
         waitForIdle()
 
         assertEquals(
-            listOf(ManageOp.AgentStart(SHELL.id, "claude", null, emptyList()) as ManageOp),
+            listOf(ManageOp.AgentStart(kind = "claude", at = SHELL.id, provider = PROVIDER_HERDR) as ManageOp),
             sent,
         )
     }
@@ -118,7 +120,7 @@ class NewSheetAgentPaneTest {
             Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet(sent, panes = listOf(ELSEWHERE)) } }
         }
 
-        onNodeWithContentDescription("Start a claude agent").performClick()
+        onNodeWithContentDescription("Start a claude agent").performScrollTo().performClick()
         waitForIdle()
 
         onNodeWithContentDescription("Start claude").performClick()
@@ -142,7 +144,7 @@ class NewSheetAgentPaneTest {
             }
         }
 
-        onNodeWithContentDescription("Start a claude agent").performClick()
+        onNodeWithContentDescription("Start a claude agent").performScrollTo().performClick()
         waitForIdle()
         assertEquals(
             0,
@@ -175,7 +177,7 @@ class NewSheetAgentPaneTest {
                 }
             }
             waitForIdle()
-            onNodeWithContentDescription("Start a claude agent").performClick()
+            onNodeWithContentDescription("Start a claude agent").performScrollTo().performClick()
             waitForIdle()
             onNodeWithContentDescription("Start it in kampr · bash").assertExists()
         } finally {

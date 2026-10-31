@@ -128,9 +128,22 @@ pub struct Native {
     pub attach: String,
     /// `systemd`, `detached`, or empty for `kampr-keep`'s own choice.
     pub launch: String,
+    /// Where `worktree.create` checks a branch out; empty is `~/.kampr/worktrees`, the shape
+    /// herdr gives its own under `~/.herdr/worktrees` (#617).
+    pub worktrees: String,
 }
 
 impl Native {
+    pub fn worktrees_dir(&self) -> PathBuf {
+        match self.worktrees.trim() {
+            "" => std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .unwrap_or_default()
+                .join(".kampr/worktrees"),
+            dir => PathBuf::from(dir),
+        }
+    }
+
     /// What the node, `kampr new/ls/attach` and `kampr doctor` all read, so they agree on where
     /// the sessions are.
     pub fn resolve(&self) -> anyhow::Result<kampr_native::NativeConfig> {
@@ -388,6 +401,19 @@ pub struct Herdr {
     /// one. Both states have to be expressible, which is why this is an option and not a list
     /// whose emptiness means "all".
     pub sessions: Option<Vec<String>>,
+    /// Absent is on exactly when herdr is installed or its socket is there, so a machine without
+    /// it has nothing to say about herdr rather than a herdr that is down.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+}
+
+impl Herdr {
+    pub fn is_on(&self, socket: &Path) -> bool {
+        self.enabled.unwrap_or_else(|| {
+            socket.exists()
+                || kampr_herdr::locate::locate(&self.binary, &kampr_herdr::Search::from_env()).is_ok()
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -447,6 +473,7 @@ impl Default for Herdr {
             binary: "herdr".into(),
             socket: String::new(),
             sessions: None,
+            enabled: None,
         }
     }
 }

@@ -35,6 +35,11 @@ enum class SizeMode(val wire: String) {
 const val MIN_PANE_COLS = 80
 const val MIN_PANE_ROWS = 24
 
+// Workspaces, tabs, agents, worktrees and layouts are made as Kampr sessions unless an op says
+// otherwise: a node routes one with no `provider` and no herdr `at` to Kampr, so herdr's are asked
+// for by name.
+const val PROVIDER_HERDR = "herdr"
+
 // One type per op, because `Map<String, String?>` could express four of them: `ratio` is a float,
 // `env` an object, `args` an array and `layout` a nested tree. Field names and shapes here are the
 // ones `crates/kampr-node/src/manage.rs` deserialises.
@@ -46,6 +51,8 @@ sealed interface ManageOp {
         val label: String? = null,
         val cwd: String? = null,
         val env: Map<String, String> = emptyMap(),
+        val command: String? = null,
+        val provider: String? = null,
     ) : ManageOp {
         override val op: String get() = "workspace.create"
     }
@@ -55,6 +62,7 @@ sealed interface ManageOp {
         val at: String,
         val label: String? = null,
         val cwd: String? = null,
+        val provider: String? = null,
     ) : ManageOp {
         override val op: String get() = "tab.create"
     }
@@ -104,11 +112,17 @@ sealed interface ManageOp {
         override val op: String get() = "focus"
     }
 
+    // Herdr's starts in the pane `at` names. A Kampr one starts beside a Kampr pane `at` names, or
+    // as a new tab of `workspace`, or on its own on `node`.
     data class AgentStart(
-        val at: String,
         val kind: String,
+        val at: String? = null,
         val name: String? = null,
         val args: List<String> = emptyList(),
+        val node: String? = null,
+        val workspace: String? = null,
+        val cwd: String? = null,
+        val provider: String? = null,
     ) : ManageOp {
         override val op: String get() = "agent.start"
     }
@@ -119,6 +133,7 @@ sealed interface ManageOp {
         val base: String? = null,
         val cwd: String? = null,
         val label: String? = null,
+        val provider: String? = null,
     ) : ManageOp {
         override val op: String get() = "worktree.create"
     }
@@ -128,6 +143,7 @@ sealed interface ManageOp {
         val path: String,
         val cwd: String? = null,
         val label: String? = null,
+        val provider: String? = null,
     ) : ManageOp {
         override val op: String get() = "worktree.open"
     }
@@ -211,6 +227,7 @@ sealed interface ManageOp {
         val label: String? = null,
         val desk: Boolean = false,
         val at: String? = null,
+        val workspace: String? = null,
     ) : ManageOp {
         override val op: String get() = OP
 
@@ -261,12 +278,15 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             if (env.isNotEmpty()) {
                 put("env", buildJsonObject { env.forEach { (k, v) -> put(k, v) } })
             }
+            opt("command", command)
+            opt("provider", provider)
         }
 
         is ManageOp.TabCreate -> {
             put("at", at)
             opt("label", label)
             opt("cwd", cwd)
+            opt("provider", provider)
         }
 
         is ManageOp.PaneSplit -> {
@@ -302,10 +322,14 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         is ManageOp.Focus -> put("at", at)
 
         is ManageOp.AgentStart -> {
-            put("at", at)
+            opt("at", at)
             put("kind", kind)
+            opt("node", node)
+            opt("workspace", workspace)
+            opt("cwd", cwd)
             opt("name", name)
-            put("args", buildJsonArray { args.forEach { add(JsonPrimitive(it)) } })
+            if (args.isNotEmpty()) put("args", buildJsonArray { args.forEach { add(JsonPrimitive(it)) } })
+            opt("provider", provider)
         }
 
         is ManageOp.WorktreeCreate -> {
@@ -314,6 +338,7 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             opt("base", base)
             opt("cwd", cwd)
             opt("label", label)
+            opt("provider", provider)
         }
 
         is ManageOp.WorktreeOpen -> {
@@ -321,6 +346,7 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             put("path", path)
             opt("cwd", cwd)
             opt("label", label)
+            opt("provider", provider)
         }
 
         is ManageOp.LayoutExport -> put("at", at)
@@ -367,6 +393,7 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
                 put("desk", true)
                 opt("at", at)
             }
+            opt("workspace", workspace)
         }
 
         is ManageOp.NativeClose -> put("at", at)

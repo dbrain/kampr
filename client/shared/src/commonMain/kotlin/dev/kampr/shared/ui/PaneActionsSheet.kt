@@ -24,13 +24,13 @@ import dev.kampr.shared.model.isNative
 import dev.kampr.shared.model.nativeActions
 import dev.kampr.shared.model.nativeFacts
 import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.workspaceKey
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.ZoomMode
 import dev.kampr.shared.wire.isMuffit
-import dev.kampr.shared.wire.workspaceIdOf
 import kotlinx.serialization.json.JsonObject
 
 // The in-session sheet, which is the half of this that may talk about the desk at all: it is
@@ -103,6 +103,7 @@ fun PaneActionsSheet(
                     NativeTarget(pane, desk, ::send, null, files, renamable = false)
                 } else if (pane.isNative) {
                     NativeTarget(pane, desk, ::send, find, chips)
+                    Containers(pane, panes, snapshot, focusable = false, ::send)
                 } else {
                     Target(
                         kind = "pane",
@@ -116,50 +117,7 @@ fun PaneActionsSheet(
                         onFind = find,
                         extra = chips,
                     )
-                    pane.tabId?.let { tabId ->
-                        Target(
-                            kind = "tab",
-                            name = pane.tab ?: tabId.substringAfter('/'),
-                            at = tabId,
-                            clearable = false,
-                            zoomable = false,
-                            holds = panes.count { it.tabId == tabId },
-                            onManage = ::send,
-                        ) {
-                            Chip(
-                                "remember the splits",
-                                false,
-                                { send(ManageOp.LayoutExport(tabId)) },
-                                label = "Remember how this tab is split, so it can be put back",
-                            )
-                            snapshot?.let { tree ->
-                                Chip(
-                                    "put the splits back",
-                                    false,
-                                    { send(ManageOp.LayoutApply(tabId, tree)) },
-                                    label = "Split this tab the way it was when you remembered it",
-                                )
-                            }
-                        }
-                        if (snapshot != null) {
-                            KText(
-                                "The remembered splits live on this device, and only until this sheet closes.",
-                                tokens.type.captionSmall,
-                                tokens.color.mute,
-                                maxLines = 2,
-                            )
-                        }
-                    }
-                    val workspaceId = pane.workspaceId ?: workspaceIdOf(pane.id)
-                    Target(
-                        kind = "workspace",
-                        name = pane.workspace ?: "this workspace",
-                        at = workspaceId,
-                        clearable = false,
-                        zoomable = false,
-                        holds = panes.count { (it.workspaceId ?: workspaceIdOf(it.id)) == workspaceId },
-                        onManage = ::send,
-                    )
+                    Containers(pane, panes, snapshot, focusable = true, ::send)
                     if (pane.tabId == null) {
                         KText(
                             "This node does not send a tab id, so its tab cannot be addressed.",
@@ -178,14 +136,68 @@ fun PaneActionsSheet(
     }
 }
 
+// A tab and the workspace it is in. A Kampr session's are its node's own, so they close and rename
+// as herdr's do, and only herdr's can be put on the desk.
+@Composable
+private fun Containers(pane: PaneInfo, panes: List<PaneInfo>, snapshot: JsonObject?, focusable: Boolean, send: (ManageOp) -> Unit) {
+    val tokens = Kampr.tokens
+    pane.tabId?.takeIf { focusable || panes.count { it.tabId == pane.tabId } > 1 }?.let { tabId ->
+        Target(
+            kind = "tab",
+            name = pane.tab ?: tabId.substringAfter('/'),
+            at = tabId,
+            clearable = false,
+            zoomable = false,
+            holds = panes.count { it.tabId == tabId },
+            onManage = send,
+            focusable = focusable,
+            renamable = focusable,
+        ) {
+            Chip(
+                "remember the splits",
+                false,
+                { send(ManageOp.LayoutExport(tabId)) },
+                label = "Remember how this tab is split, so it can be put back",
+            )
+            snapshot?.let { tree ->
+                Chip(
+                    "put the splits back",
+                    false,
+                    { send(ManageOp.LayoutApply(tabId, tree)) },
+                    label = "Split this tab the way it was when you remembered it",
+                )
+            }
+        }
+        if (snapshot != null) {
+            KText(
+                "The remembered splits live on this device, and only until this sheet closes.",
+                tokens.type.captionSmall,
+                tokens.color.mute,
+                maxLines = 2,
+            )
+        }
+    }
+    val workspaceId = pane.workspaceKey ?: return
+    Target(
+        kind = "workspace",
+        name = pane.workspace ?: "this workspace",
+        at = workspaceId,
+        clearable = false,
+        zoomable = false,
+        holds = panes.count { it.workspaceKey == workspaceId },
+        onManage = send,
+        focusable = focusable,
+    )
+}
+
 private val DISMISSING = setOf("close", "native.close", "native.forget")
 
 private class Closing(val verb: String, val op: ManageOp) {
     val title: String get() = verb.replaceFirstChar(Char::uppercase)
 }
 
-// A kept session has no tab, no workspace and no place on the desk until one shows it, so herdr's
-// focus, zoom and layout are absent rather than pointed at a container it is not in.
+// A kept session has no place on the desk until one shows it, so herdr's focus and zoom are absent
+// rather than pointed at a screen it is not on.
 @Composable
 private fun NativeTarget(
     pane: PaneInfo,

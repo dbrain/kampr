@@ -28,21 +28,22 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.model.isNative
 import dev.kampr.shared.model.paneTitle
+import dev.kampr.shared.model.workspaceKey
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.util.bypassesSafety
 import dev.kampr.shared.util.commandLine
 import dev.kampr.shared.util.parseArgs
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
+import dev.kampr.shared.wire.PROVIDER_HERDR
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SessionInfo
 import dev.kampr.shared.wire.SplitDirection
-import dev.kampr.shared.wire.workspaceIdOf
 
 private enum class Step { Menu, Workspace, Tab, Worktree, Session, Native, Muffit, Node }
 
-private enum class Pick { Workspace, Split, Agent }
+private enum class Pick { Native, Workspace, Split, Agent, KamprAgent }
 
 private const val AGENT_CHIPS = 5
 private val RATIOS = listOf("⅓" to 0.33, "½" to 0.5, "⅔" to 0.67)
@@ -56,7 +57,7 @@ private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
 // already what they were looking at. `rename`, `close` and `focus` are not creates at all, and
 // `layout.export` answers with the caller's own container.
 private const val PANE_SPLIT = "pane.split"
-private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.", ManageOp.NativeCreate.OP, ManageOp.MuffitCreate.OP)
+private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.", "agent.start", ManageOp.NativeCreate.OP, ManageOp.MuffitCreate.OP)
 
 // A shell alias cannot be started by `agent.start` — an alias only exists inside an interactive
 // shell — but the argv behind one can, and the node has always forwarded it. Somebody who wants
@@ -97,7 +98,11 @@ fun NewSheet(
 ) {
     val tokens = Kampr.tokens
     var step by remember { mutableStateOf(Step.Menu) }
-    var pick by remember { mutableStateOf(Pick.Workspace) }
+    // Workspace, Tab and Worktree are one form each for both halves of the menu; this is which half
+    // opened it, and so whether the op names herdr.
+    var viaHerdr by remember { mutableStateOf(false) }
+    var workspaceCommand by remember { mutableStateOf(TextFieldValue()) }
+    var pick by remember(node.id) { mutableStateOf(if (node.native == true || !node.herdrOn) Pick.Native else Pick.Workspace) }
     var direction by remember { mutableStateOf(SplitDirection.Right) }
     var ratio by remember { mutableStateOf(0.5) }
     var kind by remember { mutableStateOf<String?>(null) }
@@ -129,6 +134,7 @@ fun NewSheet(
     val ownPanes = if (pane != null) emptyList() else panes.filter { it.nodeId == node.id }
     val agentTarget = pane ?: ownPanes.firstOrNull { it.id == agentPane }
     val kinds = caps?.agentKinds.orEmpty()
+    val kamprKinds = caps?.nativeAgents.orEmpty().takeIf { node.native == true }.orEmpty()
     LaunchedEffect(kinds) {
         if (kind == null) kind = kinds.firstOrNull()
     }
@@ -183,14 +189,36 @@ fun NewSheet(
     }
 
     val nodeId = node.id
-    val workspaceId = pane?.workspaceId ?: pane?.id?.let(::workspaceIdOf)
+    val workspaceId = pane?.workspaceKey
+    val provider = PROVIDER_HERDR.takeIf { viaHerdr }
+    val kamprPane = pane?.takeIf { it.isNative }
     val trimmedCwd = cwd.text.trim().ifEmpty { null }
     val trimmedLabel = label.text.trim().ifEmpty { null }
     // A kept session is not in a herdr container, so there is nothing of its to split beside.
     val deskAt = pane?.takeUnless { it.isNative }?.id
 
+    val startNative: (() -> Unit)? = if (node.native == true) {
+        {
+            val desk = nativeDesk && node.hasDesk
+            run(
+                ManageOp.NativeCreate(
+                    nodeId,
+                    command = nativeCommand.text.trim().ifEmpty { null },
+                    cwd = trimmedCwd,
+                    label = trimmedLabel,
+                    desk = desk,
+                    at = deskAt.takeIf { desk },
+                ),
+            )
+        }
+    } else {
+        null
+    }
+
     val action: Pair<String, (() -> Unit)?> = when (step) {
         Step.Menu -> when (pick) {
+            Pick.Native -> "Start Kampr session" to startNative
+
             Pick.Workspace -> "Create workspace" to {
                 run(ManageOp.WorkspaceCreate(nodeId, cwd = trimmedCwd))
             }
@@ -212,10 +240,11 @@ fun NewSheet(
                         agentArgs.remember(chosen, if (keepFlags) typed.ifEmpty { null } else null)
                         run(
                             ManageOp.AgentStart(
-                                agentTarget.id,
-                                chosen,
-                                agentName.text.trim().ifEmpty { null },
-                                parseArgs(typed),
+                                kind = chosen,
+                                at = agentTarget.id,
+                                name = agentName.text.trim().ifEmpty { null },
+                                args = parseArgs(typed),
+                                provider = PROVIDER_HERDR,
                             ),
                         )
                     }
@@ -223,28 +252,47 @@ fun NewSheet(
                     null
                 }
                 )
+
+            Pick.KamprAgent -> "Start ${kind ?: "an agent"}" to kind?.takeIf { it in kamprKinds }?.let { chosen ->
+                {
+                    run(
+                        ManageOp.AgentStart(
+                            kind = chosen,
+                            at = kamprPane?.id,
+                            node = nodeId.takeIf { kamprPane == null },
+                            args = parseArgs(agentArgs.get(chosen)),
+                        ),
+                    )
+                }
+            }
         }
 
         Step.Workspace -> "Create workspace" to {
-            run(ManageOp.WorkspaceCreate(nodeId, trimmedLabel, trimmedCwd, env.filter { it.first.isNotBlank() }.toMap()))
+            run(
+                if (viaHerdr) {
+                    ManageOp.WorkspaceCreate(nodeId, trimmedLabel, trimmedCwd, env.filter { it.first.isNotBlank() }.toMap(), provider = PROVIDER_HERDR)
+                } else {
+                    ManageOp.WorkspaceCreate(nodeId, trimmedLabel, trimmedCwd, command = workspaceCommand.text.trim().ifEmpty { null })
+                },
+            )
         }
 
         Step.Tab -> "Create tab" to (
-            workspaceId?.let { at ->
-                { run(ManageOp.TabCreate(at, trimmedLabel, trimmedCwd)) }
+            workspaceId?.takeIf { (kamprPane != null) == !viaHerdr }?.let { at ->
+                { run(ManageOp.TabCreate(at, trimmedLabel, trimmedCwd, provider)) }
             }
             )
 
         Step.Worktree -> if (existingWorktree) {
             "Open worktree" to (
                 worktreePath.text.trim().ifEmpty { null }?.let { path ->
-                    { run(ManageOp.WorktreeOpen(nodeId, path, trimmedCwd, trimmedLabel)) }
+                    { run(ManageOp.WorktreeOpen(nodeId, path, trimmedCwd, trimmedLabel, provider)) }
                 }
                 )
         } else {
             "Create worktree" to (
                 branch.text.trim().ifEmpty { null }?.let { b ->
-                    { run(ManageOp.WorktreeCreate(nodeId, b, base.text.trim().ifEmpty { null }, trimmedCwd, trimmedLabel)) }
+                    { run(ManageOp.WorktreeCreate(nodeId, b, base.text.trim().ifEmpty { null }, trimmedCwd, trimmedLabel, provider)) }
                 }
                 )
         }
@@ -255,19 +303,7 @@ fun NewSheet(
             }
             )
 
-        Step.Native -> "Start Kampr session" to {
-            val desk = nativeDesk && node.hasDesk
-            run(
-                ManageOp.NativeCreate(
-                    nodeId,
-                    command = nativeCommand.text.trim().ifEmpty { null },
-                    cwd = trimmedCwd,
-                    label = trimmedLabel,
-                    desk = desk,
-                    at = deskAt.takeIf { desk },
-                ),
-            )
-        }
+        Step.Native -> "Start Kampr session" to startNative
 
         Step.Muffit -> {
             val prompt = muffitPrompt.text.trim().ifEmpty { null }
@@ -293,9 +329,9 @@ fun NewSheet(
         SheetHeader(
             title = when (step) {
                 Step.Menu -> "New"
-                Step.Workspace -> "Workspace"
-                Step.Tab -> "Tab"
-                Step.Worktree -> "Worktree"
+                Step.Workspace -> if (viaHerdr) "Herdr workspace" else "Workspace"
+                Step.Tab -> if (viaHerdr) "Herdr tab" else "Tab"
+                Step.Worktree -> if (viaHerdr) "Herdr worktree" else "Worktree"
                 Step.Session -> "Named session"
                 Step.Native -> "Kampr session"
                 Step.Muffit -> "Muffit session"
@@ -322,8 +358,11 @@ fun NewSheet(
                     ratio = ratio,
                     sessions = caps?.sessions.orEmpty(),
                     muffit = muffit,
-                    onStep = {
-                        step = it
+                    kamprKinds = kamprKinds,
+                    kamprPane = kamprPane,
+                    onStep = { next, herdr ->
+                        step = next
+                        viaHerdr = herdr
                         refusal = null
                     },
                     onPick = { pick = it },
@@ -336,6 +375,11 @@ fun NewSheet(
                         kind = it
                         pick = Pick.Agent
                     },
+                    onKamprKind = {
+                        kind = it
+                        pick = Pick.KamprAgent
+                    },
+                    kamprLaunch = kind?.takeIf { pick == Pick.KamprAgent }?.let { commandLine(it, parseArgs(agentArgs.get(it))) },
                     onMoreKinds = { allKinds = true },
                     agentPanes = ownPanes,
                     agentTarget = agentTarget,
@@ -350,7 +394,6 @@ fun NewSheet(
                     onAgentFlags = { agentFlags = it },
                     keepFlags = keepFlags,
                     onKeepFlags = { keepFlags = it },
-                    onNodePicker = onNodePicker,
                 )
 
                 Step.Node -> Fields {
@@ -366,15 +409,14 @@ fun NewSheet(
                         // its kampr came back, its herdr did not, and the one surface that could
                         // have started it refused: the machine was listed with its herdr socket
                         // error under it and no way to press it.
-                        val cold = !machine.online && machine.isReachable
+                        val cold = machine.herdrOn && !machine.online && machine.isReachable && !machine.isServing
                         SheetCard(
                             icon = null,
                             iconTint = null,
                             title = machine.name,
                             subtitle = when {
-                                cold && machine.isServing -> "no herdr here — a Kampr session needs none"
                                 cold -> "herdr is not running here — making something starts it"
-                                !machine.online -> machine.detail ?: "unreachable"
+                                !machine.isReachable -> machine.detail ?: "unreachable"
                                 machine.id == node.id -> "what this sheet is aimed at"
                                 machine.kind == "local" -> "the node this device is connected to"
                                 else -> "a paired machine"
@@ -406,19 +448,26 @@ fun NewSheet(
                     // A peer answers `caps` to its own clients, not to this one, so the agent
                     // kinds and named sessions belong to the node this device is connected to.
                     // Everything else in the sheet is addressed by id and reaches any of them.
-                    Note("Workspaces, tabs, splits and worktrees can be made on any machine here. Agents and named sessions are offered by the node this device is connected to.")
+                    if (nodes.any { it.herdrOn }) {
+                        Note("Herdr's agents and named sessions are offered by the node this device is connected to; everything else can be made on any machine here.")
+                    }
                 }
 
                 Step.Workspace -> Fields {
                     LabelledField("label", "kampr", label) { label = it }
                     LabelledField("directory", "/home/dbrain/dev/kampr", cwd) { cwd = it }
-                    EnvEditor(
-                        env,
-                        { index, row -> env[index] = row },
-                        { env.add("" to "") },
-                        { env.removeAt(it) },
-                    )
-                    Note("A workspace, its directory and its variables in one call — a Claude session in this worktree with these variables is one action, not a script.")
+                    if (viaHerdr) {
+                        EnvEditor(
+                            env,
+                            { index, row -> env[index] = row },
+                            { env.add("" to "") },
+                            { env.removeAt(it) },
+                        )
+                        Note("A workspace, its directory and its variables in one call — a Claude session in this worktree with these variables is one action, not a script.")
+                    } else {
+                        LabelledField("command", "the login shell", workspaceCommand) { workspaceCommand = it }
+                        Note("A named group of Kampr sessions on ${node.name}, starting with one in this directory. Its tabs and splits are kept by Kampr.")
+                    }
                 }
 
                 Step.Tab -> Fields {
@@ -426,7 +475,7 @@ fun NewSheet(
                     LabelledField("directory", pane?.cwd ?: "/home/dbrain/dev/kampr", cwd) { cwd = it }
                     Note(
                         if (workspaceId == null) {
-                            "Open a pane first — a tab is created inside a workspace."
+                            "Open a pane in a workspace first — a tab is created inside one."
                         } else {
                             "In ${pane?.workspace ?: workspaceId}."
                         },
@@ -448,7 +497,13 @@ fun NewSheet(
                         LabelledField("repository", pane?.cwd ?: "/home/dbrain/dev/kampr", cwd) { cwd = it }
                     }
                     LabelledField("label", "mesh-auth", label) { label = it }
-                    Note("Herdr's own git support: a worktree for the branch, and a workspace opened on it.")
+                    Note(
+                        if (viaHerdr) {
+                            "Herdr's own git support: a worktree for the branch, and a workspace opened on it."
+                        } else {
+                            "A git worktree for the branch, and a Kampr workspace opened on it."
+                        },
+                    )
                 }
 
                 Step.Native -> NativeSessionFields(
@@ -561,11 +616,15 @@ private fun Menu(
     ratio: Double,
     sessions: List<SessionInfo>,
     muffit: Boolean,
-    onStep: (Step) -> Unit,
+    kamprKinds: List<String>,
+    kamprPane: PaneInfo?,
+    onStep: (Step, herdr: Boolean) -> Unit,
     onPick: (Pick) -> Unit,
     onDirection: (SplitDirection) -> Unit,
     onRatio: (Double) -> Unit,
     onKind: (String) -> Unit,
+    onKamprKind: (String) -> Unit,
+    kamprLaunch: String?,
     onMoreKinds: () -> Unit,
     agentPanes: List<PaneInfo>,
     agentTarget: PaneInfo?,
@@ -577,25 +636,26 @@ private fun Menu(
     onAgentFlags: (TextFieldValue) -> Unit,
     keepFlags: Boolean,
     onKeepFlags: (Boolean) -> Unit,
-    onNodePicker: () -> Unit,
 ) {
     val compact = breakpoint == Breakpoint.Landscape
     val agent = AgentPick(
         kinds, allKinds, kind, agentName, onAgentName, agentFlags, onAgentFlags, keepFlags,
         onKeepFlags, onKind, onMoreKinds, node.name, agentPanes, agentTarget, agentPane, onAgentPane,
     )
-    if (breakpoint == Breakpoint.Portrait) {
+    val extras = Extras(pane, pick, direction, ratio, sessions, { onStep(it, true) }, onPick, onDirection, onRatio)
+    val kampr = KamprPick(node, peers, pick, muffit, kamprKinds, kind, kamprPane, kamprLaunch, onStep, onPick, onKamprKind)
+    if (breakpoint == Breakpoint.Portrait || !node.herdrOn) {
         Column {
-            Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
-            Elsewhere(compact, node, pane, peers, pick, sessions, muffit, onStep, agent, onNodePicker)
+            KamprCards(compact, kampr)
+            if (node.herdrOn) HerdrCards(compact, extras, agent)
         }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
             Column(Modifier.weight(1f)) {
-                Structure(compact, node, peers, pane, pick, direction, ratio, onStep, onPick, onDirection, onRatio)
+                KamprCards(compact, kampr)
             }
             Column(Modifier.weight(1f)) {
-                Elsewhere(compact, node, pane, peers, pick, sessions, muffit, onStep, agent, onNodePicker)
+                HerdrCards(compact, extras, agent)
             }
         }
     }
@@ -621,21 +681,31 @@ private class AgentPick(
     val onPane: (String) -> Unit,
 )
 
+// What the Kampr half of the menu reads and writes, for the same reason `Extras` exists.
+private class KamprPick(
+    val node: NodeInfo,
+    val peers: List<NodeInfo>,
+    val pick: Pick,
+    val muffit: Boolean,
+    val kinds: List<String>,
+    val kind: String?,
+    val pane: PaneInfo?,
+    val launch: String?,
+    val onStep: (Step, Boolean) -> Unit,
+    val onPick: (Pick) -> Unit,
+    val onKind: (String) -> Unit,
+)
+
 @Composable
-private fun Structure(
-    compact: Boolean,
-    node: NodeInfo,
-    peers: List<NodeInfo>,
-    pane: PaneInfo?,
-    pick: Pick,
-    direction: SplitDirection,
-    ratio: Double,
-    onStep: (Step) -> Unit,
-    onPick: (Pick) -> Unit,
-    onDirection: (SplitDirection) -> Unit,
-    onRatio: (Double) -> Unit,
-) {
+private fun KamprCards(compact: Boolean, kampr: KamprPick) {
     val tokens = Kampr.tokens
+    val node = kampr.node
+    val peers = kampr.peers
+    val pick = kampr.pick
+    val muffit = kampr.muffit
+    val onStep: (Step) -> Unit = { kampr.onStep(it, false) }
+    val onPick = kampr.onPick
+    val native = node.native == true
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         // First, because it governs every card under it: everything this sheet makes is made on
         // one machine, and the herd's own New button has to aim somewhere before you have a pane
@@ -656,26 +726,125 @@ private fun Structure(
         SheetCard(
             icon = KamprIcons.workspace,
             iconTint = tokens.color.accent,
+            title = "Kampr session",
+            subtitle = if (node.native == true) {
+                "a shell or a command, kept running by Kampr"
+            } else {
+                "needs Kampr 0.1.119 on ${node.name}"
+            },
+            compact = compact,
+            selected = pick == Pick.Native,
+            onClick = if (node.native == true) {
+                (
+                    {
+                        onPick(Pick.Native)
+                        onStep(Step.Native)
+                    }
+                    )
+            } else {
+                null
+            },
+        )
+        if (kampr.kinds.isNotEmpty()) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                kampr.kinds.forEach { k ->
+                    Chip(k, k == kampr.kind && pick == Pick.KamprAgent, { kampr.onKind(k) }, label = "Start $k as a Kampr session")
+                }
+            }
+            kampr.launch?.let { line ->
+                KText(
+                    listOfNotNull(line, kampr.pane?.let { "beside ${paneTitle(it)}" }).joinToString(" · "),
+                    tokens.type.meta,
+                    tokens.color.dim,
+                    Modifier.named("Starts $line"),
+                    maxLines = 2,
+                )
+            }
+        }
+        if (muffit) {
+            SheetCard(
+                icon = null,
+                iconTint = null,
+                title = "Muffit session",
+                subtitle = "an agent that is a conversation, not a terminal",
+                compact = compact,
+                onClick = { onStep(Step.Muffit) },
+            )
+        }
+        SheetCard(
+            icon = KamprIcons.workspace,
+            iconTint = tokens.color.dim,
+            title = "Kampr workspace",
+            subtitle = "a named group of sessions, with its own tabs",
+            compact = compact,
+            onClick = if (native) ({ onStep(Step.Workspace) }) else null,
+        )
+        SheetCard(
+            icon = KamprIcons.tab,
+            iconTint = tokens.color.dim,
+            title = "Kampr tab",
+            subtitle = kampr.pane?.workspace?.let { "another tab in $it" } ?: "open a Kampr session in a workspace first",
+            compact = compact,
+            onClick = if (native && kampr.pane?.workspaceKey != null) ({ onStep(Step.Tab) }) else null,
+        )
+        SheetCard(
+            icon = KamprIcons.branch,
+            iconTint = tokens.color.dim,
+            title = "Kampr worktree",
+            subtitle = "a branch in its own directory, and a workspace on it",
+            compact = compact,
+            onClick = if (native) ({ onStep(Step.Worktree) }) else null,
+        )
+    }
+}
+
+// What the herdr half of the menu reads and writes, gathered so it can be handed whole to whichever
+// column it is drawn in.
+private class Extras(
+    val pane: PaneInfo?,
+    val pick: Pick,
+    val direction: SplitDirection,
+    val ratio: Double,
+    val sessions: List<SessionInfo>,
+    val onStep: (Step) -> Unit,
+    val onPick: (Pick) -> Unit,
+    val onDirection: (SplitDirection) -> Unit,
+    val onRatio: (Double) -> Unit,
+)
+
+@Composable
+private fun HerdrCards(compact: Boolean, extras: Extras, agent: AgentPick) {
+    val tokens = Kampr.tokens
+    val pane = extras.pane
+    val pick = extras.pick
+    SheetSection("with herdr", compact)
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        SheetCard(
+            icon = KamprIcons.workspace,
+            iconTint = tokens.color.dim,
             title = "Workspace",
-            subtitle = "a directory and a fresh shell",
+            subtitle = "a herdr workspace: a directory and a fresh shell",
             compact = compact,
             selected = pick == Pick.Workspace,
             onClick = {
-                onPick(Pick.Workspace)
-                onStep(Step.Workspace)
+                extras.onPick(Pick.Workspace)
+                extras.onStep(Step.Workspace)
             },
         )
         SheetCard(
             icon = KamprIcons.tab,
-            iconTint = tokens.color.accent,
+            iconTint = tokens.color.dim,
             title = "Tab",
-            subtitle = pane?.workspace?.let { "another tab in $it" } ?: "open a pane first",
+            subtitle = pane?.takeUnless { it.isNative }?.workspace?.let { "another tab in $it" } ?: "open a herdr pane first",
             compact = compact,
-            onClick = if (pane == null) null else ({ onStep(Step.Tab) }),
+            onClick = if (pane == null || pane.isNative) null else ({ extras.onStep(Step.Tab) }),
         )
         SheetCard(
             icon = KamprIcons.split,
-            iconTint = tokens.color.accent,
+            iconTint = tokens.color.dim,
             title = "Split this pane",
             subtitle = if (pane == null) "open a pane first" else "changes the layout at the desk too",
             compact = compact,
@@ -688,15 +857,15 @@ private fun Structure(
                         Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                             Chip(
                                 "right",
-                                direction == SplitDirection.Right,
-                                { onDirection(SplitDirection.Right) },
+                                extras.direction == SplitDirection.Right,
+                                { extras.onDirection(SplitDirection.Right) },
                                 quiet = true,
                                 label = "Split to the right",
                             )
                             Chip(
                                 "down",
-                                direction == SplitDirection.Down,
-                                { onDirection(SplitDirection.Down) },
+                                extras.direction == SplitDirection.Down,
+                                { extras.onDirection(SplitDirection.Down) },
                                 quiet = true,
                                 label = "Split downwards",
                             )
@@ -712,27 +881,12 @@ private fun Structure(
             ) {
                 LabelText("ratio", tokens.type.micro, tokens.color.mute, Modifier.padding(top = 8.dp))
                 RATIOS.forEach { (text, value) ->
-                    Chip(text, ratio == value, { onRatio(value) }, quiet = true, label = "Split ratio $text")
+                    Chip(text, extras.ratio == value, { extras.onRatio(value) }, quiet = true, label = "Split ratio $text")
                 }
             }
         }
     }
-}
 
-@Composable
-private fun Elsewhere(
-    compact: Boolean,
-    node: NodeInfo,
-    pane: PaneInfo?,
-    peers: List<NodeInfo>,
-    pick: Pick,
-    sessions: List<SessionInfo>,
-    muffit: Boolean,
-    onStep: (Step) -> Unit,
-    agent: AgentPick,
-    onNodePicker: () -> Unit,
-) {
-    val tokens = Kampr.tokens
     SheetSection("start an agent", compact)
     Box(Modifier.padding(horizontal = 16.dp)) {
         Surface(Modifier.fillMaxWidth()) {
@@ -787,49 +941,27 @@ private fun Elsewhere(
     Box(Modifier.padding(horizontal = 16.dp)) {
         SheetCard(
             icon = KamprIcons.branch,
-            iconTint = tokens.color.done,
+            iconTint = tokens.color.dim,
             title = "Worktree",
             subtitle = "a branch, its own directory, its own workspace",
             compact = compact,
-            onClick = { onStep(Step.Worktree) },
+            onClick = { extras.onStep(Step.Worktree) },
         )
     }
 
-    SheetSection("somewhere else", compact)
-    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        SheetCard(
-            icon = null,
-            iconTint = null,
-            title = "Kampr session",
-            subtitle = if (node.native == true) {
-                "a command kept by Kampr, no herdr needed"
-            } else {
-                "needs Kampr 0.1.119 on ${node.name}"
-            },
-            compact = compact,
-            onClick = if (node.native == true) ({ onStep(Step.Native) }) else null,
-        )
-        if (muffit) {
-            SheetCard(
-                icon = null,
-                iconTint = null,
-                title = "Muffit session",
-                subtitle = "an agent that is a conversation, not a terminal",
-                compact = compact,
-                onClick = { onStep(Step.Muffit) },
-            )
-        }
+    SheetSection("another herdr server", compact)
+    Box(Modifier.padding(horizontal = 16.dp)) {
         SheetCard(
             icon = null,
             iconTint = null,
             title = "Named session",
-            subtitle = sessions.takeIf { it.isNotEmpty() }
+            subtitle = extras.sessions.takeIf { it.isNotEmpty() }
                 ?.joinToString(", ") { it.name }
                 ?.let { "its own server · $it" }
                 ?: "its own server",
-            subtitleMono = sessions.isNotEmpty(),
+            subtitleMono = extras.sessions.isNotEmpty(),
             compact = compact,
-            onClick = { onStep(Step.Session) },
+            onClick = { extras.onStep(Step.Session) },
         )
     }
 }
