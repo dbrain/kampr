@@ -827,7 +827,13 @@ impl Session {
                 typed,
                 from,
             } => self.input(&pane, text, b64, keys, typed, from).await,
-            ClientMsg::Paste { pane, b64, name } => self.paste(&pane, &b64, name.as_deref()).await,
+            ClientMsg::Paste {
+                pane,
+                b64,
+                name,
+                typed,
+                id,
+            } => self.paste(&pane, &b64, name.as_deref(), typed, id).await,
             ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
             ClientMsg::AnswerSubmit { pane } => self.answer_submit(&pane).await,
             ClientMsg::ConvoLoad { pane, before } => self.convo_load(&pane, before.as_deref()),
@@ -1780,63 +1786,83 @@ impl Session {
         }
     }
 
-    /// Bytes from a client, written to a file on the pane's own node and typed in as its path.
+    /// Bytes from a client, written to a file on the pane's own node and typed in as its path —
+    /// or, when not `typed`, answered with the path as `pasted` under the client's `id` and typed
+    /// nowhere.
     ///
     /// **This is typing, and it is gated as typing** — the same `may_write` and the same
     /// dispatch-time device refresh, because the alternative is the shape of #304: a verb that
-    /// reaches the filesystem while the arm that re-reads the device row does not cover it.
+    /// reaches the filesystem while the arm that re-reads the device row does not cover it. A quiet
+    /// paste keeps the gate: its whole purpose is the next reply, which is typing.
     ///
     /// A pane on a peer is relayed rather than written here. The file has to land on the machine
     /// the harness will read it from, so the frame travels and that node writes it — a path this
     /// node chose would name nothing on the machine that matters.
-    async fn paste(&mut self, pane: &str, b64: &str, name: Option<&str>) {
+    async fn paste(&mut self, pane: &str, b64: &str, name: Option<&str>, typed: bool, id: Option<String>) {
         if !self.may_write("paste", Some(pane)) {
             return;
         }
         let Some((session, local)) = self.node.resolve(pane) else {
             self.audit("paste", Some(pane), Some(json!({ "peer": true })));
-            self.relay_to_peer(
-                pane,
-                json!({ "t": "paste", "pane": pane, "b64": b64, "name": name }),
-            );
+            let mut relayed = json!({ "t": "paste", "pane": pane, "b64": b64, "name": name });
+            if !typed {
+                relayed["typed"] = Value::Bool(false);
+                relayed["id"] = json!(id);
+            }
+            self.relay_to_peer(pane, relayed);
             return;
+        };
+        let refuse = |wire: &crate::wire::Wire, why: &str| match typed {
+            true => wire.error(ErrorCode::BadRequest, why, Some(pane)),
+            false => wire.send(&ServerMsg::Pasted {
+                pane: pane.to_string(),
+                id: id.clone(),
+                path: None,
+                text: None,
+                refused: Some(why.to_string()),
+            }),
         };
         // The length is read off the base64 before anything is allocated, so a body claiming a
         // gigabyte costs a comparison rather than a gigabyte.
         if kampr_journal::attach::decoded_len(b64) > kampr_journal::attach::MAX_BYTES {
-            self.wire.error(
-                ErrorCode::BadRequest,
-                "that is larger than this node will take",
-                Some(pane),
-            );
+            refuse(&self.wire, "that is larger than this node will take");
             return;
         }
         let Ok(body) = base64::engine::general_purpose::STANDARD
             .decode(b64)
             .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(b64))
         else {
-            self.wire
-                .error(ErrorCode::BadRequest, "the body was not base64", Some(pane));
+            refuse(&self.wire, "the body was not base64");
             return;
         };
-        let written = crate::paste::write(&self.node.state_dir, &body, name);
-        let path = match written {
+        let path = match crate::paste::write(&self.node.state_dir, &body, name) {
             Ok(path) => path,
             Err(e) => {
-                self.wire.error(ErrorCode::BadRequest, &e.to_string(), Some(pane));
+                refuse(&self.wire, &e.to_string());
                 return;
             }
         };
         self.audit(
             "paste",
             Some(pane),
-            Some(json!({ "bytes": body.len(), "path": path.display().to_string() })),
+            Some(json!({ "bytes": body.len(), "path": path.display().to_string(), "typed": typed })),
         );
-        let typed = match session.muffit_link(&local) {
+        let text = match session.muffit_link(&local) {
             Some(tui) if tui.terminal => crate::paste::bracketed(&path),
             _ => crate::paste::typed(&path),
         };
-        self.input(pane, Some(typed), None, None, false, None).await;
+        match typed {
+            true => self.input(pane, Some(text), None, None, false, None).await,
+            false => {
+                self.wire.send(&ServerMsg::Pasted {
+                    pane: pane.to_string(),
+                    id,
+                    path: Some(path.display().to_string()),
+                    text: Some(text),
+                    refused: None,
+                });
+            }
+        }
     }
 
     async fn answer(&mut self, pane: &str, key: &str) {

@@ -10,11 +10,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
 import dev.kampr.shared.model.asPath
+import dev.kampr.shared.model.mentionedDirs
+import dev.kampr.shared.model.nearer
 
 data class InlineStyles(val code: SpanStyle, val link: SpanStyle)
 
-fun inlineMarkdown(source: String, styles: InlineStyles): AnnotatedString = buildAnnotatedString {
-    Inline(source, styles, this).run()
+// `near` is the directories named earlier in the same reply, nearest first.
+fun inlineMarkdown(source: String, styles: InlineStyles, near: List<String> = emptyList()): AnnotatedString = buildAnnotatedString {
+    Inline(source, styles, this, near = near).run()
 }
 
 private class Inline(
@@ -24,8 +27,11 @@ private class Inline(
     // Off inside the label of a written link, which is already a target: scanning it again would
     // stack a second annotation over the same characters and aim it somewhere else.
     private val linkify: Boolean = true,
+    var near: List<String> = emptyList(),
 ) {
     private var at = 0
+
+    private fun pathTarget(path: String): String = pathLink(path, near).also { near = nearer(mentionedDirs(path), near) }
 
     fun run() {
         val pending = StringBuilder()
@@ -94,7 +100,7 @@ private class Inline(
         if (!linkify) return false
         val (length, path) = pathAt(src, at) ?: return false
         flush()
-        marked(src.substring(at, at + length), pathLink(path))
+        marked(src.substring(at, at + length), pathTarget(path))
         at += length
         return true
     }
@@ -110,7 +116,7 @@ private class Inline(
         out.withStyle(styles.code) { append(body) }
         if (linkify) {
             asPath(body, bare = false)?.let { path ->
-                out.addLink(LinkAnnotation.Url(pathLink(path), TextLinkStyles(styles.link)), start, out.length)
+                out.addLink(LinkAnnotation.Url(pathTarget(path), TextLinkStyles(styles.link)), start, out.length)
             }
         }
         at = close + ticks
@@ -224,7 +230,7 @@ private class Inline(
         val body = src.substring(at + token.length, probe)
         if (body.isEmpty()) return false
         val start = out.length
-        Inline(body, styles, out, linkify).run()
+        near = Inline(body, styles, out, linkify, near).also { it.run() }.near
         out.addStyle(style, start, out.length)
         at = probe + token.length
         return true

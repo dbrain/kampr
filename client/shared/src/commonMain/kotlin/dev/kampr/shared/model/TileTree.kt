@@ -82,7 +82,8 @@ data class PaneSection(val heading: String?, val panes: List<PaneInfo>)
 
 // Node, then workspace, then tab. The panes in no workspace come first with no heading, as the
 // whole of a node used to; the rest are ordered by the most urgent pane in each, the same rank a
-// flat list used, so a blocked agent still rises to the top of its node.
+// flat list used, so a blocked agent still rises to the top of its node. A heading tells sections
+// apart, so a node with only one has none.
 val NodeGroup.sections: List<PaneSection>
     get() {
         val loose = terminals.filter { it.workspaceKey == null }
@@ -99,7 +100,7 @@ val NodeGroup.sections: List<PaneSection>
                 for (tab in tabs) out += PaneSection(listOfNotNull(name, tab.first().tab).joinToString(" · "), tab)
             }
         }
-        return out
+        return if (out.size == 1) listOf(out.single().copy(heading = null)) else out
     }
 
 private fun urgency(panes: List<PaneInfo>): Int = panes.minOf { statusRank(statusOf(it)) }

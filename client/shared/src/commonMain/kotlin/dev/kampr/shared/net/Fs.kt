@@ -93,5 +93,10 @@ fun decodeListing(bytes: ByteArray): FsListing? = runCatching { json.decodeFromS
 
 fun decodeRepo(bytes: ByteArray): RepoSummary? = runCatching { json.decodeFromString<RepoSummary>(bytes.decodeToString()) }.getOrNull()
 
+@Serializable
+data class FsFound(val matches: List<String> = emptyList(), val truncated: Boolean = false)
+
+fun decodeFound(bytes: ByteArray): FsFound? = runCatching { json.decodeFromString<FsFound>(bytes.decodeToString()) }.getOrNull()
+
 // Path forms are routed by node id alone, so a node with no pane on screen is still browsable.
 fun anchorPane(nodeId: String): String = "$nodeId/_"

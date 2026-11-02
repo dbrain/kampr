@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
@@ -47,12 +50,15 @@ private fun testTokens() = KamprFonts(FontFamily.Default, FontFamily.Monospace, 
 private class ChromeProbe(private val inner: PaneSurfaces = TerminalSurfaces()) : PaneSurfaces {
     var top: Dp? = null
     var bottom: Dp? = null
+    val bottoms = HashMap<String, Dp>()
+    val bounds = HashMap<String, Rect>()
 
     @Composable
     override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) {
         top = LocalPaneChrome.current?.top
         bottom = LocalSafeArea.current.bottom
-        inner.Terminal(pane, info, modifier)
+        bottoms[pane.id] = LocalSafeArea.current.bottom
+        inner.Terminal(pane, info, modifier.onGloballyPositioned { bounds[pane.id] = it.boundsInRoot() })
     }
 
     @Composable
@@ -84,8 +90,12 @@ private fun ComposeUiTest.boundsOf(labels: List<String>) = labels
     .also { assertTrue(it.isNotEmpty(), "none of $labels is on this screen, so nothing was measured") }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.switcher(landscape: Boolean, probe: ChromeProbe) {
+private fun ComposeUiTest.switcher(landscape: Boolean, probe: ChromeProbe, focus: String? = null) {
     val fixture = Fixture().apply { fourPanes() }
+    if (focus != null) {
+        fixture.mosaic.pair(true)
+        fixture.mosaic.focus(focus)
+    }
     setContent {
         CompositionLocalProvider(
             LocalTokens provides testTokens(),
@@ -265,6 +275,51 @@ class MosaicSafeAreaTest {
                     "landscape=$landscape: the key row reaches $lowest of ${screen.bottom}, " +
                         "inside the ${BARS.bottom} the system draws its gesture handle in",
                 )
+            }
+        }
+    }
+
+    // Two cells under the bar, in both orientations and with the focus in either: the bar clears
+    // the clock, the cells start under the bar, their controls clear the side bars, and the key row
+    // clears the handle wherever the focus put it.
+    @Test
+    fun aPairedSwitcherKeepsEveryGuarantee() {
+        for (landscape in listOf(false, true)) {
+            for (focus in listOf(CLAUDE, CODEX)) {
+                runComposeUiTest {
+                    val probe = ChromeProbe()
+                    switcher(landscape, probe, focus)
+                    val at = "landscape=$landscape focus=$focus"
+                    val screen = onRoot().getUnclippedBoundsInRoot()
+                    val bar = boundsOf(listOf("Back to the herd", "Show "))
+                    assertTrue(with(density) { bar.minOf { it.top }.toDp() } >= BARS.top, "$at: bar under the clock")
+                    assertEquals(setOf(CLAUDE, CODEX), probe.bounds.keys, at)
+                    val (first, second) = listOf(CLAUDE, CODEX).map { probe.bounds.getValue(it) }
+                    assertTrue(!first.overlaps(second) && first.width > 0f && first.height > 0f, "$at: $first and $second overlap")
+                    for ((pane, cell) in probe.bounds) {
+                        assertTrue(cell.top >= bar.maxOf { it.bottom }, "$at: $pane starts under the bar")
+                    }
+                    val controls = boundsOf(listOf("Remove "))
+                    val left = with(density) { controls.minOf { it.left }.toDp() }
+                    val right = with(density) { controls.maxOf { it.right }.toDp() }
+                    assertTrue(left >= BARS.left, "$at: a control starts at $left, inside the left bar")
+                    assertTrue(right <= screen.right - BARS.right, "$at: a control reaches $right, inside the right bar")
+                    val lowest = with(density) { boundsOf(LAST_ROW).maxOf { it.bottom }.toDp() }
+                    assertTrue(lowest <= screen.bottom - BARS.bottom, "$at: the key row reaches $lowest, inside the handle")
+                }
+            }
+        }
+    }
+
+    // In portrait the top cell ends at the bottom one, which ends at the window: only the second
+    // owes the handle, whichever of them holds the focus.
+    @Test
+    fun onlyThePairedCellThatEndsAtTheWindowPaysTheHandle() {
+        for (focus in listOf(CLAUDE, CODEX)) {
+            runComposeUiTest {
+                val probe = ChromeProbe()
+                switcher(landscape = false, probe = probe, focus = focus)
+                assertEquals(mapOf(CLAUDE to 0.dp, CODEX to BARS.bottom), probe.bottoms.toMap(), "focus=$focus")
             }
         }
     }

@@ -6,6 +6,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.unreadDone
+import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.platform.MemoryPrefs
 import dev.kampr.shared.push.NoPush
 import dev.kampr.shared.theme.LocalTokens
@@ -31,9 +32,12 @@ private fun finished(vararg ids: String) = """{"t":"herd","nodes":[{"id":"01JNOD
 // down — but only for a cell that is showing, and a phone's mosaic shows one at a time.
 @OptIn(ExperimentalTestApi::class)
 class MosaicReadTest {
-    private fun unreadAfterShowing(breakpoint: Breakpoint): List<String> {
+    private fun unreadAfterShowing(breakpoint: Breakpoint, paired: Boolean = false): List<String> {
         val scope = CoroutineScope(SupervisorJob())
-        val prefs = MemoryPrefs().apply { set("mosaic.panes", encodeArrangement(listOf(FIRST, SECOND))) }
+        val prefs = MemoryPrefs().apply {
+            set("mosaic.panes", encodeArrangement(listOf(FIRST, SECOND)))
+            if (paired) MosaicState(this, KamprConnection(scope, KamprStore())).pair(true)
+        }
         val state = AppState(scope, KamprStore(), prefs, null, NoPush())
         state.store.accept(Wire.decode(finished(FIRST, SECOND)) ?: error("undecodable"))
         state.go(Screen.Mosaic)
@@ -59,6 +63,13 @@ class MosaicReadTest {
     fun onAPhoneOnlyTheCellShowingIsRead() {
         for (breakpoint in listOf(Breakpoint.Portrait, Breakpoint.Landscape)) {
             assertEquals(listOf(SECOND), unreadAfterShowing(breakpoint), "$breakpoint")
+        }
+    }
+
+    @Test
+    fun onAPhoneShowingTwoBothAreRead() {
+        for (breakpoint in listOf(Breakpoint.Portrait, Breakpoint.Landscape)) {
+            assertEquals(emptyList(), unreadAfterShowing(breakpoint, paired = true), "$breakpoint")
         }
     }
 }

@@ -65,7 +65,7 @@ fun TextFile(anchor: String, name: String, path: String?, stream: TextStream, mo
             Contents(name, stream, Modifier.weight(1f))
         } else {
             when (val c = changes) {
-                Changes.Asking -> Note("asking git", tokens.color.working)
+                Changes.Asking -> Skeleton(SkeletonShape.Lines, "the changes")
 
                 is Changes.Got -> if (c.patches.isEmpty()) {
                     Note("No changes since HEAD — the file is unchanged, untracked, or not in a git work tree.", tokens.color.mute)

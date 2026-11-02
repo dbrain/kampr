@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,6 +30,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -37,12 +39,14 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.gone
 import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.serves
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.BackAction
+import dev.kampr.shared.ui.BottomEdgeHeldBelow
 import dev.kampr.shared.ui.Dot
 import dev.kampr.shared.ui.GlyphAction
 import dev.kampr.shared.ui.KText
@@ -63,10 +67,12 @@ import kotlin.math.abs
 
 // P4.5.9: a four-way split on a 390 px screen is unreadable, so the phone gets the same set of
 // panes one at a time. The strip is the mosaic — swiping it or tapping a chip is the layout.
-private val SWITCHER_PORTRAIT = 44.dp
+internal val SWITCHER_PORTRAIT = 44.dp
+internal const val SWITCHER_BAR_TAG = "switcher-bar"
 private val SWITCHER_STRIP = 54.dp
 private val SWITCHER_LANDSCAPE = 48.dp
 private const val SWIPE_PX = 40f
+private val PAIR_GAP = 1.dp
 
 @Composable
 fun MosaicSwitcher(
@@ -90,6 +96,8 @@ fun MosaicSwitcher(
     Box(modifier.fillMaxSize().clipToBounds().background(tokens.color.surface2)) {
         if (paneId == null) {
             SwitcherEmpty(onAdd)
+        } else if (mosaic.shown.size == 2) {
+            SwitcherPair(store, mosaic, herd, surfaces, landscape, Modifier.padding(top = chrome))
         } else {
             val info = herd.panes.firstOrNull { it.id == paneId }
             val node = herd.nodes.firstOrNull { it.id == (info?.nodeId ?: paneId.substringBefore('/')) }
@@ -109,7 +117,7 @@ fun MosaicSwitcher(
             }
         }
 
-        Column(Modifier.align(Alignment.TopStart).fillMaxWidth()) {
+        Column(Modifier.align(Alignment.TopStart).fillMaxWidth().testTag(SWITCHER_BAR_TAG)) {
             if (landscape) {
                 Row(
                     Modifier
@@ -122,13 +130,14 @@ fun MosaicSwitcher(
                 ) {
                     BackAction("Back to the herd", onHerd, target = LANDSCAPE_TOUCH)
                     Strip(mosaic, herd, Modifier.weight(1f))
-                    Trailing(mosaic, herd, onAdd)
+                    Trailing(mosaic, herd, landscape, onAdd)
                 }
             } else {
                 Row(
                     Modifier
                         .fillMaxWidth()
                         .background(tokens.color.bar)
+                        .let { if (mosaic.panes.isEmpty()) it.edgeBottom() else it }
                         .height(SWITCHER_PORTRAIT + safe.top)
                         .absolutePadding(left = safe.left, top = safe.top, right = safe.right),
                     verticalAlignment = Alignment.CenterVertically,
@@ -141,18 +150,20 @@ fun MosaicSwitcher(
                         tokens.color.text,
                         Modifier.weight(1f),
                     )
-                    Trailing(mosaic, herd, onAdd)
+                    Trailing(mosaic, herd, landscape, onAdd)
                 }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(tokens.color.bar)
-                        .edgeBottom()
-                        .height(SWITCHER_STRIP)
-                        .absolutePadding(left = safe.left, right = safe.right),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Strip(mosaic, herd, Modifier.weight(1f))
+                if (mosaic.panes.isNotEmpty()) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(tokens.color.bar)
+                            .edgeBottom()
+                            .height(SWITCHER_STRIP)
+                            .absolutePadding(left = safe.left, right = safe.right),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Strip(mosaic, herd, Modifier.weight(1f))
+                    }
                 }
             }
         }
@@ -160,7 +171,7 @@ fun MosaicSwitcher(
 }
 
 @Composable
-private fun Trailing(mosaic: MosaicState, herd: Herd, onAdd: () -> Unit) {
+private fun Trailing(mosaic: MosaicState, herd: Herd, landscape: Boolean, onAdd: () -> Unit) {
     val tokens = Kampr.tokens
     val paneId = mosaic.focused
     val info = paneId?.let { id -> herd.panes.firstOrNull { it.id == id } }
@@ -171,6 +182,15 @@ private fun Trailing(mosaic: MosaicState, herd: Herd, onAdd: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         node?.rttMs?.let { KText(formatLatency(it), tokens.type.meta, tokens.color.mute) }
+        if (mosaic.panes.size >= 2) {
+            GlyphAction(
+                if (landscape) KamprIcons.split else KamprIcons.herd,
+                if (mosaic.paired) "Show one pane at a time" else "Show two panes at once",
+                if (mosaic.paired) tokens.color.accent else tokens.color.mute,
+                34.dp,
+                chip = 22.dp,
+            ) { mosaic.pair(!mosaic.paired) }
+        }
         // Only while there is something to keep. The desktop bar has carried this since the
         // mosaic shipped; the switcher had no way to keep a layout a thumb had rearranged.
         if (!mosaic.saved) {
@@ -217,6 +237,7 @@ private fun Strip(mosaic: MosaicState, herd: Herd, modifier: Modifier = Modifier
             val node = herd.nodes.firstOrNull { it.id == info?.nodeId }
             val status = info?.let(::statusOf) ?: AgentStatus.Unknown
             val active = mosaic.focused == paneId
+            val visible = paneId in mosaic.shown
             val shape = RoundedCornerShape(tokens.radii.sm)
             val at = mosaic.panes.indexOf(paneId)
             var origin by remember(paneId) { mutableStateOf(Offset.Zero) }
@@ -230,7 +251,7 @@ private fun Strip(mosaic: MosaicState, herd: Herd, modifier: Modifier = Modifier
                     .background(
                         when {
                             drag.held == paneId -> tokens.color.accentSoft
-                            active -> tokens.color.raise
+                            visible -> tokens.color.raise
                             else -> tokens.color.surface
                         },
                         shape,
@@ -287,6 +308,68 @@ private fun Strip(mosaic: MosaicState, herd: Herd, modifier: Modifier = Modifier
                     KText(node?.name ?: "", tokens.type.metaSmall, tokens.color.mute)
                 }
             }
+        }
+    }
+}
+
+// Two real cells, each with its own header, focus edge and gone marks. The key row stands in the
+// focused one, over its bottom edge, because the terminal under it insets by exactly that and a
+// row anywhere else would leave a key row's worth of blank rows in the cell being typed into.
+@Composable
+private fun SwitcherPair(
+    store: KamprStore,
+    mosaic: MosaicState,
+    herd: Herd,
+    surfaces: PaneSurfaces,
+    landscape: Boolean,
+    modifier: Modifier,
+) {
+    val tokens = Kampr.tokens
+    val safe = LocalSafeArea.current
+    val halves = mosaic.shown
+    val half: @Composable (Int, Modifier) -> Unit = { index, cellModifier ->
+        val paneId = halves[index]
+        val info = herd.panes.firstOrNull { it.id == paneId }
+        val pane = store.pane(paneId)
+        val focused = mosaic.focused == paneId
+        // Only what ends at the window owes the gesture handle: both halves side by side, the lower
+        // one stacked.
+        BottomEdgeHeldBelow(held = !landscape && index == 0) {
+            Box(cellModifier) {
+                MosaicCell(
+                    pane = pane,
+                    info = info,
+                    node = herd.nodes.firstOrNull { it.id == (info?.nodeId ?: paneId.substringBefore('/')) },
+                    focused = focused,
+                    surfaces = surfaces,
+                    onFocus = { mosaic.focus(paneId) },
+                    onRemove = { mosaic.remove(paneId) },
+                    modifier = Modifier.fillMaxSize(),
+                    gone = herd.gone(paneId),
+                    place = "cell ${mosaic.panes.indexOf(paneId) + 1} of ${mosaic.panes.size}",
+                    onMove = { mosaic.moveBy(paneId, it) },
+                )
+                if (focused && info.paints) {
+                    Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
+                        surfaces.KeyRow(pane, compact = false, Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
+    }
+    val inset = modifier
+        .fillMaxSize()
+        .background(tokens.color.line)
+        .absolutePadding(left = safe.left, right = safe.right)
+    if (landscape) {
+        Row(inset, horizontalArrangement = Arrangement.spacedBy(PAIR_GAP)) {
+            half(0, Modifier.weight(1f).fillMaxHeight())
+            half(1, Modifier.weight(1f).fillMaxHeight())
+        }
+    } else {
+        Column(inset, verticalArrangement = Arrangement.spacedBy(PAIR_GAP)) {
+            half(0, Modifier.weight(1f).fillMaxWidth())
+            half(1, Modifier.weight(1f).fillMaxWidth())
         }
     }
 }

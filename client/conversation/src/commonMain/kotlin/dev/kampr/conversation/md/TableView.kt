@@ -47,7 +47,7 @@ private val MAX_COLUMN = 230.dp
 private val MIN_COLUMN = 44.dp
 
 @Composable
-fun MarkdownTable(table: MdBlock.Table, query: String, modifier: Modifier = Modifier) {
+fun MarkdownTable(table: MdBlock.Table, query: String, modifier: Modifier = Modifier, near: List<String> = emptyList()) {
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
     val inline = rememberInlineStyles(palette)
@@ -59,11 +59,11 @@ fun MarkdownTable(table: MdBlock.Table, query: String, modifier: Modifier = Modi
     }
     val cellStyle = remember(tokens) { tokens.type.caption.copy(color = tokens.color.text) }
 
-    val head = remember(table, inline, query, palette) {
-        table.header.map { inlineMarkdown(it, inline).markMatches(query, palette.match) }
+    val head = remember(table, inline, query, palette, near) {
+        table.header.map { inlineMarkdown(it, inline, near).markMatches(query, palette.match) }
     }
-    val body = remember(table, inline, query, palette) {
-        table.rows.map { row -> row.map { inlineMarkdown(it, inline).markMatches(query, palette.match) } }
+    val body = remember(table, inline, query, palette, near) {
+        table.rows.map { row -> row.map { inlineMarkdown(it, inline, near).markMatches(query, palette.match) } }
     }
 
     val shape = RoundedCornerShape(tokens.radii.md)

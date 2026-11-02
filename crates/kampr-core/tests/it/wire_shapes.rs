@@ -365,6 +365,13 @@ fn server() -> Vec<ServerMsg> {
             pane: Some(pane()),
             node: Some("n".into()),
         },
+        ServerMsg::Pasted {
+            pane: pane(),
+            id: Some("c1".into()),
+            path: Some("/p".into()),
+            text: Some("/p ".into()),
+            refused: Some("r".into()),
+        },
         ServerMsg::Pong { n: 1 },
     ]
 }
@@ -396,6 +403,8 @@ fn client() -> Vec<ClientMsg> {
             pane: pane(),
             b64: "dA==".into(),
             name: Some("a.png".into()),
+            typed: false,
+            id: Some("c1".into()),
         },
         ClientMsg::Answer {
             pane: pane(),

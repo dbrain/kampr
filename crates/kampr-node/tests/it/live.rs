@@ -1706,8 +1706,7 @@ async fn the_history_a_reader_is_shown_under_the_grid_joins_onto_it() {
 
     let mut grid: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
     let mut history: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
-    let mut worst = 0i64;
-    let mut samples = 0u32;
+    let mut seams: Vec<i64> = Vec::new();
 
     let deadline = std::time::Instant::now() + Duration::from_secs(40);
     while std::time::Instant::now() < deadline {
@@ -1750,20 +1749,24 @@ async fn the_history_a_reader_is_shown_under_the_grid_joins_onto_it() {
         if above < 40 || below >= 395 {
             continue;
         }
-        samples += 1;
-        worst = worst.max(above as i64 - below as i64 - 1);
+        seams.push(above as i64 - below as i64 - 1);
     }
 
-    assert!(samples > 0, "the command never produced a measurable seam");
-    eprintln!("KAMPRSEAM samples={samples} worst_gap={worst}");
-    // Measured at 10 on this machine against the 158 the old cadence produced (probe #529). The
-    // bound is loose enough to survive a loaded runner and far under the defect: reinstating
-    // either half of it — the two-second ring poll or the three-second socket floor — is seconds
-    // of output and hundreds of rows, not tens.
+    assert!(!seams.is_empty(), "the command never produced a measurable seam");
+    seams.sort_unstable();
+    let samples = seams.len();
+    let usual = seams[samples * 9 / 10];
+    let worst = seams[samples - 1];
+    eprintln!("KAMPRSEAM samples={samples} p90={usual} worst_gap={worst}");
+    // The seam nine samples in ten, not the worst one. The worst is one late poll, and under a
+    // loaded full suite one poll is late by a scheduler stall that has nothing to do with the
+    // cadence: it reached 27 there while the p90 stayed at 9-15. Reinstating either half of the
+    // defect moves the p90 itself: 68-70 with the two-second ring poll, 106-107 with the
+    // three-second socket floor, against 158 rows on a real pane (probe #529).
     assert!(
-        worst <= 24,
-        "the client was shown {worst} rows of output joined onto history that does not continue \
-         it, over {samples} samples",
+        usual <= 24,
+        "the client was shown {usual} rows of output joined onto history that does not continue \
+         it in one sample in ten, over {samples} samples (worst {worst})",
     );
 }
 
@@ -4058,20 +4061,28 @@ async fn become_harness(session: &Session, local: &str, dir: &Path, agent: &str)
             json!({ "pane_id": local, "text": format!("exec {}\n", binary.display()) }),
         )
         .await;
-    for _ in 0..100 {
+    foreground_named(session, local, agent).await
+}
+
+/// The pid of the process called `name` that herdr reports in the pane's foreground. Given up on
+/// at the same minute as [`a_pane_at_its_shell`] and for the same reason: this is setup, and
+/// under the whole live suite a shell has taken over ten seconds to run what it was sent.
+async fn foreground_named(session: &Session, local: &str, name: &str) -> u32 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while tokio::time::Instant::now() < deadline {
         let info = session
             .call("pane.process_info", json!({ "pane_id": local }))
             .await;
         let found = info["process_info"]["foreground_processes"]
             .as_array()
-            .and_then(|ps| ps.iter().find(|p| p["name"] == agent))
+            .and_then(|ps| ps.iter().find(|p| p["name"] == name))
             .and_then(|p| p["pid"].as_u64());
         if let Some(pid) = found {
             return pid as u32;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("herdr never reported a {agent} process in the pane");
+    panic!("herdr never reported a {name} process in the pane");
 }
 
 /// The `timestamp` a record carries, read back out of the transcript that was written. The claim
@@ -6101,20 +6112,7 @@ impl Harnessed {
                 json!({ "pane_id": local, "text": format!("{} 600\n", self.binary.display()) }),
             )
             .await;
-        for _ in 0..100 {
-            let info = session
-                .call("pane.process_info", json!({ "pane_id": local }))
-                .await;
-            let found = info["process_info"]["foreground_processes"]
-                .as_array()
-                .and_then(|ps| ps.iter().find(|p| p["name"] == "claude"))
-                .and_then(|p| p["pid"].as_u64());
-            if let Some(pid) = found {
-                return pid as u32;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        panic!("herdr never reported a claude process in the pane");
+        foreground_named(session, local, "claude").await
     }
 
     async fn stop(&self, session: &Session, local: &str, pid: u32) {
@@ -8532,6 +8530,59 @@ async fn a_paste_lands_on_the_node_and_its_path_is_typed_into_the_pane() {
         body,
         "the bytes on disk are not the bytes that were sent"
     );
+}
+
+/// **The conversation's composer holds a paste as a chip, so the node must not type it.** A path
+/// typed into the pane lands on the harness's input line, and that line is read straight back as
+/// the desk line and the composer's mirror (the reported "awkward path" that moved about). The
+/// pane is watched across the whole wait, so a path that was typed would be painted into a frame.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quiet_paste_lands_on_the_node_answers_with_its_path_and_types_nothing() {
+    let h = harness!("paste-quiet");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    until(&mut socket, "herd", 10).await;
+    let pane = h.pane_id();
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 15).await;
+
+    let body = b"\x89PNG\r\n\x1a\n\x00kampr-quiet-body";
+    send(
+        &mut socket,
+        json!({
+            "t": "paste",
+            "pane": pane,
+            "b64": base64::engine::general_purpose::STANDARD.encode(body),
+            "name": "quietshot",
+            "typed": false,
+            "id": "c1",
+        }),
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut answer: Option<Value> = None;
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_millis(500)).await else {
+            continue;
+        };
+        assert!(
+            !message.to_string().contains("quietshot-") || message["t"] == "pasted",
+            "the path of a quiet paste reached the pane: {message}"
+        );
+        if message["t"] == "pasted" {
+            answer = Some(message);
+        }
+    }
+
+    let answer = answer.expect("the node never said where the paste landed");
+    assert_eq!(answer["pane"], pane, "{answer}");
+    assert_eq!(answer["id"], "c1", "{answer}");
+    let path = std::path::PathBuf::from(answer["path"].as_str().expect("a path"));
+    assert_eq!(path.parent(), Some(h.node.state_dir.join("pastes").as_path()));
+    assert_eq!(answer["text"], format!("{} ", path.display()), "{answer}");
+    assert_eq!(std::fs::read(&path).expect("the pasted file"), body);
 }
 
 /// **A screenshot is not a few kilobytes, and the socket has to be able to carry one.**

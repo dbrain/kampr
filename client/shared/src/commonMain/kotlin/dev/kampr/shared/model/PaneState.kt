@@ -317,6 +317,10 @@ class PaneState(val id: String, val styles: StyleTable) {
     // typed, and sent it again on top of itself.
     val mirror = ComposerMirror()
 
+    val files = PendingFiles()
+
+    val sends = PendingSends()
+
     // The node's answer to the last transcript search on this pane. On the pane rather than on the
     // store, because it is read where the transcript is: a result set naming turn ids belongs to
     // one transcript, and handing it to another pane's view would aim at turns it has never heard
@@ -414,6 +418,7 @@ class PaneState(val id: String, val styles: StyleTable) {
         mergeTurns(turns, msg.turns)
         convoCursor = msg.cursor
         convoMore = msg.more
+        sends.heard(turns, facets.queued)
         revision++
     }
 
@@ -464,6 +469,7 @@ class PaneState(val id: String, val styles: StyleTable) {
 
     fun applyFacets(msg: ServerMsg.ConvoFacets) {
         facets = msg.facets
+        sends.heard(turns, facets.queued)
         revision++
     }
 
@@ -519,6 +525,7 @@ class PaneState(val id: String, val styles: StyleTable) {
             convoMore = false
             convoCursor = null
         }
+        sends.heard(turns, facets.queued)
         revision++
     }
 

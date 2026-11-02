@@ -627,6 +627,10 @@ fn browsing_forms(root: &std::path::Path) -> Vec<kampr_journal::Source> {
             file: notes,
             rev: "HEAD".into(),
         },
+        Source::Find {
+            base: FileRef::new(root),
+            tail: "notes.md".into(),
+        },
         Source::Commit {
             repo: FileRef::new(root),
             sha: "0000".into(),
@@ -647,7 +651,7 @@ async fn a_hub_is_handed_every_browsing_form_off_the_peer_with_no_pane_behind_it
 
     let forms = browsing_forms(&root);
     let mut answers = Vec::new();
-    for (rid, source) in forms.iter().take(4).enumerate() {
+    for (rid, source) in forms.iter().take(5).enumerate() {
         let rid = rid as u64 + 20;
         peer.say(json!({
             "t": "att.fetch", "rid": rid, "pane": anchor, "id": source.encode(), "window": ATT_WINDOW
@@ -677,6 +681,12 @@ async fn a_hub_is_handed_every_browsing_form_off_the_peer_with_no_pane_behind_it
         "main"
     );
     assert_eq!(text(&answers[3]).1, "one\n");
+    let (mime, found) = text(&answers[4]);
+    assert_eq!(mime, "application/json");
+    assert_eq!(
+        serde_json::from_str::<Value>(&found).expect("JSON")["matches"],
+        json!([root.join("notes.md").display().to_string()])
+    );
     peer.stop();
 }
 

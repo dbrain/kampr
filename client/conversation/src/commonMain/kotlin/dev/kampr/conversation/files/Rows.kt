@@ -43,7 +43,7 @@ fun EntryRow(
         ) {
             icon?.let { IconGlyph(it, 16.dp, tokens.color.dim) }
             Column(Modifier.weight(1f)) {
-                KText(name, tokens.type.meta, tokens.color.text)
+                KText(name, tokens.type.caption, tokens.color.text)
                 if (!facts.isNullOrEmpty()) KText(facts, tokens.type.micro, tokens.color.mute)
             }
             badge?.let { GitBadge(it) }

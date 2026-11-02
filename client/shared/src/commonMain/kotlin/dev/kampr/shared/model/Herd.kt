@@ -118,4 +118,11 @@ fun Herd.gone(paneId: String): PaneGone? = when {
     else -> PaneGone.Node
 }
 
+// A pane the operator saw whose shell has since ended. Only a seen pane can have closed: one not yet
+// in the herd is still arriving. A node whose herdr went down takes every pane off the herd while the
+// node itself stays, which `gone` cannot tell from each shell exiting, so the node must be serving.
+fun Herd.closed(paneId: String, seen: Boolean, lastSeen: PaneInfo?): Boolean = seen &&
+    gone(paneId) == PaneGone.Shell &&
+    nodes.firstOrNull { it.id == paneId.substringBefore('/') }?.serves(lastSeen) == true
+
 fun paneTitle(pane: PaneInfo): String = Naming.default.render(fieldsOf(pane, pane.title))

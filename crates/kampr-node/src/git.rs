@@ -391,6 +391,20 @@ pub fn summary(dir: &Path) -> Result<RepoSummary, GitError> {
     })
 }
 
+/// Every file below `dir` that the project holds — tracked, or untracked and not ignored — as
+/// paths relative to `dir`.
+pub fn files_below(dir: &Path) -> Result<Vec<String>, GitError> {
+    let raw = run(
+        dir,
+        ["ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+    )?;
+    Ok(raw
+        .split(|b| *b == 0)
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| std::str::from_utf8(p).ok().map(str::to_string))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

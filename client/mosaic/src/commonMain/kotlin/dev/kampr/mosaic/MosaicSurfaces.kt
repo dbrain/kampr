@@ -51,8 +51,8 @@ class MosaicSurfaces : MosaicHost {
                 state.showing(emptyList())
             }
         }
-        // A phone's mosaic shows one cell at a time, and a finish in a cell swiped past is unread.
-        val showing = if (breakpoint == Breakpoint.Desktop) mosaic.panes else listOfNotNull(mosaic.focused)
+        // A phone's mosaic shows one or two cells, and a finish in a cell swiped past is unread.
+        val showing = if (breakpoint == Breakpoint.Desktop) mosaic.panes else mosaic.shown
         LaunchedEffect(showing) { state.showing(showing) }
         LaunchedEffect(herd) { mosaic.reconcile(herd) }
 

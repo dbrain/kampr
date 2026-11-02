@@ -345,7 +345,10 @@ class KamprStore {
                 _failure.value = msg
                 // Read without creating: a refusal about a pane nobody has open is not news about
                 // any grid on screen.
-                msg.pane?.let { paneStates[it]?.refusal = msg.message }
+                msg.pane?.let { paneStates[it] }?.let { pane ->
+                    pane.refusal = msg.message
+                    pane.files.refuseSending(msg.message)
+                }
                 if (msg.code == "stream_unavailable") {
                     msg.pane?.let { paneStates[it]?.noteStreamStopped() }
                 }
@@ -356,6 +359,8 @@ class KamprStore {
             // Read without creating, like a refusal: an answer about a pane nobody has open is
             // not news about any transcript on screen.
             is ServerMsg.ConvoFound -> paneStates[msg.pane]?.convoFound = msg
+
+            is ServerMsg.Pasted -> paneStates[msg.pane]?.files?.answered(msg)
 
             is ServerMsg.Managed -> {
                 _managed.value = msg

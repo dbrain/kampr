@@ -31,11 +31,11 @@ import dev.kampr.shared.ui.glyphFallback
 import dev.kampr.shared.ui.named
 
 @Composable
-fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Modifier) {
+fun CodeCard(lang: String?, code: String, query: String, modifier: Modifier = Modifier, near: List<String> = emptyList()) {
     val tokens = Kampr.tokens
     val palette = rememberConversationPalette()
     val body = remember(code, lang, palette) { highlight(code, lang, palette) }
-    val marked = remember(body, query, palette) { body.markUrls(CODE_LINK).markPaths(CODE_LINK).markMatches(query, palette.match) }
+    val marked = remember(body, query, palette, near) { body.markUrls(CODE_LINK).markPaths(CODE_LINK, near).markMatches(query, palette.match) }
 
     // The card is the width of its longest line, capped by the frame — a one-line fence drawn a
     // metre wide is a box with nothing in it, and a wide one keeps its own scroller either way.

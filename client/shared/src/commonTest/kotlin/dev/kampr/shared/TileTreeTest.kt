@@ -119,4 +119,22 @@ class TileTreeTest {
             sections.map { s -> s.heading to s.panes.map { it.id.substringAfter('/') } },
         )
     }
+
+    // The report: a node with one workspace showed its name as a heading over the only card under
+    // it, whose title already starts with that name. A heading tells workspaces apart, and there is
+    // nothing to tell apart.
+    @Test
+    fun aNodeWithOneWorkspaceHasNoHeading() {
+        val pane = PaneInfo(
+            id = "$NODE/n:1",
+            nodeId = NODE,
+            workspaceId = "$NODE/kw:home",
+            workspace = "home",
+            tabId = "$NODE/k:t",
+            tab = "t",
+            provider = "native",
+        )
+        val herd = Herd(nodes = listOf(NodeInfo(NODE, kind = "local")), panes = listOf(pane, pane.copy(id = "$NODE/n:2")), known = true)
+        assertEquals(listOf<String?>(null), herd.groups().single().sections.map { it.heading })
+    }
 }

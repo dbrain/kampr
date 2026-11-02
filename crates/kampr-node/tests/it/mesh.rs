@@ -2400,6 +2400,47 @@ async fn a_hub_carries_a_file_id_to_its_peer_only_for_a_device_that_may_type() {
     hub.stop();
 }
 
+/// A quiet paste is written by the peer that owns the pane, and its answer is the only thing that
+/// tells the composer the path, so the hub has to carry both the ask and the answer.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_quiet_paste_crosses_to_the_peer_and_its_answer_comes_back() {
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let peer_home = Home::new();
+    let mut peer = Scripted::join(&hub, &peer_home, "01JPASTE", "laptop").await;
+    let pane = "01JPASTE/w1:p1";
+    peer.advertise(&[("01JPASTE", "laptop")], &[pane]).await;
+    mesh_settles(&hub, 10, |peers| peers.herd().panes.iter().any(|p| p.id == pane)).await;
+
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    watch_relayed(&mut client, &mut peer, pane).await;
+    send(
+        &mut client,
+        json!({ "t": "paste", "pane": pane, "b64": "dA==", "name": "a", "typed": false, "id": "c1" }),
+    )
+    .await;
+
+    let asked = peer.next_but_ping().await;
+    assert_eq!(asked["t"], "paste", "{asked}");
+    assert_eq!(
+        asked["typed"], false,
+        "the hub dropped the ask not to type: {asked}"
+    );
+    assert_eq!(asked["id"], "c1", "{asked}");
+    peer.say(json!({
+        "t": "pasted", "pane": pane, "id": "c1", "path": "/peer/pastes/a-1.txt",
+        "text": "/peer/pastes/a-1.txt ",
+    }))
+    .await;
+
+    let answer = until(&mut client, "pasted", 10).await;
+    assert_eq!(answer["pane"], pane, "{answer}");
+    assert_eq!(answer["id"], "c1", "{answer}");
+    assert_eq!(answer["text"], "/peer/pastes/a-1.txt ", "{answer}");
+    hub.stop();
+}
+
 /// The network, as a thing that can be taken away without telling anybody.
 ///
 /// A cut here is not a close: both kernels keep an open socket, nothing is delivered in either

@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import dev.kampr.shared.model.Lookup
 import dev.kampr.shared.wire.Attachment
 
 sealed interface FilesPlace {
@@ -11,7 +12,7 @@ sealed interface FilesPlace {
     val anchor: String
 
     data class Dir(override val nodeId: String, override val anchor: String, val path: String) : FilesPlace
-    data class File(override val nodeId: String, override val anchor: String, val path: String) : FilesPlace
+    data class File(override val nodeId: String, override val anchor: String, val path: String, val lookup: Lookup? = null) : FilesPlace
     data class Repo(override val nodeId: String, override val anchor: String, val path: String) : FilesPlace
     data class Commit(override val nodeId: String, override val anchor: String, val repo: String, val sha: String) : FilesPlace
     data class Record(override val nodeId: String, override val anchor: String, val att: Attachment) : FilesPlace
@@ -28,7 +29,7 @@ val LocalOpenPlace: ProvidableCompositionLocal<(FilesPlace) -> Unit> = staticCom
 
 fun nodeOfPane(paneId: String): String = paneId.substringBefore('/')
 
-fun filePlace(paneId: String, path: String): FilesPlace.File = FilesPlace.File(nodeOfPane(paneId), paneId, path)
+fun filePlace(paneId: String, path: String, lookup: Lookup? = null): FilesPlace.File = FilesPlace.File(nodeOfPane(paneId), paneId, path, lookup)
 
 fun recordPlace(paneId: String, att: Attachment): FilesPlace.Record = FilesPlace.Record(nodeOfPane(paneId), paneId, att)
 

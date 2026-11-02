@@ -37,7 +37,7 @@ fun FilesBar(title: String, subtitle: String?, nav: FilesNav, actions: @Composab
         ) {
             BackAction("Back from $title", nav::back)
             Column(Modifier.weight(1f)) {
-                KText(title, tokens.type.meta, tokens.color.text, Modifier.asHeading())
+                KText(title, tokens.type.cardTitle, tokens.color.text, Modifier.asHeading())
                 subtitle?.let { KText(it, tokens.type.micro, tokens.color.mute) }
             }
             actions()

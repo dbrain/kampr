@@ -590,6 +590,21 @@ pub enum ServerMsg {
         /// Which of `matches` the search landed on, or `None` when nothing matched.
         current: Option<u32>,
     },
+    /// Where a `paste` sent with `typed: false` landed, or why it did not. `text` is what the
+    /// reply carrying it should say for it, which is the node's call: muffit's TUI attaches a
+    /// picture only from a bracketed paste.
+    #[serde(rename = "pasted")]
+    Pasted {
+        pane: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refused: Option<String>,
+    },
     /// What a `convo.find` matched, over the pane's whole transcript.
     ///
     /// `total` is every matching **turn**; `matches` is a capped list of them, newest first —
@@ -891,12 +906,20 @@ pub enum ClientMsg {
     /// is the terminal's own image-paste protocol that dies, so nothing here tries to speak one.
     /// `name` is a hint at the stem only — the node owns the directory and derives the extension
     /// from the bytes, because an extension the sender chose is an extension the sender chose.
+    ///
+    /// `typed: false` writes the file and types nothing: a conversation's composer holds the file
+    /// until its reply goes, and a path typed now would sit on the harness's input line, which is
+    /// read straight back as the desk line. The node answers it with `pasted`, under `id`.
     #[serde(rename = "paste")]
     Paste {
         pane: String,
         b64: String,
         #[serde(default)]
         name: Option<String>,
+        #[serde(default = "yes")]
+        typed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
     },
     #[serde(rename = "answer")]
     Answer { pane: String, key: String },

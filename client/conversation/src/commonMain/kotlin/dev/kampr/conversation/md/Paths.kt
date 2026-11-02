@@ -5,6 +5,8 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import dev.kampr.shared.model.asPath
+import dev.kampr.shared.model.mentionedDirs
+import dev.kampr.shared.model.nearer
 
 // A path rides a URL annotation under a scheme no browser knows, so every surface that already
 // hands its links to `LocalUriHandler` hands paths to the same place, and the conversation's own
@@ -13,9 +15,20 @@ private const val PATH_SCHEME = "kampr-path:"
 
 private const val SENTENCE_TAIL = ".,;:!?)'\""
 
-fun pathLink(path: String): String = PATH_SCHEME + path
+// Neither a path nor `asPath` will hold a control character, so the directories a relative path
+// was written beside ride after it under the attachment ids' own separator.
+private const val NEAR = '\u001F'
 
-fun pathOfLink(uri: String): String? = uri.takeIf { it.startsWith(PATH_SCHEME) }?.removePrefix(PATH_SCHEME)?.ifEmpty { null }
+data class PathTap(val path: String, val near: List<String>)
+
+fun pathLink(path: String, near: List<String> = emptyList()): String = (listOf(PATH_SCHEME + path) + near).joinToString(NEAR.toString())
+
+fun tapOfLink(uri: String): PathTap? {
+    if (!uri.startsWith(PATH_SCHEME)) return null
+    val fields = uri.removePrefix(PATH_SCHEME).split(NEAR)
+    val path = fields.first().ifEmpty { return null }
+    return PathTap(path, fields.drop(1))
+}
 
 private fun startsWord(src: CharSequence, at: Int): Boolean = at == 0 || src[at - 1].isWhitespace() || src[at - 1] in "([\"'"
 
@@ -34,7 +47,7 @@ internal fun pathAt(src: CharSequence, at: Int): Pair<Int, String>? {
     return token.length to path
 }
 
-fun AnnotatedString.markPaths(style: SpanStyle): AnnotatedString {
+fun AnnotatedString.markPaths(style: SpanStyle, near: List<String> = emptyList()): AnnotatedString {
     val spans = mutableListOf<Triple<Int, Int, String>>()
     val taken = getLinkAnnotations(0, length)
     var at = 0
@@ -48,10 +61,12 @@ fun AnnotatedString.markPaths(style: SpanStyle): AnnotatedString {
         at += found.first
     }
     if (spans.isEmpty()) return this
+    var seen = near
     return AnnotatedString.Builder(this).apply {
         for ((start, end, path) in spans) {
             addStyle(style, start, end)
-            addLink(LinkAnnotation.Url(pathLink(path), TextLinkStyles(style)), start, end)
+            addLink(LinkAnnotation.Url(pathLink(path, seen), TextLinkStyles(style)), start, end)
+            seen = nearer(mentionedDirs(path), seen)
         }
     }.toAnnotatedString()
 }

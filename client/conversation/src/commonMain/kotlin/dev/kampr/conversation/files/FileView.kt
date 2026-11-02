@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.detailOf
 import dev.kampr.conversation.fileName
 import dev.kampr.conversation.headlineOf
+import dev.kampr.shared.model.Lookup
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.AttachmentSlice
 import dev.kampr.shared.net.fileAttachmentId
@@ -30,6 +31,7 @@ import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.announce
+import dev.kampr.shared.ui.locate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -42,6 +44,7 @@ internal class Source(
     val detail: String?,
     val record: Boolean,
     val saveAs: String?,
+    val lookup: Lookup? = null,
 )
 
 private sealed interface Fetch {
@@ -53,7 +56,7 @@ private sealed interface Fetch {
 @Composable
 fun FileView(place: FilesPlace.File, nav: FilesNav, modifier: Modifier = Modifier) {
     val source = remember(place) {
-        Source(place.nodeId, place.anchor, fileAttachmentId(place.path), fileName(place.path), place.path, place.path, record = false, saveAs = fileName(place.path))
+        Source(place.nodeId, place.anchor, fileAttachmentId(place.path), fileName(place.path), place.path, place.path, record = false, saveAs = fileName(place.path), lookup = place.lookup)
     }
     FileScreen(source, nav, modifier)
 }
@@ -114,6 +117,11 @@ private fun FileScreen(source: Source, nav: FilesNav, modifier: Modifier) {
                     nav.replace(FilesPlace.Dir(source.nodeId, source.anchor, dir))
                     return@LaunchedEffect
                 }
+                val found = source.lookup?.let { locate(io, source.anchor, it) }
+                if (found != null) {
+                    nav.replace(FilesPlace.File(source.nodeId, source.anchor, found))
+                    return@LaunchedEffect
+                }
                 Fetch.Failed(got.reason)
             }
         }
@@ -131,7 +139,7 @@ private fun FileScreen(source: Source, nav: FilesNav, modifier: Modifier) {
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val f = fetch) {
-                Fetch.Asking -> Note("asking the node for ${source.name}", tokens.color.working)
+                Fetch.Asking -> Skeleton(SkeletonShape.Lines, source.name)
 
                 is Fetch.Failed -> Note(f.reason, tokens.color.blocked)
 

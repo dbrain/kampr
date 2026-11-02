@@ -798,6 +798,10 @@ fn the_browsing_forms_round_trip_through_the_shared_decoder() {
             repo: dir.clone(),
             sha: "8a50ea5".into(),
         },
+        attach::Source::Find {
+            base: dir.clone(),
+            tail: "src/lib.rs".into(),
+        },
     ] {
         assert_eq!(
             attach::Source::decode(&source.encode()).expect("our own id"),
@@ -870,9 +874,41 @@ fn a_rev_or_sha_git_could_read_as_anything_else_is_refused_at_decode() {
         &["zip", ""],
         &["show", "", "HEAD"],
         &["commit", "", "abcd"],
+        &["find", "", "a.rs"],
+        &["find", "/x", ""],
     ] {
         assert!(attach::Source::decode(&raw_id(empty)).is_err(), "{empty:?}");
     }
+}
+
+/// The tail is matched against what is below the base, so one that could climb out of it or name
+/// somewhere else entirely is refused before anything is walked.
+#[test]
+fn a_find_tail_that_is_not_a_plain_relative_path_is_refused_at_decode() {
+    for tail in [
+        "/etc/hosts",
+        "~/x.rs",
+        "../x.rs",
+        "a/../../x.rs",
+        "./x.rs",
+        "a//x.rs",
+        "a/x.rs/",
+        "a\nx.rs",
+        &"a".repeat(1025),
+    ] {
+        assert!(
+            attach::Source::decode(&raw_id(&["find", "/x", tail])).is_err(),
+            "{tail:?} was accepted as a tail"
+        );
+    }
+    assert_eq!(
+        attach::Source::decode(&raw_id(&["find", "~/dev", "kampr-node/src/fs.rs"]))
+            .expect("a client-built id"),
+        attach::Source::Find {
+            base: attach::FileRef::new("~/dev"),
+            tail: "kampr-node/src/fs.rs".into(),
+        }
+    );
 }
 
 /// One predicate both gates ask, so a seventh path form cannot slip past one of them.
@@ -894,6 +930,10 @@ fn every_form_that_names_a_path_is_a_path_form_and_nothing_else_is() {
         attach::Source::Commit {
             repo: path.clone(),
             sha: "abcd".into(),
+        },
+        attach::Source::Find {
+            base: path.clone(),
+            tail: "hosts".into(),
         },
     ] {
         assert!(source.is_path_form(), "{source:?}");

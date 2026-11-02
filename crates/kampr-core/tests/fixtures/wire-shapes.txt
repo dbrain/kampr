@@ -38,9 +38,11 @@ client input .text: string
 client input .typed: bool
 client input : object
 client paste .b64: string
+client paste .id: string
 client paste .name: string
 client paste .pane: string
 client paste .t: string
+client paste .typed: bool
 client paste : object
 client ping .n: integer
 client ping .t: string
@@ -509,6 +511,13 @@ server herd.patch .removed_ids: array
 server herd.patch .removed_ids[]: string
 server herd.patch .t: string
 server herd.patch : object
+server pasted .id: string
+server pasted .pane: string
+server pasted .path: string
+server pasted .refused: string
+server pasted .t: string
+server pasted .text: string
+server pasted : object
 server pending .header: string
 server pending .multi: bool
 server pending .options: array

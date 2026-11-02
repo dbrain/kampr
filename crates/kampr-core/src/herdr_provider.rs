@@ -1641,27 +1641,31 @@ async fn follow(inner: &Arc<Inner>, mut sub: Subscription, agents: &[String]) ->
     });
     let mut watching = inner.watching.subscribe();
     let mut resized = inner.resized.subscribe();
+    // A change between the snapshot this set came from and the subscription opening reached no
+    // subscriber, and herdr replays nothing when one opens (#618): unlooked-at, a report into a
+    // pane that has just become an agent waited out the whole unwatched sweep.
+    let mut opened = true;
     let ended = loop {
-        let live = tokio::select! {
-            event = rx.recv() => {
-                if event.is_none() {
-                    break Ended::Broken;
+        let live = std::mem::take(&mut opened)
+            || tokio::select! {
+                event = rx.recv() => {
+                    if event.is_none() {
+                        break Ended::Broken;
+                    }
+                    // Wait out the burst, then take everything that arrived during it: one snapshot
+                    // answers all of them.
+                    tokio::time::sleep(inner.config.settle).await;
+                    while rx.try_recv().is_ok() {}
+                    true
                 }
-                // Wait out the burst, then take everything that arrived during it. A subscription
-                // opening replays the whole herd as `created` events, and one snapshot answers all
-                // of them.
-                tokio::time::sleep(inner.config.settle).await;
-                while rx.try_recv().is_ok() {}
-                true
-            }
-            // The first watcher arriving must not have to wait out the slow sweep it interrupted.
-            _ = watching.changed() => true,
-            // A `pane.size` moved a PTY, which herdr announces nowhere (#68). The width probe
-            // wakes on the same bump, but a resize that leaves the width alone is rows only, and
-            // only a fresh snapshot carries those to a running stream (#573).
-            _ = resized.changed() => true,
-            _ = tokio::time::sleep(inner.sweep()) => true,
-        };
+                // The first watcher arriving must not have to wait out the slow sweep it interrupted.
+                _ = watching.changed() => true,
+                // A `pane.size` moved a PTY, which herdr announces nowhere (#68). The width probe
+                // wakes on the same bump, but a resize that leaves the width alone is rows only, and
+                // only a fresh snapshot carries those to a running stream (#573).
+                _ = resized.changed() => true,
+                _ = tokio::time::sleep(inner.sweep()) => true,
+            };
         if !live || inner.refresh().await.is_err() {
             break Ended::Broken;
         }

@@ -130,6 +130,7 @@ const LS_TAG: &str = "ls";
 const REPO_TAG: &str = "repo";
 const SHOW_TAG: &str = "show";
 const COMMIT_TAG: &str = "commit";
+const FIND_TAG: &str = "find";
 
 /// A plain path on the node's filesystem, with no transcript behind it and no working directory
 /// to resolve against.
@@ -290,6 +291,12 @@ pub enum Source {
         repo: FileRef,
         sha: String,
     },
+    /// The files below `base` whose path ends in `tail`, for a relative path an agent wrote against
+    /// some directory other than the one it was asked from.
+    Find {
+        base: FileRef,
+        tail: String,
+    },
 }
 
 impl Source {
@@ -310,6 +317,9 @@ impl Source {
             Self::Commit { repo, sha } => {
                 URL_SAFE_NO_PAD.encode(format!("{COMMIT_TAG}{SEP}{}{SEP}{sha}", repo.path.display()))
             }
+            Self::Find { base, tail } => {
+                URL_SAFE_NO_PAD.encode(format!("{FIND_TAG}{SEP}{}{SEP}{tail}", base.path.display()))
+            }
         }
     }
 
@@ -325,7 +335,8 @@ impl Source {
             | Self::Ls(_)
             | Self::Repo(_)
             | Self::Show { .. }
-            | Self::Commit { .. } => true,
+            | Self::Commit { .. }
+            | Self::Find { .. } => true,
             Self::Record(_) | Self::Paste(_) => false,
         }
     }
@@ -363,9 +374,21 @@ impl Source {
                 repo: FileRef::new(*path),
                 sha: (*sha).to_string(),
             }),
+            [tag, base, tail] if *tag == FIND_TAG && !base.is_empty() && is_tail(tail) => Ok(Self::Find {
+                base: FileRef::new(*base),
+                tail: (*tail).to_string(),
+            }),
             _ => Err(refuse()),
         }
     }
+}
+
+/// Plain segments only, so a match is always somewhere below the base it was asked under.
+fn is_tail(tail: &str) -> bool {
+    (1..=1024).contains(&tail.len())
+        && !tail.starts_with('~')
+        && !tail.chars().any(char::is_control)
+        && tail.split('/').all(|segment| !matches!(segment, "" | "." | ".."))
 }
 
 /// Both reach `git`'s argv, so the alphabet is what keeps either from being read as an option, a

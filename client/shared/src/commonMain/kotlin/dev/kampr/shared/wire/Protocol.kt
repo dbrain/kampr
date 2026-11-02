@@ -506,6 +506,16 @@ sealed interface ServerMsg {
         val total: Int,
     ) : ServerMsg
 
+    // Where a paste sent with `typed = false` landed, or why it did not. `text` is what the reply
+    // carrying it says for it, which is the node's call (a bracketed paste for muffit's TUI).
+    data class Pasted(
+        val pane: String,
+        val id: String?,
+        val path: String? = null,
+        val text: String? = null,
+        val refused: String? = null,
+    ) : ServerMsg
+
     data class Scrollback(
         val pane: String,
         val fromTop: Int,
@@ -717,8 +727,15 @@ sealed interface ClientMsg {
     // Bytes for the agent to work on. The node writes them to a file on the pane's own machine
     // and types the path in, because an agent reached over ssh reads a local path perfectly well
     // and it is the terminal's own image-paste protocol that dies. `name` is a hint at the stem
-    // only — the node owns the directory and derives the extension from the bytes.
-    data class Paste(val pane: String, val b64: String, val name: String? = null) : ClientMsg
+    // only — the node owns the directory and derives the extension from the bytes. Not `typed`,
+    // the node types nothing and answers `pasted` under `id` instead.
+    data class Paste(
+        val pane: String,
+        val b64: String,
+        val name: String? = null,
+        val typed: Boolean = true,
+        val id: String? = null,
+    ) : ClientMsg
 
     data class SetPrefs(val pane: String, val prefs: Map<String, String>) : ClientMsg
 

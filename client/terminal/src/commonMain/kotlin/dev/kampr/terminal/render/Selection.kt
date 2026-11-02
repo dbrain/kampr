@@ -1,10 +1,12 @@
 package dev.kampr.terminal.render
 
 import dev.kampr.shared.model.BLANK
+import dev.kampr.shared.model.Lookup
 import dev.kampr.shared.model.TAIL
 import dev.kampr.shared.model.appendGlyph
 import dev.kampr.shared.model.asPath
 import dev.kampr.shared.model.glyphUnits
+import dev.kampr.shared.model.lookupFor
 import dev.kampr.shared.model.resolvePath
 import dev.kampr.shared.net.filePathOf
 
@@ -216,7 +218,7 @@ enum class TargetKind { Link, Url, Path, File }
 // lets the grid wash the cells that were hit rather than leaving the operator to guess which of
 // forty paths on screen the affordance belongs to. Empty when nothing measured it — a declared
 // OSC 8 link is found by cell, not by string, and carries its span separately.
-data class Target(val text: String, val kind: TargetKind, val range: IntRange = IntRange.EMPTY)
+data class Target(val text: String, val kind: TargetKind, val range: IntRange = IntRange.EMPTY, val lookup: Lookup? = null)
 
 private fun breaks(c: Char): Boolean = c.isWhitespace() || c in BREAKS
 
@@ -234,7 +236,7 @@ private fun pathAt(line: String, offset: Int, cwd: String?): Target? {
     filePathOf(token.trimEnd('/').ifEmpty { token })?.let { return Target(it, TargetKind.File, start until start + token.length) }
     if (cwd == null) return null
     val relative = asPath(token, bare = true) ?: return null
-    return Target(resolvePath(relative, cwd), TargetKind.File, start until start + token.length)
+    return Target(resolvePath(relative, cwd), TargetKind.File, start until start + token.length, lookupFor(relative, cwd))
 }
 
 fun detectTarget(line: String, offset: Int, cwd: String? = null): Target? {

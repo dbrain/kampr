@@ -38,6 +38,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ComposerMirror
 import dev.kampr.shared.model.DeskLine
+import dev.kampr.shared.model.PendingFile
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.platform.acceptsPastedFiles
 import dev.kampr.shared.theme.Kampr
@@ -71,16 +72,6 @@ private val FIELD_INSET_Y = 12.dp
 // again. See `ComposerMirror.QUIET`.
 private const val SETTLE_EVERY = 250L
 
-// Where a file the operator handed over has got to. The node writes the bytes on the pane's own
-// machine and types the path in, so "sent" is the whole of the success — there is no upload to
-// watch — and a refusal comes back as an error naming this pane.
-sealed interface Handover {
-    data object Idle : Handover
-    data class Going(val name: String) : Handover
-    data class Sent(val name: String) : Handover
-    data class Refused(val reason: String) : Handover
-}
-
 // A plain multi-line text box on purpose: the native keyboard's own dictation button then works,
 // which no custom input surface can offer.
 @Composable
@@ -90,7 +81,9 @@ fun Composer(
     onSend: (String) -> Unit,
     modifier: Modifier = Modifier,
     onAttach: (() -> Unit)? = null,
-    handover: Handover = Handover.Idle,
+    files: List<PendingFile> = emptyList(),
+    onOpenFile: (PendingFile) -> Unit = {},
+    onRemoveFile: (PendingFile) -> Unit = {},
     draft: String = "",
     onDraft: (String) -> Unit = {},
     desk: DeskLine? = null,
@@ -163,7 +156,11 @@ fun Composer(
     // which is the shape this box spends most of its life in. The send button beside it keeps the
     // pill, because a circle is what it is meant to be at any size.
     val field = RoundedCornerShape(tokens.radii.lg)
-    val ready = enabled && answering.enabled && typed.isNotBlank()
+    // A file still on its way has no path yet, so a reply sent now would go without it.
+    val ready = enabled &&
+        answering.enabled &&
+        (typed.isNotBlank() || files.any { it.state is PendingFile.State.Ready }) &&
+        files.none { it.state == PendingFile.State.Sending }
     val hard = LocalHardKeyboard.current
 
     fun submit() {
@@ -261,7 +258,7 @@ fun Composer(
         // is already in it, or is about to be.
         val apart = desk?.takeIf { it.text.isNotEmpty() && it.text != typed && mirror?.echoing(it, typed) != true }
         DeskStrip(apart, agent, enabled, { apart?.let(::takeOver) })
-        HandoverLine(handover, agent)
+        FileChips(files, onOpenFile, onRemoveFile)
         Row(
             Modifier
                 .fillMaxWidth()
@@ -276,7 +273,7 @@ fun Composer(
         ) {
             // An agent over ssh reads a local path perfectly well; it is the terminal's own
             // image-paste protocol that dies. So this hands the bytes to the node, which writes them
-            // beside the pane and types the path in. Absent where there is no picker to raise.
+            // beside the pane, and the reply carries the path. Absent where there is no picker.
             if (onAttach != null && enabled) {
                 GlyphTarget(
                     ConversationIcons.attach,
@@ -338,30 +335,4 @@ fun Composer(
             }
         }
     }
-}
-
-@Composable
-private fun HandoverLine(handover: Handover, agent: String?) {
-    val tokens = Kampr.tokens
-    val (words, tone) = when (handover) {
-        Handover.Idle -> return
-
-        is Handover.Going -> "sending ${handover.name}" to tokens.color.working
-
-        is Handover.Sent ->
-            "${handover.name} is on ${agent ?: "the agent"}'s machine, and its path is typed in" to
-                tokens.color.done
-
-        is Handover.Refused -> handover.reason to tokens.color.blocked
-    }
-    KText(
-        words,
-        tokens.type.micro,
-        tone,
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 16.dp, end = 16.dp, top = 8.dp)
-            .announce(words),
-        maxLines = 3,
-    )
 }

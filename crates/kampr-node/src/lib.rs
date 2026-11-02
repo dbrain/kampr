@@ -14,6 +14,7 @@ pub mod config;
 pub mod convo;
 pub mod desk;
 pub mod device_watch;
+pub mod find;
 pub mod fs;
 pub mod git;
 pub mod herd;

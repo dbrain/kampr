@@ -50,12 +50,7 @@ fun <T> LoadGate(load: Load<T>, what: String, onRetry: () -> Unit, content: @Com
     when (load) {
         is Load.Ready -> content(load.value)
 
-        Load.Loading -> KText(
-            "asking the node for $what",
-            tokens.type.captionSmall,
-            tokens.color.working,
-            Modifier.padding(16.dp).announce("Asking the node for $what"),
-        )
+        Load.Loading -> Skeleton(SkeletonShape.Rows, what)
 
         is Load.Failed -> Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             KText(load.reason, tokens.type.captionSmall, tokens.color.blocked, Modifier.announce(load.reason), maxLines = 4)

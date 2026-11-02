@@ -88,6 +88,14 @@ object Wire {
                 total = obj.int("total") ?: 0,
             )
 
+            "pasted" -> ServerMsg.Pasted(
+                pane = obj.str("pane") ?: return null,
+                id = obj.str("id"),
+                path = obj.str("path"),
+                text = obj.str("text"),
+                refused = obj.str("refused"),
+            )
+
             "scrollback" -> ServerMsg.Scrollback(
                 pane = obj.str("pane") ?: return null,
                 fromTop = obj.int("from_top") ?: 0,
@@ -268,6 +276,8 @@ object Wire {
             put("pane", msg.pane)
             put("b64", msg.b64)
             msg.name?.let { put("name", it) }
+            if (!msg.typed) put("typed", false)
+            msg.id?.let { put("id", it) }
         }
 
         is ClientMsg.SetPrefs -> buildJsonObject {

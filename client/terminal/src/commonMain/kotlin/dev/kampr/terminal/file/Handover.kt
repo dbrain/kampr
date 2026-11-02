@@ -22,6 +22,14 @@ sealed interface Handover {
 // be refused at the other end is a minute of somebody's tethering spent on a certain no.
 const val MOST_BYTES_HANDED_OVER = 8 * 1024 * 1024
 
+// A said line, not a state to dismiss: the operator reads it once and then it is in the way. A
+// refusal stays long enough to be read twice.
+fun handoverLingers(handover: Handover): Long? = when (handover) {
+    is Handover.Sent -> 4_000L
+    is Handover.Refused -> 8_000L
+    Handover.Idle, is Handover.Going -> null
+}
+
 fun handoverName(picked: PickedFile): String = picked.name?.takeIf { it.isNotBlank() } ?: "the file"
 
 // The node answers a paste it will not take with an error naming this pane — too large, not

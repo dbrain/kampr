@@ -45,6 +45,9 @@ pub(crate) struct Live {
     alarm: Alarm,
     jobs: AtomicU64,
     stop: AtomicBool,
+    /// Taken when the node starts following, not when its tail thread first reads: the program
+    /// can write in between, and what it writes then is asked of this node.
+    replay_end: Option<u64>,
 }
 
 #[derive(Default)]
@@ -114,6 +117,7 @@ impl Live {
     pub fn start(dir: SessionDir, topology: watch::Sender<u64>) -> Arc<Self> {
         let (cols, rows) = size_of(&dir);
         let typed_at_report = read_at(&dir);
+        let replay_end = dir.log_end().ok();
         let live = Arc::new(Self {
             dir,
             state: Mutex::new(State {
@@ -137,6 +141,7 @@ impl Live {
             alarm: Alarm::new().expect("an alarm"),
             jobs: AtomicU64::new(0),
             stop: AtomicBool::new(false),
+            replay_end,
         });
         let tail = live.clone();
         std::thread::Builder::new()
@@ -216,10 +221,12 @@ impl Live {
     }
 
     pub fn write(&self, bytes: &[u8]) -> std::io::Result<()> {
+        // The tail can feed the echo before write_master returns, and an echo fed with no
+        // keystroke on record is read as the program working.
+        self.activity.lock().unwrap().input = Some(Instant::now());
         self.write_master(bytes)?;
         let reports = self.state.lock().unwrap().screen.program_reports();
         let mut activity = self.activity.lock().unwrap();
-        activity.input = Some(Instant::now());
         activity.done = false;
         if activity.typed_at_report != Some(reports) {
             activity.typed_at_report = Some(reports);
@@ -462,7 +469,7 @@ impl Live {
         let Some(mut reader) = self.resume() else {
             return;
         };
-        let mut replay_end = reader.end().unwrap_or(0);
+        let mut replay_end = self.replay_end.unwrap_or_else(|| reader.end().unwrap_or(0));
         let mut buf = vec![0u8; CHUNK];
         while !self.stop.load(Ordering::Relaxed) {
             let from = reader.offset();

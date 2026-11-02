@@ -26,12 +26,16 @@ import dev.kampr.shared.wire.Turn
 
 // The third one is nobody: a compaction summary is filed under a user record and neither spoken
 // nor typed, and calling it either of the other two is the lie this exists to stop. The fourth is
-// a person again — whoever typed it — before the harness has started on it.
-enum class Speaker { You, Queued, Agent, Summary }
+// a person again — whoever typed it — before the harness has started on it, and the last three are
+// this client's own reply before the harness has been seen to take it at all.
+enum class Speaker { You, Queued, Agent, Summary, Sending, Undelivered, Unseen }
 
 fun speakerOf(turn: Turn): Speaker = when {
     isSummary(turn) -> Speaker.Summary
     isQueued(turn) -> Speaker.Queued
+    turn.kind == SENDING -> Speaker.Sending
+    turn.kind == UNDELIVERED -> Speaker.Undelivered
+    turn.kind == UNSEEN -> Speaker.Unseen
     turn.role == "user" -> Speaker.You
     else -> Speaker.Agent
 }
@@ -41,7 +45,7 @@ fun speakerOf(turn: Turn): Speaker = when {
 // break, and a person's is a break they typed. The summary is the one turn filed under a user
 // record that nobody typed — the harness wrote it, as markdown, like any reply.
 fun typedByHand(turn: Turn): Boolean = when (speakerOf(turn)) {
-    Speaker.You, Speaker.Queued -> true
+    Speaker.You, Speaker.Queued, Speaker.Sending, Speaker.Undelivered, Speaker.Unseen -> true
     Speaker.Agent, Speaker.Summary -> false
 }
 
@@ -69,6 +73,12 @@ fun speakerSkin(tokens: KamprTokens, speaker: Speaker, agent: String?): SpeakerS
         // moves the disagreement between the two surfaces rather than ending it. Not "you": the
         // queue is the pane's, and a prompt in it may have been sent from the desk.
         Speaker.Queued -> SpeakerSkin(color.accent, color.raise, "queued")
+
+        Speaker.Sending -> SpeakerSkin(color.accent, color.raise, "sending…")
+
+        Speaker.Undelivered -> SpeakerSkin(color.blocked, color.raise, "not delivered")
+
+        Speaker.Unseen -> SpeakerSkin(color.working, color.raise, "not seen yet")
 
         Speaker.Agent -> SpeakerSkin(color.dim, color.surface, agent ?: "agent")
 

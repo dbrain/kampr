@@ -88,6 +88,7 @@ import dev.kampr.terminal.PaneSession
 import dev.kampr.terminal.PaneTool
 import dev.kampr.terminal.file.Handover
 import dev.kampr.terminal.file.handoverAfter
+import dev.kampr.terminal.file.handoverLingers
 import dev.kampr.terminal.file.handoverName
 import dev.kampr.terminal.file.handoverOf
 import dev.kampr.terminal.guard.SubmitGuard
@@ -327,6 +328,11 @@ fun TerminalView(
     // write — and that error is quiet everywhere else by design, so this is the only place on this
     // surface it can be said.
     LaunchedEffect(pane.refusal) { session.handover = handoverAfter(session.handover, pane.refusal) }
+    LaunchedEffect(session.handover) {
+        val shown = session.handover
+        delay(handoverLingers(shown) ?: return@LaunchedEffect)
+        if (session.handover == shown) session.handover = Handover.Idle
+    }
     // The same handover as the attach button's, reached by the gesture a desk actually uses. A
     // clipboard with no file on it never gets here, so ctrl+v of ordinary text still goes to the
     // pane the way it always has.
@@ -1268,7 +1274,7 @@ fun TerminalView(
             val act = {
                 when (target.kind) {
                     TargetKind.Path -> clipboard.setText(AnnotatedString(target.text))
-                    TargetKind.File -> openPlace(filePlace(pane.id, target.text))
+                    TargetKind.File -> openPlace(filePlace(pane.id, target.text, target.lookup))
                     else -> uris.openUri(target.text)
                 }
                 view.aimOff()

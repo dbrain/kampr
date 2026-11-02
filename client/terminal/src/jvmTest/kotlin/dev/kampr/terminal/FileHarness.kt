@@ -30,6 +30,7 @@ import dev.kampr.shared.ui.SafeArea
 import dev.kampr.shared.ui.keyboardInset
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.Cursor
+import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.PanePrefs
 import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.Run
@@ -48,8 +49,10 @@ internal val CHROME = 96.dp
 internal class Route(
     private val answer: AttachmentBytes,
     override val readOnly: Boolean = false,
+    private val cwd: String? = null,
 ) : PaneIo {
     val asked = mutableListOf<String>()
+    override fun info(paneId: String): PaneInfo? = cwd?.let { PaneInfo(paneId, "node", cwd = it) }
     override fun send(msg: ClientMsg) = Unit
     override fun prefs(paneId: String): PanePrefs = PanePrefs()
     override suspend fun attachment(paneId: String, id: String): AttachmentBytes {

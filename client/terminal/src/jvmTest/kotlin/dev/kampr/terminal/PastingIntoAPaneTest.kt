@@ -35,6 +35,7 @@ private const val PASTE_END = "\u001b[201~"
 
 private const val PASTE = "Paste the clipboard into the pane"
 private const val COPY = "Copy the selection"
+private const val EMPTY = "Nothing on the clipboard to paste."
 private const val BLOCK = "Select by column instead of by line"
 
 private class Recording(override val readOnly: Boolean = false) : PaneIo {
@@ -123,7 +124,23 @@ class PastingIntoAPaneTest {
         waitForIdle()
 
         assertTrue(io.sent.isEmpty(), "an empty clipboard was sent to the pane anyway")
-        onNodeWithContentDescription("Nothing on the clipboard to paste.", substring = true).assertExists()
+        onNodeWithContentDescription(EMPTY, substring = true).assertExists()
+    }
+
+    // The report: "if I paste with nothing on clipboard it shows an error at bottom of screen that
+    // never goes away". It is an answer to a press, and once read it is only in the way.
+    @Test
+    fun theEmptyClipboardNoticeGoesAwayByItself() = runComposeUiTest {
+        val io = Recording()
+        terminal(io) { null }
+        longPressTheGrid()
+        mainClock.autoAdvance = false
+        onNodeWithContentDescription(PASTE).performSemanticsAction(SemanticsActions.OnClick)
+        mainClock.advanceTimeBy(1_000)
+        onNodeWithContentDescription(EMPTY, substring = true).assertExists()
+
+        mainClock.advanceTimeBy(10_000)
+        assertEquals(0, onAllNodesWithContentDescription(EMPTY, substring = true).fetchSemanticsNodes().size)
     }
 
     // The report: "the paste from terminal when I long press on side of screen draws off screen".

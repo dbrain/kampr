@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,9 +21,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,15 +41,17 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import dev.kampr.conversation.files.LocalHeldBytes
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.PendingSend
+import dev.kampr.shared.model.UNSEEN_AFTER_MS
 import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.platform.PastedFiles
-import dev.kampr.shared.platform.PickedFile
 import dev.kampr.shared.platform.filePickAvailable
 import dev.kampr.shared.platform.pickFile
 import dev.kampr.shared.theme.Kampr
@@ -58,9 +61,9 @@ import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LocalConnectionStatus
+import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
-import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
@@ -79,7 +82,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.io.encoding.Base64
 
 // Compose can aim a lazy list at an item's *top* and at nothing else, so a transcript that ends
 // on a long answer opened at the start of that answer — which read as "somewhere above the
@@ -103,11 +105,6 @@ fun ConversationView(
     pane: PaneState,
     info: PaneInfo?,
     modifier: Modifier = Modifier,
-    // Hoisted only so a harness can seed it. Both gestures that fill it in are unreachable from a
-    // test on this platform — a desktop's file picker is a modal system dialog, and a desktop has
-    // no page-wide paste event at all — so the state has to be reachable from outside or the one
-    // transition that clears it can never be driven through the real view.
-    handover: MutableState<Handover> = remember(pane.id) { mutableStateOf(Handover.Idle) },
     // Injected only so an artboard can be drawn against a fixed one — a picture whose stopwatch
     // reads the real clock is a different picture every time it is rendered.
     clock: () -> Double = ::wallClockMillis,
@@ -224,14 +221,31 @@ fun ConversationView(
     val leading = if (pageable) 1 else 0
 
     val scope = rememberCoroutineScope()
-    // A node refuses a paste with an error naming this pane — too large, not base64, nowhere to
-    // write — and that error is quiet everywhere else by design, so this is the only place it can
-    // be said.
-    LaunchedEffect(pane.refusal) { handover.value = handoverAfter(handover.value, pane.refusal) }
-    // The same handover as the attach button's, reached by the gesture a desk actually uses. A
-    // clipboard with no file on it never gets here, so pasting words into the reply box is
-    // untouched.
-    PastedFiles(!io.readOnly) { picked -> handover.value = handoverOf(pane, io, picked) }
+    val sending = pane.sends.all
+
+    // Whether the keys left: a write with no socket to go down is dropped rather than queued, and
+    // the pane counts it, so the count moving is the whole of the answer.
+    fun say(text: String): Boolean {
+        val before = pane.undelivered
+        pane.mirror.submit(text).forEach { io.send(ClientMsg.InputText(pane.id, it)) }
+        return pane.undelivered == before
+    }
+    // Timed from the send rather than from this composition, so looking at the terminal for a
+    // while neither restarts the window nor loses it.
+    for (send in sending) {
+        key(send.id) {
+            LaunchedEffect(send.state, send.at) {
+                if (send.state != PendingSend.State.Sending) return@LaunchedEffect
+                delay((send.at + UNSEEN_AFTER_MS - clock()).toLong().coerceAtLeast(0))
+                pane.sends.unseen(send.id)
+            }
+        }
+    }
+    // The attach button's path, reached by the gesture a desk actually uses. A clipboard with no
+    // file on it never gets here, so pasting words into the reply box is untouched.
+    PastedFiles(!io.readOnly) { picked -> attach(pane, io, picked) }
+    val held = LocalHeldBytes.current
+    val openPlace = LocalOpenPlace.current
 
     // Asked as the reader types rather than on a submit key, because the answer is what the
     // counter says and a counter that waits for Enter is a counter that is wrong while it waits.
@@ -353,9 +367,9 @@ fun ConversationView(
     // layout, and a wait that outlives the composition is resumed with nowhere to go — which in
     // this suite surfaces as an uncaught exception charged to whichever test runs next.
     var viewport by remember { mutableStateOf(0) }
-    LaunchedEffect(turns, viewport, trailing) {
-        if (following && rows.isNotEmpty()) {
-            listState.requestScrollToItem(rows.lastIndex + leading + trailing, END_OF_THE_ITEM)
+    LaunchedEffect(turns, viewport, trailing, sending.size) {
+        if (following && (rows.isNotEmpty() || sending.isNotEmpty())) {
+            listState.requestScrollToItem(rows.lastIndex + leading + trailing + sending.size, END_OF_THE_ITEM)
         }
     }
 
@@ -500,7 +514,7 @@ fun ConversationView(
             }
             SelectionContainer(Modifier.fillMaxSize()) {
                 Box(Modifier.fillMaxSize()) {
-                    if (turns.isEmpty()) {
+                    if (turns.isEmpty() && sending.isEmpty()) {
                         KText(
                             if (info?.hasConversation == false) {
                                 "nothing written down yet \u2014 what you send is what starts it"
@@ -550,6 +564,15 @@ fun ConversationView(
                             TranscriptRowView(
                                 shown, at, stamps.getOrNull(at), query, expanded, toggle,
                                 attachments = attachments, now = now, agent = info?.agent, clock = clock,
+                            )
+                        }
+                        items(sending, key = { "sending:${it.id}" }) { send ->
+                            SendingCard(
+                                send,
+                                info?.agent,
+                                now,
+                                onResend = { pane.sends.resent(send.id, pane.turns, pane.facets.queued, say(send.text), clock()) },
+                                onDismiss = { pane.sends.dismiss(send.id) },
                             )
                         }
                         catchingUp?.let { said ->
@@ -616,8 +639,8 @@ fun ConversationView(
                 enabled = !io.readOnly,
                 answering = answer,
                 onSend = { text ->
-                    type(pane.mirror.submit(text))
-                    handover.value = handoverAfterSend(handover.value)
+                    val said = (pane.files.take() + text).trimEnd()
+                    pane.sends.sent(said, pane.turns, pane.facets.queued, say(said), clock())
                 },
                 mirror = pane.mirror,
                 // A digit answers a dialog (#413, #421, #487), so a question standing on the pane
@@ -632,11 +655,13 @@ fun ConversationView(
                     {
                         scope.launch {
                             val picked = pickFile() ?: return@launch
-                            handover.value = handoverOf(pane, io, picked)
+                            attach(pane, io, picked)
                         }
                     }
                 },
-                handover = handover.value,
+                files = pane.files.all,
+                onOpenFile = { file -> openHeld(file, pane.id, held, openPlace) },
+                onRemoveFile = { file -> pane.files.remove(file.id) },
                 desk = pane.desk,
                 // The keystroke is the node's measurement and arrives with the line, so nothing
                 // here decides what empties a box on a machine it has never seen. It goes as
@@ -704,46 +729,6 @@ internal fun ConversationColumn(
             }
         }
     }
-}
-
-// The ceiling the node applies, applied here as well. Sending eight megabytes up a phone link to
-// be refused at the other end is a minute of somebody's tethering spent on a certain no.
-internal const val MOST_BYTES_HANDED_OVER = 8 * 1024 * 1024
-
-// The node answers a paste it will not take with an error naming this pane — too large, not
-// base64, nowhere to write — and that error is deliberately quiet everywhere else, so the composer
-// is the only place it can be said. Nothing else the composer does produces one, and the pane's
-// refusal is cleared before the bytes go, so what lands next is the answer to this.
-// The line is a statement about the draft — *its path is typed in* — and the reply going is what
-// makes it false. Nothing used to take it down: the state had no transition back to idle at all,
-// so the green line stood over the composer for the life of the pane, still naming a screenshot
-// three messages ago. (The terminal view has the same missing transition, cleared there by the
-// pane's next input.)
-//
-// A refusal is not a statement about the draft. It is the node's only report that a file never
-// arrived — quiet everywhere else by design — and an error the operator has not read is not
-// something to sweep away with an action that has nothing to do with it. The next handover clears
-// it, which is the press that was going to fix it anyway.
-internal fun handoverAfterSend(handover: Handover): Handover = if (handover is Handover.Refused) handover else Handover.Idle
-
-internal fun handoverAfter(handover: Handover, refusal: String?): Handover = if (refusal != null && handover is Handover.Sent) Handover.Refused(refusal) else handover
-
-internal fun handoverOf(pane: PaneState, io: PaneIo, picked: PickedFile): Handover {
-    val name = picked.name?.takeIf { it.isNotBlank() } ?: "the file"
-    if (picked.bytes.size > MOST_BYTES_HANDED_OVER) {
-        return Handover.Refused("$name is larger than the 8 MiB a node will take.")
-    }
-    pane.clearRefusal()
-    val undelivered = pane.undelivered
-    io.send(ClientMsg.Paste(pane.id, Base64.encode(picked.bytes), picked.name))
-    // **A paste with no socket to go down is a refusal, not a send.** It is dropped rather than
-    // queued for the reason a keystroke is — replayed on a reconnect it types a path into whatever
-    // has the pane by then — and a strip still reading "sent" over bytes that were dropped is the
-    // lie that drop exists to prevent.
-    if (pane.undelivered > undelivered) {
-        return Handover.Refused("$name was not sent: there is no connection to the node.")
-    }
-    return Handover.Sent(name)
 }
 
 @Composable

@@ -114,7 +114,7 @@ pub fn open_path_form(source: &Source, home: &Path, span: Option<Span>) -> Resul
 }
 
 /// The path forms whose answer the node writes itself and holds whole: a diff, a listing, a
-/// summary, a file out of history, a commit.
+/// summary, a file out of history, a commit, a search.
 fn composed(source: &Source, home: &Path) -> Result<Fetched, JournalError> {
     let refused = || JournalError::NotFound(String::new());
     let git = |e: GitError| match e {
@@ -144,6 +144,9 @@ fn composed(source: &Source, home: &Path) -> Result<Fetched, JournalError> {
             let dir = directory_of(&repo.absolute(home)?)?;
             let patch = git::commit_patch(&dir, sha).map_err(git)?;
             Ok(text(patch.into_bytes(), Some(format!("{sha}.patch"))))
+        }
+        Source::Find { base, tail } => {
+            json(&crate::find::below(&base.absolute(home)?, tail, crate::find::BOUNDS).ok_or_else(refused)?)
         }
         Source::File(_) | Source::Zip(_) | Source::Record(_) | Source::Paste(_) => Err(refused()),
     }

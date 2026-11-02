@@ -4,7 +4,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import dev.kampr.conversation.md.markPaths
 import dev.kampr.conversation.md.pathLink
-import dev.kampr.conversation.md.pathOfLink
+import dev.kampr.conversation.md.tapOfLink
 import dev.kampr.shared.model.resolvePath
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -12,7 +12,7 @@ import kotlin.test.assertEquals
 class PathLinkTest {
     private val styles = testInlineStyles()
 
-    private fun paths(source: String) = linkUrls(inlineText(source, styles)).mapNotNull(::pathOfLink)
+    private fun paths(source: String) = linkUrls(inlineText(source, styles)).mapNotNull { tapOfLink(it)?.path }
 
     @Test
     fun aPathAnAgentNamesInProseIsATarget() {
@@ -29,7 +29,7 @@ class PathLinkTest {
     @Test
     fun aCodeSpanThatIsAPathIsATargetAndKeepsItsText() {
         val text = inlineText("open `Native.kt` and `client/shared/build.gradle.kts`", styles)
-        assertEquals(listOf("Native.kt", "client/shared/build.gradle.kts"), linkUrls(text).mapNotNull(::pathOfLink))
+        assertEquals(listOf("Native.kt", "client/shared/build.gradle.kts"), linkUrls(text).mapNotNull { tapOfLink(it)?.path })
         assertEquals("open Native.kt and client/shared/build.gradle.kts", text.text)
     }
 
@@ -55,7 +55,7 @@ class PathLinkTest {
     @Test
     fun plainTextMarksPathsTheSameWay() {
         val out = AnnotatedString("src/main.rs:12: error\n  --> crates/kampr-node/src/fs.rs:3:1\nok").markPaths(SpanStyle())
-        assertEquals(listOf("src/main.rs", "crates/kampr-node/src/fs.rs"), linkUrls(out).mapNotNull(::pathOfLink))
+        assertEquals(listOf("src/main.rs", "crates/kampr-node/src/fs.rs"), linkUrls(out).mapNotNull { tapOfLink(it)?.path })
     }
 
     @Test

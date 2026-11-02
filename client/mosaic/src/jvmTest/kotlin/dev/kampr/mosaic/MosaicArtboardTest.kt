@@ -1,10 +1,15 @@
 package dev.kampr.mosaic
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.PhosphorTheme
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.SafeArea
 import dev.kampr.terminal.TerminalSurfaces
 import java.io.File
 import kotlin.test.Test
@@ -12,6 +17,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 private val LIVE = ConnectionStatus.Live("full")
+
+private data class Paired(val name: String, val size: Pair<Dp, Dp>, val landscape: Boolean, val focus: String)
 
 class MosaicArtboardTest {
     @Test
@@ -82,6 +89,38 @@ class MosaicArtboardTest {
                     onHerd = {},
                     onAdd = {},
                 )
+            }
+            assertTrue(file.length() > 0, "$name rendered nothing")
+        }
+    }
+
+    // With the system bars a real phone has, so the key row can be seen to stand off the handle and
+    // the right-hand cell off a navigation bar on its side.
+    @Test
+    fun theSwitcherShowsTwoPanesInBothOrientations() {
+        for ((name, size, landscape, focus) in listOf(
+            Paired("switcher-pair-portrait", PORTRAIT, false, CODEX),
+            Paired("switcher-pair-portrait-top", PORTRAIT, false, CLAUDE),
+            Paired("switcher-pair-landscape", LANDSCAPE, true, CODEX),
+        )) {
+            val fixture = Fixture()
+            fixture.fourPanes()
+            fixture.mosaic.pair(true)
+            fixture.mosaic.focus(focus)
+            val file = File(OUT, "$name.png")
+            val bars = if (landscape) SafeArea(top = 24.dp, bottom = 0.dp, right = 48.dp) else SafeArea(top = 32.dp, bottom = 24.dp)
+            renderArtboard(size.first, size.second, SoftTheme, TypeScale.Phone, file) {
+                CompositionLocalProvider(LocalSafeArea provides bars) {
+                    MosaicSwitcher(
+                        store = fixture.store,
+                        mosaic = fixture.mosaic,
+                        herd = fixture.store.herd.value,
+                        surfaces = TerminalSurfaces(),
+                        landscape = landscape,
+                        onHerd = {},
+                        onAdd = {},
+                    )
+                }
             }
             assertTrue(file.length() > 0, "$name rendered nothing")
         }

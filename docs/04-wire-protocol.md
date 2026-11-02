@@ -730,7 +730,7 @@ must already handle.
   from the node's gzip/brotli layer: compressing it would make `Content-Range` count bytes the
   client never sees and drop the `Content-Length` a download's progress is drawn from.
 
-#### The other path forms: `diff`, `staged`, `unstaged`, `zip`, `ls`, `repo`, `show`, `commit`
+#### The other path forms: `diff`, `staged`, `unstaged`, `zip`, `ls`, `repo`, `show`, `commit`, `find`
 
 The same encoding with a different tag, and every one of them is a path form: gated as typing on
 the route and on the mesh peer (one predicate, `Source::is_path_form`), routed by node id alone,
@@ -749,6 +749,7 @@ rev that names nothing, an id that does not decode — is the one `404`. Past th
 | `repo` ␟ path in a repo | the repository summary below | `application/json` |
 | `show` ␟ path ␟ rev | `git show --no-textconv <rev>:./<name>` in the file's directory — the file as it was | an image by extension, else `text/plain; charset=utf-8` when UTF-8 with no NUL, else bytes to download |
 | `commit` ␟ repo path ␟ sha | `git show --no-color --no-ext-diff --stat --patch --format=fuller <sha>^{commit}` | `text/plain; charset=utf-8` |
+| `find` ␟ base dir ␟ tail | the files below the base whose path ends in the tail (below); none is `404` | `application/json` |
 
 - **`rev` is `[0-9A-Za-z_.~^/@{}-]{1,100}` not starting with `-`, `sha` is `[0-9a-f]{4,64}`**, and an
   id with anything else does not decode at all, so neither ever reaches `git`'s argv as an option, a
@@ -805,6 +806,25 @@ rev that names nothing, an id that does not decode — is the one `404`. Past th
   2000. `staged`/`unstaged` are porcelain v1's X and Y columns: a space for unchanged, `??` for
   untracked, `U` on both for a conflict.
 - `log` is the last 50 commits, newest first; empty for a repository with none.
+
+```jsonc
+// find — base "/home/u/dev/kampr", tail "kampr-node/src/fs.rs"
+{ "matches": ["/home/u/dev/kampr/crates/kampr-node/src/fs.rs"], "truncated": false }
+```
+
+- What a client asks when a relative path an agent wrote does not resolve against the pane's
+  directory: the agent meant some directory below it, or one it named earlier in the reply. The
+  client decides which bases to ask about and which match to open; the node only searches.
+- **The tail is plain relative segments**: no leading `/` or `~`, no empty, `.` or `..` segment, no
+  control character, at most 1024 bytes. Anything else does not decode. A match ends in the tail on
+  **whole segments**, so `x/a.rs` matches `src/x/a.rs` and never `src/notx/a.rs`.
+- The base is expanded like every other form and must be a directory. Inside a repository the
+  candidates are `git ls-files -z --cached --others --exclude-standard` run in the base, so an
+  ignored file is never a match. Outside one — or where that lists nothing — the base is walked
+  breadth first, skipping every hidden directory, `node_modules`, `target` and `build`, following
+  no link, at most 12 levels deep and 50 000 entries; a walk cut short sets `truncated`.
+- Matches are absolute, sorted by **fewest segments, then by name**, and at most **20** are sent;
+  `truncated` is `true` when there were more.
 
 ```
 200  Content-Type: application/zip
@@ -1162,6 +1182,33 @@ written here — the file has to land on the machine the harness will read it fr
 Ceiling **8 MiB**, checked against the base64's own length before anything is allocated, and refused
 with `bad_request` rather than truncated. A pasted file is swept after a day, and the directory is
 capped, so a pane that never reads its paste does not keep the bytes for ever.
+
+#### `typed: false` and `pasted`
+```jsonc
+client -> node  { "t": "paste", "pane": "01J/w1:p1", "b64": "<base64>", "name": "shot",
+                  "typed": false, "id": "c1" }
+node -> client  { "t": "pasted", "pane": "01J/w1:p1", "id": "c1",
+                  "path": "/home/u/.local/state/kampr/pastes/shot-1762061518000.png",
+                  "text": "/home/u/.local/state/kampr/pastes/shot-1762061518000.png " }
+node -> client  { "t": "pasted", "pane": "01J/w1:p1", "id": "c2",
+                  "refused": "8388609 bytes is larger than this node will take" }
+```
+
+The conversation's composer holds a file as a chip until its reply is sent, so it asks the node to
+write the bytes and **type nothing**. A path typed at once lands on the harness's input line, which
+the node reads straight back as the desk line and the composer's mirror. `typed` defaults to `true`,
+so every older client, and the terminal view, still get the path typed in.
+
+The answer is `pasted`, carrying the client's `id` back. `text` is what the reply should say for the
+file, and it is the node's call: the path and a space, or a bracketed paste of the path for a
+terminal running muffit's TUI (which attaches a picture only from one). The client puts each
+attachment's `text` ahead of its reply's words. A refusal, the ceiling included, is `refused` on the
+same frame instead of an `error`, so it names the file it is about. Gating is unchanged: a device that
+may not type is still refused with `not_writer`.
+
+Through a hub, the `paste` is relayed with `typed` and `id`, and the peer's `pasted` reaches the
+clients **watching** that pane, as a `convo.find` answer does; `id` is how the asker tells its own
+from another client's. A relay failure (a peer that left) is still a pane `error` with no `id`.
 
 ### `convo.facets`
 ```jsonc

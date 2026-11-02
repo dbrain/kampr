@@ -175,10 +175,24 @@ async fn listen(node: Arc<Node>) -> Result<()> {
     if node.config.server.tls.enabled {
         return serve_tls(node, addr, app).await;
     }
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("binding {addr}"))?;
+    let listener = bind(addr).with_context(|| format!("binding {addr}"))?;
     serve_on(listener, app).await
+}
+
+/// tokio's own bind listens with a backlog of 128, and a burst of connections bigger than that
+/// arriving faster than the accept loop takes them is dropped by the kernel: every client caught
+/// in it, a phone among a stranger's flood of pairing attempts, waits out a SYN retransmit, a
+/// second at least. Linux clamps this to `net.core.somaxconn`.
+const BACKLOG: u32 = 4096;
+
+pub fn bind(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListener> {
+    let socket = match addr {
+        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+    };
+    socket.set_reuseaddr(true)?;
+    socket.bind(addr)?;
+    socket.listen(BACKLOG)
 }
 
 /// **Nothing is drained.** The signal is caught for the one thing that has to happen off this
@@ -239,7 +253,8 @@ async fn serve_tls(node: Arc<Node>, addr: SocketAddr, app: Router) -> Result<()>
         .with_context(|| format!("loading {} and {}", tls.cert, tls.key))?;
     let acceptor = axum_server::tls_rustls::RustlsAcceptor::new(config)
         .acceptor(axum_server::accept::NoDelayAcceptor::new());
-    axum_server::bind(addr)
+    let listener = bind(addr).with_context(|| format!("binding {addr}"))?;
+    axum_server::from_tcp(listener.into_std()?)?
         .acceptor(acceptor)
         .serve(app.into_make_service_with_connect_info::<SocketAddr>())
         .await

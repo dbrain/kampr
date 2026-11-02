@@ -35,9 +35,7 @@ impl Drop for Harness {
 impl Harness {
     async fn start(tweak: impl FnOnce(&mut Config)) -> Self {
         let home = tempfile::tempdir().expect("a home");
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("a port");
+        let listener = http::bind("127.0.0.1:0".parse().unwrap()).expect("a port");
         let port = listener.local_addr().expect("an address").port();
         let config_dir = home.path().join("config");
         let state_dir = home.path().join("state");
@@ -599,6 +597,37 @@ fn herd_of(panes: &[&str]) -> kampr_node::herd::HerdModel {
     }
 }
 
+/// `/healthz` asked while 256 strangers' wrong codes are in flight, each from its own address, and
+/// what each of them was answered. `origin` makes every one cross-origin, refused before the
+/// handler reaches the limiter or a derivation.
+async fn healthz_under_flood(h: &Harness, origin: Option<&str>) -> (Duration, Vec<String>) {
+    let body = json!({ "code": "ZZZZ-ZZZZ", "device_name": "flood" }).to_string();
+    let flood: Vec<_> = (0..256)
+        .map(|n| {
+            let (origin, from, body) = (h.origin.clone(), origin.map(str::to_string), body.clone());
+            tokio::spawn(async move {
+                let peer = format!("203.0.113.{n}");
+                let mut headers = vec![("x-forwarded-for", peer.as_str())];
+                if let Some(from) = &from {
+                    headers.push(("origin", from.as_str()));
+                }
+                request(&origin, "POST", "/auth/pair", &headers, Some(&body)).await
+            })
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let at = std::time::Instant::now();
+    let (status, _) = request(&h.origin, "GET", "/healthz", &[], None).await;
+    let took = at.elapsed();
+    assert!(status.contains("200"), "the health check itself: {status}");
+    let answers = futures_util::future::join_all(flood)
+        .await
+        .into_iter()
+        .map(|a| a.expect("a request").0)
+        .collect();
+    (took, answers)
+}
+
 /// A pane reaches a client in the greeting's `herd` or in a `herd.patch`, and either is fine —
 /// what must not happen is neither.
 fn mentions(msg: &Value, pane: &str) -> bool {
@@ -626,6 +655,28 @@ async fn a_node_that_cannot_read_its_devices_does_not_say_nobody_is_enrolled() {
     assert_ne!(body["enrolled"], json!(false), "a guess is not an answer");
 }
 
+/// The flood below reached `/healthz` a second late one run in sixty under a loaded suite, with
+/// the runtime idle: the kernel had dropped its connection, because tokio's own bind listens with
+/// a backlog of 128 and the flood is 256 connections arriving faster than a starved accept loop
+/// took them (`ListenOverflows`, then a SYN retransmit). Nothing accepts here, so the backlog is
+/// the only thing holding them. Linux only: macOS clamps every backlog to `kern.ipc.somaxconn`,
+/// 128 by default.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_burst_of_connections_waits_in_the_backlog_rather_than_being_dropped() {
+    let listener = http::bind("127.0.0.1:0".parse().unwrap()).expect("a port");
+    let addr = listener.local_addr().expect("an address");
+    let mut held = Vec::new();
+    for n in 0..256 {
+        let connected = tokio::time::timeout(Duration::from_millis(500), TcpStream::connect(addr)).await;
+        assert!(
+            matches!(connected, Ok(Ok(_))),
+            "connection {n} of a 256-connection burst was not taken into the backlog: {connected:?}"
+        );
+        held.push(connected);
+    }
+}
+
 /// `/auth/pair` ran its argon2id pass — 19 MiB, memory-hard, tens of milliseconds — inline on
 /// the executor, and nothing bounded how many ran at once. The per-peer
 /// limiter cannot: source addresses are free, and a rotated one buys a fresh burst of five. So a
@@ -637,51 +688,26 @@ async fn a_node_that_cannot_read_its_devices_does_not_say_nobody_is_enrolled() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_flood_of_wrong_pairing_codes_leaves_the_node_still_answering_everything_else() {
     let h = Harness::start(|c| c.server.trust_proxy = true).await;
-    let quiet = std::time::Instant::now();
     let (ok, _) = request(&h.origin, "GET", "/healthz", &[], None).await;
     assert!(ok.contains("200"), "the node answers before the flood: {ok}");
-    let idle = quiet.elapsed();
-    let body = json!({ "code": "ZZZZ-ZZZZ", "device_name": "flood" }).to_string();
-    let flood: Vec<_> = (0..256)
-        .map(|n| {
-            let (origin, body) = (h.origin.clone(), body.clone());
-            tokio::spawn(async move {
-                let peer = format!("203.0.113.{n}");
-                request(
-                    &origin,
-                    "POST",
-                    "/auth/pair",
-                    &[("x-forwarded-for", &peer)],
-                    Some(&body),
-                )
-                .await
-            })
-        })
-        .collect();
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let at = std::time::Instant::now();
-    let (status, _) = request(&h.origin, "GET", "/healthz", &[], None).await;
-    let took = at.elapsed();
-
-    assert!(status.contains("200"), "the health check itself: {status}");
-    // **Against this machine's own idle answer, not against a stopwatch.** A flat bound here is an
-    // assertion about the hardware: it held on a quiet desk and failed roughly one run in forty
-    // under load, where the whole process is descheduled and every timing moves together. A wedged
-    // runtime is not a slow one — it is every worker parked in a key derivation, which is orders of
-    // magnitude rather than a multiple — so the ratio catches the defect and the machine cannot.
-    // Floored so a sub-millisecond baseline cannot make the bound tighter than the flat one was.
-    let bound = (idle * 20).max(Duration::from_millis(500));
+    let (turned_away, refusals) = healthz_under_flood(&h, Some("http://elsewhere.example")).await;
+    assert!(
+        refusals.iter().all(|a| a.contains("403")),
+        "the control flood has to be refused at the door: {:?}",
+        refusals.iter().collect::<std::collections::BTreeSet<_>>()
+    );
+    let (took, answers) = healthz_under_flood(&h, None).await;
+    // **Against the same flood turned away at the door, not against a stopwatch or an idle
+    // answer.** 256 connections on two starved workers cost a loaded suite a second by themselves:
+    // the health check waited behind a hundred-odd cheap refusals and at most seven derivations,
+    // and the door-refused flood cost the same. A wedge is the derivations on top of that, every
+    // worker parked in one: 0.9-4.1 s against a control of under a millisecond, idle or loaded.
+    let bound = (turned_away * 3).max(Duration::from_millis(500));
     assert!(
         took < bound,
-        "a stranger's wrong pairing codes wedged the runtime: /healthz took {took:?} \
-         against an idle {idle:?}, so the bound was {bound:?}"
+        "a stranger's wrong pairing codes wedged the runtime: /healthz took {took:?} against \
+         {turned_away:?} under the same flood turned away at the door, so the bound was {bound:?}"
     );
-    let answers: Vec<String> = futures_util::future::join_all(flood)
-        .await
-        .into_iter()
-        .map(|a| a.expect("a request").0)
-        .collect();
     assert!(
         answers.iter().all(|a| !a.contains("200")),
         "not one wrong code may pair"

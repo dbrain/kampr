@@ -6,11 +6,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.md.Breaks
 import dev.kampr.conversation.md.Markdown
 import dev.kampr.shared.model.LIVE_TURN_ID
+import dev.kampr.shared.model.mentionedDirs
+import dev.kampr.shared.model.nearer
 import dev.kampr.shared.net.filePathOf
 import dev.kampr.shared.net.pathOfAttachmentId
 import dev.kampr.shared.net.wallClockMillis
@@ -275,8 +278,9 @@ private fun Body(
     attachments: AttachmentStore,
     hand: Boolean,
 ) {
+    val nears = remember(pieces) { pieces.runningFold(emptyList<String>()) { seen, piece -> nearer(piece.mentioned(), seen) } }
     for ((index, piece) in pieces.withIndex()) {
-        PieceView(turn.id, index, piece, query, expanded, onToggle, attachments, hand)
+        PieceView(turn.id, index, piece, query, expanded, onToggle, attachments, hand, nears[index])
     }
     if (!hand) {
         val key = "${turn.id}#files"
@@ -294,6 +298,12 @@ fun StepStamp(stamp: String?) {
     DisableSelection { KText(stamp, tokens.type.micro, tokens.color.mute) }
 }
 
+private fun Piece.mentioned(): List<String> = when (this) {
+    is Piece.Prose -> mentionedDirs(text)
+    is Piece.Fence -> mentionedDirs(text)
+    else -> emptyList()
+}
+
 @Composable
 private fun PieceView(
     turnId: String,
@@ -304,6 +314,7 @@ private fun PieceView(
     onToggle: (String) -> Unit,
     attachments: AttachmentStore,
     hand: Boolean,
+    near: List<String>,
 ) {
     when (piece) {
         is Piece.Prose -> Markdown(
@@ -311,6 +322,7 @@ private fun PieceView(
             query,
             Modifier.fillMaxWidth(),
             breaks = if (hand) Breaks.Hard else Breaks.Soft,
+            near = near,
         )
 
         is Piece.Attach -> AttachmentCard(piece.att, attachments, Modifier.fillMaxWidth())
@@ -321,7 +333,7 @@ private fun PieceView(
 
         is Piece.Row -> FileAffordance(piece.path, attachments, Modifier.fillMaxWidth())
 
-        is Piece.Fence -> CodeCard(piece.lang, piece.text, query)
+        is Piece.Fence -> CodeCard(piece.lang, piece.text, query, near = near)
 
         is Piece.Patch -> DiffCard(piece.path, piece.text, query, attachments = attachments)
 

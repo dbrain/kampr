@@ -5,6 +5,7 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.runComposeUiTest
+import dev.kampr.shared.model.Lookup
 import dev.kampr.shared.ui.FilesPlace
 import dev.kampr.shared.ui.filePlace
 import kotlin.test.Test
@@ -41,6 +42,23 @@ class OpeningAFileFromTheGridTest {
         assertTrue(
             onAllNodesWithContentDescription("Open $NOTES").fetchSemanticsNodes().isEmpty(),
             "the strip offering the path stayed up after it was opened",
+        )
+    }
+
+    // The pane's directory is only where the shell is, not where every relative path on the grid
+    // was written from: what was written goes with the place, for the viewer to look for.
+    @Test
+    fun aRelativePathOpensWithWhatWasWrittenForTheViewerToLookFor() = runComposeUiTest {
+        val session = PaneSession(Phone.PANE)
+        val shown = "error in kampr-node/src/fs.rs:3"
+        val opened = mutableListOf<FilesPlace>()
+        gridTerminal(paneShowing(shown), session, Route(words("x"), cwd = "/home/u/dev/kampr"), opened = opened)
+        tapCell(session, 0, shown.indexOf("kampr-node") + 2)
+        onNodeWithContentDescription("Open /home/u/dev/kampr/kampr-node/src/fs.rs").performClick()
+        waitForIdle()
+        assertEquals(
+            listOf<FilesPlace>(filePlace(Phone.PANE, "/home/u/dev/kampr/kampr-node/src/fs.rs", Lookup("kampr-node/src/fs.rs", "/home/u/dev/kampr", emptyList()))),
+            opened,
         )
     }
 

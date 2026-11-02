@@ -17,9 +17,11 @@ import androidx.compose.ui.test.runComposeUiTest
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
 import androidx.compose.ui.text.AnnotatedString
 import dev.kampr.conversation.pngBytes
+import dev.kampr.shared.model.Lookup
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.diffAttachmentId
 import dev.kampr.shared.net.fileAttachmentId
+import dev.kampr.shared.net.findAttachmentId
 import dev.kampr.shared.net.lsAttachmentId
 import dev.kampr.shared.ui.FilesPlace
 import dev.kampr.shared.ui.filePlace
@@ -42,6 +44,8 @@ index 1111111..2222222 100644
 +    println("the fourth hop drops it")
  }
 """
+
+private val WRITTEN = Lookup("kampr-node/fs.kt", "/home/u/demo", emptyList())
 
 private const val VIEWER = "shot.png, pinch to zoom, double tap to fit"
 
@@ -121,6 +125,26 @@ class FileViewTest {
     @Test
     fun aRefusalIsSaidInTheNodesOwnWords() = runComposeUiTest {
         open(emptyMap(), filePlace(PANE, NOTES))
+        waitUntilAtLeastOneExists(hasText("no such attachment"), 5_000)
+    }
+
+    // A tapped relative path that is not where it was written is looked for, and the viewer is
+    // replaced by the file the node found rather than stopping at a refusal.
+    @Test
+    fun aRelativePathThatIsNotWhereItWasWrittenOpensWhereTheNodeFindsIt() = runComposeUiTest {
+        val actual = "/home/u/demo/crates/kampr-node/fs.kt"
+        val found = """{"matches":["$actual"],"truncated":false}""".encodeToByteArray()
+        val (_, nav) = open(
+            mapOf(findAttachmentId("/home/u/demo", "kampr-node/fs.kt") to AttachmentBytes.Ok(found, "application/json"), fileAttachmentId(actual) to text(BODY)),
+            filePlace(PANE, "/home/u/demo/kampr-node/fs.kt", WRITTEN),
+        )
+        waitUntilAtLeastOneExists(hasText("the fourth hop drops it", substring = true), 5_000)
+        assertEquals(listOf<FilesPlace>(filePlace(PANE, actual)), nav.places.toList())
+    }
+
+    @Test
+    fun aRelativePathFoundNowhereIsTheSameRefusal() = runComposeUiTest {
+        open(emptyMap(), filePlace(PANE, "/home/u/demo/kampr-node/fs.kt", WRITTEN))
         waitUntilAtLeastOneExists(hasText("no such attachment"), 5_000)
     }
 

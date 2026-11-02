@@ -8,6 +8,7 @@ import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.SeenDone
+import dev.kampr.shared.model.closed
 import dev.kampr.shared.model.createdPane
 import dev.kampr.shared.model.fleetTargets
 import dev.kampr.shared.model.hasDesk
@@ -45,6 +46,7 @@ import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
+import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SplitDirection
 import dev.kampr.shared.wire.Wire
@@ -591,6 +593,7 @@ class AppState(
         if (target is Screen.Pane) connection.watch(target.paneId)
         if (leaving != null && leaving != (target as? Screen.Pane)?.paneId) connection.unwatch(leaving)
         screen = target
+        leaveClosedPane(store.herd.value)
     }
 
     // True while the pane on screen is showing a default nobody asked for. `prefs` is the third
@@ -673,6 +676,19 @@ class AppState(
         if (screen != Screen.Herd) return
         val last = prefs.get(KEY_LAST_PANE) ?: return
         if (herd.panes.any { it.id == last }) land(last)
+    }
+
+    private var seenOnScreen: PaneInfo? = null
+
+    // A desk keeps the herd beside the pane, so there the pane and its last output stay on screen.
+    private fun leaveClosedPane(herd: Herd) {
+        val paneId = (screen as? Screen.Pane)?.paneId ?: return
+        herd.panes.firstOrNull { it.id == paneId }?.let {
+            seenOnScreen = it
+            return
+        }
+        val seen = seenOnScreen?.takeIf { it.id == paneId }
+        if (compact && herd.closed(paneId, seen != null, seen)) back()
     }
 
     fun setPaneView(view: PaneView) {
@@ -827,6 +843,7 @@ class AppState(
         scope.launch {
             store.herd.collect {
                 reattach(it)
+                leaveClosedPane(it)
                 openWhenItArrives(it)
                 reconcileNotifications(it)
             }

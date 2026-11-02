@@ -186,6 +186,87 @@ async fn a_picture_pasted_into_a_background_session_goes_with_the_next_message()
     assert_eq!(hello["client"], json!({ "kind": "kampr" }), "{hello}");
 }
 
+impl Client {
+    async fn quiet_paste(&mut self, pane: &str, id: &str, b64: &str) -> Value {
+        self.send(json!({
+            "t": "paste", "pane": pane, "b64": b64, "name": "shot", "typed": false, "id": id,
+        }))
+        .await;
+        self.frame("the pasted answer", |f| f["t"] == "pasted" && f["id"] == id)
+            .await
+    }
+}
+
+async fn quiet_for(client: &mut Client, dir: &Path) {
+    let settle = tokio::time::Instant::now() + std::time::Duration::from_millis(600);
+    while tokio::time::Instant::now() < settle {
+        client.pump(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(typed(dir), "", "a quiet paste typed into the pane");
+}
+
+#[tokio::test]
+async fn a_quiet_paste_types_nothing_and_answers_with_what_to_type_for_it() {
+    let fake = Fake::start(vec![]).await;
+    let h = Harness::start(&fake).await;
+    let mut client = h.client().await;
+
+    let plain = tempfile::tempdir().unwrap();
+    let (shell, _) = client.terminal(plain.path()).await;
+    let answer = client.quiet_paste(&shell, "c1", ONE_PIXEL).await;
+    assert_eq!(answer["pane"], shell, "{answer}");
+    let path = answer["path"].as_str().expect("a path");
+    assert!(path.ends_with(".png") && Path::new(path).is_file(), "{answer}");
+    assert_eq!(answer["text"], format!("{path} "), "{answer}");
+    quiet_for(&mut client, plain.path()).await;
+
+    let tui_dir = tempfile::tempdir().unwrap();
+    let (terminal, pid) = client.terminal(tui_dir.path()).await;
+    let mut row = session("t1", "waiting_user", Some("from the tui"));
+    row["clients"] = tui(pid);
+    fake.insert(row);
+    client.pane(&terminal, |p| p["agent"] == "muffit").await;
+    let answer = client.quiet_paste(&terminal, "c2", ONE_PIXEL).await;
+    let path = answer["path"].as_str().expect("a path");
+    assert_eq!(
+        answer["text"],
+        format!("\u{1b}[200~{path}\u{1b}[201~"),
+        "the TUI attaches a picture only from a bracketed paste: {answer}"
+    );
+    quiet_for(&mut client, tui_dir.path()).await;
+
+    let refused = client.quiet_paste(&shell, "c3", "").await;
+    assert!(refused["path"].is_null(), "{refused}");
+    assert!(
+        refused["refused"].as_str().is_some_and(|r| !r.is_empty()),
+        "{refused}"
+    );
+}
+
+#[tokio::test]
+async fn a_picture_pasted_quietly_into_a_background_session_goes_with_the_reply_that_names_it() {
+    let fake = Fake::start(vec![session("s1", "waiting_user", None)]).await;
+    fake.set_transcript("s1", vec![]);
+    let h = Harness::start(&fake).await;
+    let mut client = h.client().await;
+    let id = pane("s1");
+    client.watch(&id).await;
+    client.convo(&id).await;
+    eventually("the node attaches", || (fake.attached() > 0).then_some(())).await;
+
+    let answer = client.quiet_paste(&id, "c1", ONE_PIXEL).await;
+    let text = answer["text"].as_str().expect("what to type").to_string();
+    client.input(&id, &format!("{text}what is this?")).await;
+    client.input(&id, "\r").await;
+    let input = eventually("the message", || fake.attach_frames("input").into_iter().next()).await;
+    assert_eq!(input["text"], "what is this?", "{input}");
+    assert_eq!(
+        input["images"],
+        json!([{ "mime": "image/png", "data": ONE_PIXEL }]),
+        "{input}"
+    );
+}
+
 #[tokio::test]
 async fn a_new_session_opens_in_a_terminal_running_the_tui() {
     let fake = Fake::start(vec![]).await;

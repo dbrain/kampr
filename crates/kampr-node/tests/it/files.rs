@@ -391,6 +391,7 @@ async fn a_read_only_device_is_refused_every_browsing_form() {
             repo: FileRef::new(&repo.root),
             sha: repo.first.clone(),
         },
+        find(&repo.root, "lib.rs"),
     ] {
         let answer = b.fetch_as(&b.anchor(), &source.encode(), &readonly).await;
         assert_eq!(answer.status, 403, "{source:?}");
@@ -422,6 +423,12 @@ async fn every_refusal_is_the_same_404() {
         raw(&["show", &readme, "HEAD:src/lib.rs"]),
         raw(&["commit", &root, "--stat"]),
         raw(&["commit", &root, "HEAD"]),
+        find("relative/dir", "lib.rs").encode(),
+        find(repo.root.join("README.md"), "lib.rs").encode(),
+        find(repo.root.join("absent"), "lib.rs").encode(),
+        find(&repo.root, "nothing/like/this.rs").encode(),
+        raw(&["find", &root, "../work/src/lib.rs"]),
+        raw(&["find", &root, "/etc/hosts"]),
     ] {
         let answer = b.fetch_as(&b.anchor(), &id, &b.full).await;
         assert_eq!(
@@ -490,4 +497,137 @@ async fn staged_and_unstaged_changes_are_two_different_diffs() {
             403
         );
     }
+}
+
+fn find(base: impl Into<PathBuf>, tail: &str) -> Source {
+    Source::Find {
+        base: FileRef::new(base),
+        tail: tail.into(),
+    }
+}
+
+fn matches(found: &Value) -> Vec<String> {
+    found["matches"]
+        .as_array()
+        .expect("matches")
+        .iter()
+        .map(|m| m.as_str().expect("a path").to_string())
+        .collect()
+}
+
+fn touch(root: &Path, rel: &str) {
+    let path = root.join(rel);
+    std::fs::create_dir_all(path.parent().expect("a parent")).expect("dirs");
+    std::fs::write(path, "x\n").expect("write");
+}
+
+/// The operator's report: an agent wrote `kampr-node/src/fs.rs` from the repository root, where
+/// the file is `crates/kampr-node/src/fs.rs`. A tail matches whole segments only, an untracked file
+/// is found and an ignored one is not, because that is what `git` says is the project.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tail_is_found_below_a_repository_by_whole_segments() {
+    let b = Browser::start().await;
+    let repo = a_repo();
+    touch(&repo.root, "crates/kampr-node/src/fs.rs");
+    touch(&repo.root, "crates/not-kampr-node/src/fs.rs");
+    touch(&repo.root, "vendor/kampr-node/src/fs.rs");
+    std::fs::write(repo.root.join(".gitignore"), "vendor/\n").expect("write");
+
+    let found = b.fetch(&find(&repo.root, "kampr-node/src/fs.rs")).await.json();
+
+    assert_eq!(
+        matches(&found),
+        [repo
+            .root
+            .join("crates/kampr-node/src/fs.rs")
+            .display()
+            .to_string()]
+    );
+    assert_eq!(found["truncated"], false);
+
+    let found = b.fetch(&find(repo.root.join("src"), "lib.rs")).await.json();
+    assert_eq!(
+        matches(&found),
+        [repo.root.join("src/lib.rs").display().to_string()],
+        "a base below the root lists only what is below it"
+    );
+}
+
+/// Outside a repository the directory is walked, and what a project never holds by hand — hidden
+/// directories, dependencies and build output — is not walked into.
+#[tokio::test(flavor = "multi_thread")]
+async fn outside_a_repository_the_walk_finds_it_and_skips_what_is_never_source() {
+    let b = Browser::start().await;
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = dir.path().canonicalize().expect("a root");
+    for rel in [
+        "src/parse/parser.rs",
+        ".cache/parser.rs",
+        "node_modules/x/parser.rs",
+        "target/debug/parser.rs",
+        "build/parser.rs",
+    ] {
+        touch(&root, rel);
+    }
+
+    let found = b.fetch(&find(&root, "parser.rs")).await.json();
+
+    assert_eq!(
+        matches(&found),
+        [root.join("src/parse/parser.rs").display().to_string()]
+    );
+}
+
+/// Several matches come back in the one order the client picks from: fewest segments, then by
+/// name — whether `git` listed them or the walk found them.
+#[tokio::test(flavor = "multi_thread")]
+async fn several_matches_come_back_shallowest_first_then_by_name() {
+    let b = Browser::start().await;
+    let plain = tempfile::tempdir().expect("a directory");
+    let plain = plain.path().canonicalize().expect("a root");
+    let repo = a_repo();
+    for root in [&plain, &repo.root] {
+        for rel in ["b/x/lib.rs", "a/deep/x/lib.rs", "a/x/lib.rs"] {
+            touch(root, rel);
+        }
+        let found = b.fetch(&find(root, "x/lib.rs")).await.json();
+        let want: Vec<String> = ["a/x/lib.rs", "b/x/lib.rs", "a/deep/x/lib.rs"]
+            .iter()
+            .map(|rel| root.join(rel).display().to_string())
+            .collect();
+        assert_eq!(matches(&found), want, "under {}", root.display());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn past_twenty_matches_the_first_twenty_are_sent_and_the_answer_says_so() {
+    let b = Browser::start().await;
+    let dir = tempfile::tempdir().expect("a directory");
+    let root = dir.path().canonicalize().expect("a root");
+    for n in 0..25 {
+        touch(&root, &format!("d{n:02}/f.rs"));
+    }
+
+    let found = b.fetch(&find(&root, "f.rs")).await.json();
+
+    let want: Vec<String> = (0..20)
+        .map(|n| root.join(format!("d{n:02}/f.rs")).display().to_string())
+        .collect();
+    assert_eq!(matches(&found), want);
+    assert_eq!(found["truncated"], true);
+}
+
+/// A base given as `~` is the node's home, exactly as every other path form expands it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_base_under_the_home_is_expanded_before_it_is_searched() {
+    let b = Browser::start().await;
+    let home = b.h.journals_home().to_path_buf();
+    touch(&home, "proj/deep/notes.md");
+
+    let found = b.fetch(&find("~/proj", "notes.md")).await.json();
+
+    assert_eq!(
+        matches(&found),
+        [home.join("proj/deep/notes.md").display().to_string()]
+    );
 }

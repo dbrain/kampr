@@ -114,7 +114,8 @@ class MosaicStateTest {
     }
 
     // A dropped peer's panes stay in the herd on purpose, so the cells stay too and degrade in
-    // place; only a pane that has genuinely gone loses its cell.
+    // place; a node that leaves the herd may come back with the pane, and only a shell that exited
+    // on a node still serving loses its cell.
     @Test
     fun anOfflinePeerKeepsItsCellsAndAClosedPaneDoesNot() {
         val (mosaic, _) = state()
@@ -136,6 +137,15 @@ class MosaicStateTest {
         mosaic.reconcile(
             Herd(
                 nodes = listOf(NodeInfo(id = "hub", kind = "local")),
+                panes = listOf(pane("hub/p1", "hub")),
+                known = true,
+            ),
+        )
+        assertEquals(listOf("hub/p1", "peer/p2"), mosaic.panes)
+
+        mosaic.reconcile(
+            Herd(
+                nodes = listOf(NodeInfo(id = "hub", kind = "local"), NodeInfo(id = "peer")),
                 panes = listOf(pane("hub/p1", "hub")),
                 known = true,
             ),

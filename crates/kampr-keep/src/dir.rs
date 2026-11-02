@@ -280,6 +280,10 @@ impl SessionDir {
         read_json(&self.path.join(KEEPER)).ok()
     }
 
+    pub fn log_end(&self) -> io::Result<u64> {
+        Ok(crate::log::bounds(&self.path)?.1)
+    }
+
     pub fn exit(&self) -> Option<Exit> {
         read_json(&self.path.join(EXIT)).ok()
     }
@@ -391,7 +395,7 @@ pub fn register_host(session: &SessionDir, mut host: Host) -> io::Result<HostGua
     make_private_dir(&dir)?;
     let path = dir.join(format!("{}.json", host.pid));
     let _lock = hosts_lock(session)?;
-    host.answers_from = Some(crate::log::bounds(&session.path)?.1);
+    host.answers_from = Some(session.log_end()?);
     write_json(&path, &host)?;
     Ok(HostGuard { path, host })
 }

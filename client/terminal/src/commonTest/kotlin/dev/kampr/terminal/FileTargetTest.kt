@@ -1,5 +1,6 @@
 package dev.kampr.terminal
 
+import dev.kampr.shared.model.Lookup
 import dev.kampr.terminal.render.TargetKind
 import dev.kampr.terminal.render.detectTarget
 import kotlin.test.Test
@@ -58,6 +59,16 @@ class FileTargetTest {
         assertEquals("/home/u/dev/kampr/src/main.rs", found?.text)
         assertEquals(at(line, "src/") until at(line, ":12"), found?.range)
         assertEquals(TargetKind.Path, detectTarget(line, at(line, "src/"))?.kind)
+    }
+
+    // The shell's directory is a guess about where a relative path was written from, so what was
+    // written travels with it and is looked for when the guess is wrong.
+    @Test
+    fun aRelativePathCarriesWhatWasWrittenAndAnAnchoredOneDoesNot() {
+        val line = "edited kampr-node/src/fs.rs and /tmp/kampr/notes.md"
+        val relative = detectTarget(line, at(line, "kampr-node"), cwd = "/home/u/dev/kampr")
+        assertEquals(Lookup("kampr-node/src/fs.rs", "/home/u/dev/kampr", emptyList()), relative?.lookup)
+        assertNull(detectTarget(line, at(line, "/tmp"), cwd = "/home/u/dev/kampr")?.lookup)
     }
 
     @Test

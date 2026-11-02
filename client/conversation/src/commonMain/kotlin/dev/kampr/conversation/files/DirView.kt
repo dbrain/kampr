@@ -247,11 +247,11 @@ private fun Crumbs(trail: List<Crumb>, onOpen: (String) -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         trail.forEachIndexed { index, crumb ->
-            if (index > 0 && trail[index - 1].label != "/") KText("/", tokens.type.meta, tokens.color.mute)
+            if (index > 0 && trail[index - 1].label != "/") KText("/", tokens.type.caption, tokens.color.mute)
             val last = index == trail.lastIndex
             KText(
                 crumb.label,
-                tokens.type.meta,
+                tokens.type.caption,
                 if (last) tokens.color.text else tokens.color.accent,
                 Modifier
                     .touchable(LANDSCAPE_TOUCH)
