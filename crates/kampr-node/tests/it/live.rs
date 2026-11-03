@@ -8635,6 +8635,23 @@ async fn a_paste_into_claude_is_bracketed_so_it_becomes_the_picture() {
         }
     }
     assert!(running, "the shell never started the read");
+    // What the paste is typed as is the node's call from its own herd, which hears herdr's
+    // report of the agent on herdr's clock.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    while h
+        .node
+        .herd()
+        .pane(&pane)
+        .and_then(|entry| entry.agent.clone())
+        .as_deref()
+        != Some("claude")
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the node never saw the pane as Claude's"
+        );
+        recv(&mut socket, Duration::from_millis(200)).await;
+    }
 
     send(
         &mut socket,

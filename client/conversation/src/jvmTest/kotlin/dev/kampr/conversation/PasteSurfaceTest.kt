@@ -220,6 +220,8 @@ class PasteSurfaceTest {
         waitForIdle()
         reply.performTextInput("alpha")
         waitForIdle()
+        runOnIdle { desk.store.accept(ServerMsg.ConvoComposer(PANE_ID, "alpha", "\u0003", 5, PICTURE_KEYS)) }
+        waitForIdle()
         runOnIdle { attach(desk.pane, io, PICKED, live = true) }
         waitForIdle()
         onNodeWithContentDescription("Send this reply to claude").assertIsNotEnabled()
