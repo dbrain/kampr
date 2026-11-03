@@ -207,3 +207,31 @@ async fn a_key_typed_into_the_box_follows_its_frame_to_the_reply_box() {
         "the box lagged its frame by {slowest:?}"
     );
 }
+
+/// **A pane watched again goes on publishing its box.** A re-watch starts from the pump before it
+/// (#409), whose pane had not moved, so the readers chosen when it did were never chosen again:
+/// nothing of the box was published for as long as the watch lasted, and the reply box took the
+/// last line it had for the pane's.
+#[tokio::test]
+async fn a_box_watched_again_is_still_published_as_it_is_typed() {
+    let mut c = Claude::start(true).await;
+    let pane = c.pane.clone();
+    for (key, want) in [("hi", "hi"), ("!", "hi!")] {
+        c.client.type_text(&pane, key).await;
+        c.client
+            .until(&format!("{want:?} published"), |c| {
+                let at = c
+                    .others
+                    .iter()
+                    .position(|v| v["t"] == "convo.composer" && v["pane"] == pane && v["text"] == want)?;
+                Some(c.others.remove(at))
+            })
+            .await;
+        c.client.send(json!({ "t": "unwatch", "pane": pane })).await;
+        c.quiet().await;
+        c.client
+            .send(json!({ "t": "watch", "pane": pane, "conversation": true }))
+            .await;
+        c.quiet().await;
+    }
+}

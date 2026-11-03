@@ -385,9 +385,6 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut live = Watch::default();
     let mut was_working = false;
     let mut desk = ComposerFeed::default();
-    let mut composer: Option<ComposerReader> = None;
-    let mut queued: Option<kampr_journal::QueuedReader> = None;
-    let mut screen_status: Option<kampr_journal::StatusReader> = None;
     let mut screen_seen: Option<&'static str> = None;
 
     let herd_pane = kampr_core::split_view(&global).0.to_string();
@@ -482,11 +479,15 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
             due = true;
             misses = 0;
-            composer = journals.composer(now.agent.as_deref());
-            queued = journals.queued(now.agent.as_deref());
-            screen_status = journals.status(now.agent.as_deref());
             screen_seen = None;
         }
+        // Off the handle on every pass rather than when it moves: a re-watch inherits a handle
+        // that has not moved (#409), and readers chosen only on a move were never chosen there,
+        // so a pane watched again published nothing of its box.
+        let agent = handle.as_ref().and_then(|h| h.agent.as_deref());
+        let composer: Option<ComposerReader> = journals.composer(agent);
+        let queued = journals.queued(agent);
+        let screen_status = journals.status(agent);
 
         // **An inherited transcript is only this pane's if the pane still resolves to it** — and
         // that is only in doubt where the handle cannot answer. A harness that names its session

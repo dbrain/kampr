@@ -111,6 +111,14 @@ fun ConversationView(
     // reads the real clock is a different picture every time it is rendered.
     clock: () -> Double = ::wallClockMillis,
 ) {
+    // A host hands the next pane to the slot the last one was in (the desktop's pane screen, a
+    // tab), and the reply box's buffer remembered here went with it: one pane's half-written
+    // reply sat in the next one's box.
+    key(pane.id) { PaneConversation(pane, info, modifier, clock) }
+}
+
+@Composable
+private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifier, clock: () -> Double) {
     val tokens = Kampr.tokens
     val io = LocalPaneIo.current
 

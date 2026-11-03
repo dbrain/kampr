@@ -28,6 +28,11 @@ class ComposerMirror {
     private var quietUntil = 0L
     private var unheard: DeskLine? = null
 
+    // The reading `line` was last taken from. A reply box built again (a look at the terminal or
+    // at another pane) hears the pane's last reading once more, and one already taken is older
+    // than every key typed since: taken again, it read as the desk emptying the box.
+    private var taken: DeskLine? = null
+
     // What each `[Image #n]` this box placed was pasted as, so a send that has to type one again
     // pastes the file rather than typing its name. Learned when the token comes back as the line.
     private val placing = ArrayDeque<String>()
@@ -41,12 +46,13 @@ class ComposerMirror {
     fun heard(desk: DeskLine?, box: String, now: Long = elapsed()): String? {
         keys = desk?.keys
         desk?.keys?.let { measured = it }
-        if (desk == null || desk.keys == null) return null
+        if (desk == null || desk.keys == null || desk == taken) return null
         if (now < quietUntil && desk.text != line) {
             unheard = desk
             return null
         }
         unheard = null
+        taken = desk
         val inStep = box == (line ?: "")
         learn(line, desk.text)
         line = desk.text
