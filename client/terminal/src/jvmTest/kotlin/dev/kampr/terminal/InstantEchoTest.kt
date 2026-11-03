@@ -8,7 +8,7 @@ import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.runDesktopComposeUiTest
+import androidx.compose.ui.test.v2.runDesktopComposeUiTest
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.RowDiff

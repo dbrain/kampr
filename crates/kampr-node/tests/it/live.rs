@@ -1428,6 +1428,16 @@ async fn the_http_surface_leaks_neither_paths_nor_the_device_inventory() {
         !headers.contains("connect-src 'self' ws:"),
         "a bare ws: scheme matches any host and is a clean exfiltration channel: {headers}"
     );
+    for directive in ["font-src", "connect-src"] {
+        let allowed = headers
+            .split(';')
+            .find(|d| d.contains(directive))
+            .unwrap_or_else(|| panic!("no {directive}: {headers}"));
+        assert!(
+            allowed.contains("https://fonts.gstatic.com"),
+            "the web client cannot fetch the Noto faces for glyphs its own fonts lack: {allowed}"
+        );
+    }
 }
 
 /// A read-only device receives every frame of every pane and is refused every write — but `prefs`
@@ -8585,6 +8595,117 @@ async fn a_quiet_paste_lands_on_the_node_answers_with_its_path_and_types_nothing
     assert_eq!(std::fs::read(&path).expect("the pasted file"), body);
 }
 
+/// **Claude and Codex take a picture from a bracketed paste of its path** (#620): what they draw is
+/// one `[Image #n]` at the caret, and what they send is the picture. Typed bare, the path stays
+/// prose and the agent has to go and read the file. A paste the client numbered is still answered,
+/// so its chip can go once the path is in the pane.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paste_into_claude_is_bracketed_so_it_becomes_the_picture() {
+    let home = tempfile::tempdir().unwrap();
+    let h = harness!("paste-claude");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+
+    become_harness(&h._session, &local, home.path(), "claude").await;
+    herdr_has_scraped(&h._session, &local).await;
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    h._session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": "printf '\\e[?2004h'; IFS= read -r line; case \"$line\" in $'\\e[200~'/*$'\\e[201~') v=BRACKETED;; *) v=PLAIN;; esac; echo VERDICT=$v\n" }),
+        )
+        .await;
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    until(&mut socket, "grid.reset", 15).await;
+    // Bash discards unread input as readline hands the terminal back, so the paste waits for the
+    // `read` to be running.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    send(
+        &mut socket,
+        json!({
+            "t": "paste",
+            "pane": pane,
+            "b64": base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\n\x00kampr-claude"),
+            "name": "clshot",
+            "id": "c2",
+        }),
+    )
+    .await;
+    let answer = until(&mut socket, "pasted", 10).await;
+    assert_eq!(answer["id"], "c2", "{answer}");
+    let path = answer["path"].as_str().expect("a path").to_string();
+    // A harness with no transcript yet is one the node holds input for (#535), so the newline
+    // that ends the shell's `read` waits until the path is on its line.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        if matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset"))
+            && message.to_string().contains("clshot-")
+        {
+            break;
+        }
+    }
+    h._session
+        .call("pane.send_text", json!({ "pane_id": local, "text": "\n" }))
+        .await;
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut got: Option<String> = None;
+    while tokio::time::Instant::now() < deadline && got.is_none() {
+        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+            continue;
+        };
+        let painted = message.to_string();
+        for verdict in ["VERDICT=BRACKETED", "VERDICT=PLAIN"] {
+            if painted.contains(verdict) {
+                got = Some(verdict.to_string());
+            }
+        }
+    }
+    let got = got.expect("the shell never printed what it read");
+    assert_eq!(
+        got, "VERDICT=BRACKETED",
+        "the path did not arrive as one bracketed paste: {got}"
+    );
+    assert!(std::path::Path::new(&path).is_file(), "{path}");
+
+    // A file held for the reply is answered with the same form, so the reply carries a picture.
+    send(
+        &mut socket,
+        json!({
+            "t": "paste",
+            "pane": pane,
+            "b64": base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\n\x00kampr-held"),
+            "name": "held",
+            "typed": false,
+            "id": "c3",
+        }),
+    )
+    .await;
+    let held = loop {
+        let answer = until(&mut socket, "pasted", 10).await;
+        if answer["id"] == "c3" {
+            break answer;
+        }
+    };
+    let text = held["text"].as_str().expect("what the reply says for it");
+    assert!(
+        text.starts_with("\u{1b}[200~") && text.ends_with("\u{1b}[201~"),
+        "{held}"
+    );
+}
+
 /// **A screenshot is not a few kilobytes, and the socket has to be able to carry one.**
 ///
 /// Every other client message is small — a `prefs` blob is capped at 2 KiB — so the socket's
@@ -11547,7 +11668,7 @@ async fn claudes_box_reaches_the_reply_box_whole_with_its_caret_and_its_keys() {
     assert_eq!(composer["caret"], want.chars().count(), "{composer}");
     assert_eq!(
         composer["keys"],
-        json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n" }),
+        json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n", "images": true }),
         "{composer}"
     );
 

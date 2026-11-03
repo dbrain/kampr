@@ -312,6 +312,9 @@ class PaneState(val id: String, val styles: StyleTable) {
     // exists to answer.
     var draft by mutableStateOf("")
 
+    // Where the reply box's caret is in the draft, which is where a picture goes.
+    var draftCaret = 0
+
     // What the draft has typed into the pane's own box, held beside it for the same reason: a
     // composer that came back without it took a line already in the pane for one still to be
     // typed, and sent it again on top of itself.

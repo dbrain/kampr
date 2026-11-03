@@ -5,13 +5,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.StyleTable
@@ -47,14 +47,14 @@ private fun screen(pane: PaneState, scrolled: Int) {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private fun ComposeUiTest.terminal(pane: PaneState, session: PaneSession): Slate {
-    val board = Slate()
+private fun ComposeUiTest.terminal(pane: PaneState, session: PaneSession): HeldClipboard {
+    val board = HeldClipboard()
     setContent {
         CompositionLocalProvider(
             LocalTokens provides Phone.tokens(),
             LocalPaneIo provides HushIo,
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
-            LocalClipboardManager provides board,
+            LocalClipboard provides board,
         ) {
             Box(Modifier.size(411.dp, 914.dp)) { TerminalView(pane, session, HushIo) }
         }
@@ -122,7 +122,7 @@ class SelectionFollowsTheTextTest {
 
         val selection = assertNotNull(session.view.selection, "the drag selected nothing")
         val copied = assertNotNull(board.held, "the mouse selection was not copied")
-        assertEquals(true, copied.text.isNotEmpty(), "an empty copy for a selection of $selection")
+        assertEquals(true, copied.isNotEmpty(), "an empty copy for a selection of $selection")
         assertNotNull(session.view.selection, "copying took the selection off the screen")
     }
 

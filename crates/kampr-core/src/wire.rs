@@ -590,9 +590,9 @@ pub enum ServerMsg {
         /// Which of `matches` the search landed on, or `None` when nothing matched.
         current: Option<u32>,
     },
-    /// Where a `paste` sent with `typed: false` landed, or why it did not. `text` is what the
-    /// reply carrying it should say for it, which is the node's call: muffit's TUI attaches a
-    /// picture only from a bracketed paste.
+    /// Where a `paste` sent with `typed: false` or an `id` landed, or why it did not. `text` is what the
+    /// reply carrying it should say for it, which is the node's call: muffit's TUI, Claude and
+    /// Codex attach a picture only from a bracketed paste.
     #[serde(rename = "pasted")]
     Pasted {
         pane: String,
@@ -909,7 +909,8 @@ pub enum ClientMsg {
     ///
     /// `typed: false` writes the file and types nothing: a conversation's composer holds the file
     /// until its reply goes, and a path typed now would sit on the harness's input line, which is
-    /// read straight back as the desk line. The node answers it with `pasted`, under `id`.
+    /// read straight back as the desk line. The node answers it with `pasted`, under `id`, and
+    /// answers a typed paste the same way when it carries one.
     #[serde(rename = "paste")]
     Paste {
         pane: String,

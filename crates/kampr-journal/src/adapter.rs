@@ -146,6 +146,12 @@ pub trait JournalAdapter: Send + Sync {
         None
     }
 
+    /// Whether a bracketed paste of an image path becomes a picture in this harness's message
+    /// rather than words in it (#620).
+    fn pastes_images(&self) -> bool {
+        false
+    }
+
     /// Says whether the harness has drawn its composer and is reading keys, for the harnesses
     /// somebody has measured booting. `None` — the default — is a harness a reply is never held
     /// for, whatever state it is in.
@@ -285,6 +291,12 @@ impl Registry {
     /// has been measured. A harness nobody has probed publishes no desk line at all.
     pub fn composer(&self, pane_agent: Option<&str>) -> Option<ComposerReader> {
         pane_agent.and_then(|agent| self.adapters.get(agent))?.composer()
+    }
+
+    pub fn pastes_images(&self, pane_agent: Option<&str>) -> bool {
+        pane_agent
+            .and_then(|agent| self.adapters.get(agent))
+            .is_some_and(|adapter| adapter.pastes_images())
     }
 
     /// Whether a pane running `pane_agent` is reading keys yet, for the harnesses measured booting.

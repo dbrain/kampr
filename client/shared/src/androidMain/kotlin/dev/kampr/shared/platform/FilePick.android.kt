@@ -38,16 +38,16 @@ actual suspend fun pickFile(): PickedFile? {
 }
 
 private suspend fun chosen(activity: ComponentActivity): Uri? = suspendCancellableCoroutine { waiting ->
-    var launcher: ActivityResultLauncher<String>? = null
+    lateinit var launcher: ActivityResultLauncher<String>
     launcher = activity.activityResultRegistry.register(
         "kampr-pick-${pickers++}",
         ActivityResultContracts.GetContent(),
     ) { picked ->
-        launcher?.unregister()
+        launcher.unregister()
         waiting.resume(picked)
     }
-    waiting.invokeOnCancellation { launcher?.unregister() }
-    launcher?.launch("*/*")
+    waiting.invokeOnCancellation { launcher.unregister() }
+    launcher.launch("*/*")
 }
 
 actual suspend fun pickUpload(): UploadSource? {

@@ -2,6 +2,7 @@ package dev.kampr.shared
 
 import dev.kampr.shared.model.ComposerMirror
 import dev.kampr.shared.model.DeskLine
+import dev.kampr.shared.model.keepTokensWhole
 import dev.kampr.shared.wire.EditKeys
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,6 +14,11 @@ private const val LEFT = "\u001b[D"
 private const val RIGHT = "\u001b[C"
 
 private fun drawn(text: String, caret: Int = text.length) = DeskLine(text, "\u0003", caret, KEYS)
+
+// Claude's and Codex's box: a pasted picture is one `[Image #n]` a single key takes whole (#620).
+private val PICTURES = KEYS.copy(images = true)
+private fun pictured(text: String, caret: Int = text.length) = DeskLine(text, "\u0003", caret, PICTURES)
+private const val LINE = "look [Image #1] here"
 
 // A mirror that has heard the pane's box drawn and holding `pane`, with the reply box in step.
 private fun inStep(pane: String = ""): ComposerMirror = ComposerMirror().also { it.heard(drawn(pane), box = pane, now = 0) }
@@ -139,4 +145,114 @@ class ComposerMirrorTest {
         mirror.heard(null, box = "push", now = 50)
         assertEquals(listOf("\r"), mirror.submit("push", now = 60))
     }
+
+    // A file goes where the reply box's caret is: the pane's caret is walked there first, and the
+    // node types it at that caret. Only into a box in step that may type.
+    @Test
+    fun aPictureIsPlacedAtTheReplyBoxsCaret() {
+        val mirror = ComposerMirror().also { it.heard(pictured("alpha gamma"), box = "alpha gamma", now = 0) }
+        assertEquals(listOf(LEFT.repeat(5)), mirror.place("alpha gamma", at = 6, live = true, now = 10))
+        assertEquals(emptyList(), mirror.place("alpha gamma", at = 6, live = true, now = 20))
+
+        val words = ComposerMirror().also { it.heard(drawn("alpha gamma"), box = "alpha gamma", now = 0) }
+        assertEquals(listOf(LEFT.repeat(5)), words.place("alpha gamma", at = 6, live = true, now = 10))
+        val apart = ComposerMirror().also { it.heard(pictured("alpha"), box = "mine", now = 0) }
+        assertNull(apart.place("mine", at = 2, live = true, now = 10))
+        assertNull(mirror.place("alpha gamma", at = 6, live = false, now = 30))
+    }
+
+    // The token comes back as the pane's line once the box's own keys have settled, and the box
+    // takes it with the caret where the pane's is: after the picture.
+    @Test
+    fun thePlacedTokenIsTakenUpWithTheCaretAfterIt() {
+        val mirror = ComposerMirror().also { it.heard(pictured("alpha gamma"), box = "alpha gamma", now = 0) }
+        mirror.place("alpha gamma", at = 6, live = true, now = 10)
+        val after = 10 + ComposerMirror.QUIET + 1
+        assertEquals("alpha [Image #1]gamma", mirror.heard(pictured("alpha [Image #1]gamma", 16), box = "alpha gamma", now = after))
+        assertEquals(16, mirror.at)
+    }
+
+    // One key steps over or takes the whole token, so the keys count it as one character.
+    @Test
+    fun theTokenIsOneKeyToTheHarness() {
+        listOf(
+            Edit("the token deleted whole", LINE, 15, "look  here", listOf(BACK)),
+            Edit("a word after it, from before it", LINE, 5, "look [Image #1] now here", listOf(RIGHT.repeat(2), "now ")),
+            Edit("a word before it, from the end", LINE, 20, " [Image #1] here", listOf(LEFT.repeat(7), BACK.repeat(4))),
+        ).forEach { edit ->
+            val mirror = ComposerMirror()
+            mirror.heard(pictured(edit.pane, edit.caret), box = edit.pane, now = 0)
+            assertEquals(edit.keys, mirror.typed(edit.pane, edit.after, live = true, now = 10), edit.name)
+        }
+    }
+
+    // The reply box treats a token the way the harness does: an edit that cuts into one takes it
+    // whole, and text typed inside one lands after it.
+    @Test
+    fun anEditIntoATokenTakesItWhole() {
+        assertEquals("look  here" to 5, keepTokensWhole(LINE, "look [Image #1 here"))
+        assertEquals("look  here" to 5, keepTokensWhole(LINE, "look Image #1] here"))
+        assertEquals("look [Image #1]X here" to 16, keepTokensWhole(LINE, "look [ImXage #1] here"))
+        assertNull(keepTokensWhole(LINE, "look [Image #1] there"))
+        assertNull(keepTokensWhole(LINE, " [Image #1] here"))
+    }
+
+    // A caret against a word gets a space first, so the picture is not glued to it.
+    @Test
+    fun aPicturePlacedAgainstAWordIsSetApartFromIt() {
+        val mirror = ComposerMirror().also { it.heard(pictured("alpha gamma"), box = "alpha gamma", now = 0) }
+        assertEquals(listOf(LEFT.repeat(6), " "), mirror.place("alpha gamma", at = 5, live = true, now = 10))
+    }
+
+    // **A box out of step types only where it differs.** Taking the whole line back and typing it
+    // again turned a picture into its `[Image #n]` as words, and the Enter after a retyped line
+    // was kept as a newline (#619).
+    @Test
+    fun aBoxOutOfStepKeepsThePicturesThePaneAlreadyHolds() {
+        val mirror = adopted()
+        assertNull(mirror.typed("look [Image #1]here", "look [Image #1]here!", live = false, now = 2_000))
+        assertEquals(listOf(RIGHT.repeat(4), "!", "\r"), mirror.submit("look [Image #1]here!", now = 2_010))
+    }
+
+    // A picture the pane has lost goes back in as the file it was, not as its name.
+    @Test
+    fun aPictureThePaneLostIsPastedAgainNotTyped() {
+        val mirror = adopted()
+        assertNull(mirror.heard(pictured("look here", 9), box = "look [Image #1]here!", now = 3_000))
+        assertEquals(listOf(BACK.repeat(4), PASTE, "here!", "\r"), mirror.submit("look [Image #1]here!", now = 3_010))
+    }
+
+    // A file typed as its path draws no token, so it is never the picture the next token is.
+    @Test
+    fun aPathPlacedBeforeAPictureIsNotTakenForIt() {
+        val mirror = ComposerMirror()
+        mirror.heard(pictured("look "), box = "look ", now = 0)
+        mirror.placed("/p/notes.txt ")
+        mirror.heard(pictured("look /p/notes.txt "), box = "look ", now = 10)
+        mirror.placed(PASTE)
+        mirror.heard(pictured("look /p/notes.txt [Image #1]"), box = "look /p/notes.txt ", now = 20)
+        assertNull(mirror.heard(pictured("look /p/notes.txt "), box = "look /p/notes.txt [Image #1]!", now = 3_000))
+        assertEquals(listOf(PASTE, "!", "\r"), mirror.submit("look /p/notes.txt [Image #1]!", now = 3_010))
+    }
+
+    // Codex numbers from 1 again once its line holds no picture (#620), so a token the pane's own
+    // keyboard pasted after the line was sent or cleared is not the file this box placed before.
+    @Test
+    fun aTokenNumberUsedAgainAfterTheLineEmptiedIsNotTheOldPicture() {
+        val mirror = adopted()
+        mirror.heard(pictured(""), box = "look [Image #1]here", now = 3_000)
+        mirror.heard(pictured("[Image #1]"), box = "", now = 6_000)
+        assertNull(mirror.heard(pictured(""), box = "[Image #1]!", now = 9_000))
+        assertEquals(listOf("[Image #1]!", "\r"), mirror.submit("[Image #1]!", now = 9_010))
+    }
+}
+
+private const val PASTE = "\u001b[200~/p/shot.png\u001b[201~"
+
+// A Claude box that held `look here`, had a picture placed after `look ` and took the token back.
+private fun adopted(): ComposerMirror = ComposerMirror().also {
+    it.heard(pictured("look here"), box = "look here", now = 0)
+    it.place("look here", at = 5, live = true, now = 10)
+    it.placed(PASTE)
+    it.heard(pictured("look [Image #1]here", 15), box = "look here", now = 10 + ComposerMirror.QUIET + 1)
 }

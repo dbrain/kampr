@@ -7,7 +7,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -19,7 +19,7 @@ import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.pressKey
 import androidx.compose.ui.test.rightClick
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.test.withKeyDown
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.platform.LocalClipboardText
@@ -68,7 +68,7 @@ private class Managing : ManageIo {
 }
 
 @OptIn(ExperimentalTestApi::class)
-private class Rig(val io: Watching, val board: Slate, val session: PaneSession, val manage: Managing)
+private class Rig(val io: Watching, val board: HeldClipboard, val session: PaneSession, val manage: Managing)
 
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.terminal(
@@ -76,7 +76,7 @@ private fun ComposeUiTest.terminal(
     clipboard: suspend () -> String? = { "cargo test" },
     inACell: Boolean = false,
 ): Rig {
-    val board = Slate()
+    val board = HeldClipboard()
     val session = PaneSession(Phone.PANE)
     val manage = Managing()
     setContent {
@@ -84,7 +84,7 @@ private fun ComposeUiTest.terminal(
             LocalTokens provides Phone.tokens(),
             LocalPaneIo provides io,
             LocalPaneChrome provides PaneChrome(Phone.HEADER),
-            LocalClipboardManager provides board,
+            LocalClipboard provides board,
             LocalClipboardText provides clipboard,
             LocalManage provides manage,
         ) {
@@ -143,7 +143,7 @@ class CopyingFromAPaneTest {
         chord(listOf(Key.CtrlLeft, Key.ShiftLeft), Key.C)
         assertEquals(
             "[20:36:31 d",
-            rig.board.held?.text,
+            rig.board.held,
             "ctrl+shift+C put nothing on the clipboard",
         )
         assertEquals("", rig.io.typed, "ctrl+shift+C sent the pane a control code")
@@ -155,7 +155,7 @@ class CopyingFromAPaneTest {
         val rig = terminal()
         select(rig.session)
         chord(listOf(Key.MetaLeft), Key.C)
-        assertEquals("[20:36:31 d", rig.board.held?.text, "⌘C put nothing on the clipboard")
+        assertEquals("[20:36:31 d", rig.board.held, "⌘C put nothing on the clipboard")
         assertEquals("", rig.io.typed, "Command-C was sent to the pane as SIGINT")
     }
 
@@ -245,7 +245,7 @@ class CopyingFromAPaneTest {
         rightClickTheGrid()
         onNodeWithContentDescription(COPY).performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
-        assertEquals("[20:36:31 d", rig.board.held?.text, "the menu's Copy copied nothing")
+        assertEquals("[20:36:31 d", rig.board.held, "the menu's Copy copied nothing")
         assertNull(rig.session.view.menuAt, "the menu stayed up after a press")
 
         rightClickTheGrid()

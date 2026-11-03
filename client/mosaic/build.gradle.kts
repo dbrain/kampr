@@ -24,6 +24,8 @@ kotlin {
     wasmJs {
         outputModuleName.set("kamprMosaic")
         browser()
+        // Compose UI browser tests load Skiko only from a webpack bundle (CMP-4906).
+        binaries.executable()
     }
 
     sourceSets {

@@ -14,10 +14,11 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.UNSEEN_AFTER_MS
+import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.platform.PickedFile
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
@@ -45,6 +46,12 @@ private class Wire : PaneIo {
         if (down) pane?.noteUndelivered() else sent += msg
     }
     override fun prefs(paneId: String): PanePrefs = PanePrefs()
+
+    val fetched = mutableListOf<String>()
+    override suspend fun attachment(paneId: String, id: String): AttachmentBytes {
+        fetched += paneId
+        return AttachmentBytes.Ok(byteArrayOf(1, 2, 3), "image/png")
+    }
 
     val typed get() = sent.filterIsInstance<ClientMsg.InputText>().map { it.text }
 }
@@ -197,6 +204,25 @@ class SendingTurnTest {
 
     // What muffit records once it has lifted the picture out, and what the node shows for Claude's
     // record once it has dressed the path as the picture: neither carries the path that was sent.
+    // The picture a reply carries is drawn on its card before the record comes, and it is fetched
+    // for this pane: a card that asked for no pane at all was told the node no longer had it.
+    @Test
+    fun aPictureOnTheCardIsFetchedForThisPane() = runComposeUiTest {
+        val session = Session()
+        setContent { Screen(session) }
+        val path = "/home/u/.local/state/kampr/pastes/shot-1762061518000.png"
+
+        runOnIdle {
+            attach(session.pane, session.io, PickedFile("shot.png", "image/png", byteArrayOf(1, 2, 3)))
+            val id = session.pane.files.all.single().id
+            session.store.accept(ServerMsg.Pasted(PANE_ID, id, path = path, text = "$path "))
+        }
+        waitForIdle()
+        send("what is this")
+        waitUntil { session.io.fetched.isNotEmpty() }
+        assertEquals(listOf(PANE_ID), session.io.fetched.distinct())
+    }
+
     @Test
     fun theFilesARideCarriedDoNotStopItsRecordMatching() = runComposeUiTest {
         val session = Session()
@@ -224,6 +250,24 @@ class SendingTurnTest {
         waitForIdle()
         send("and this")
         runOnIdle { session.recorded("[image · png]", Block.Md("and this"), picture = true) }
+        waitForIdle()
+        assertEquals(0, count("sending…"))
+    }
+
+    @Test
+    fun aRecordWithMuffitsLabelWhereThePictureStoodStillMatches() = runComposeUiTest {
+        val session = Session()
+        setContent { Screen(session) }
+        val path = "/home/u/.local/state/kampr/pastes/shot-1762061518000.png"
+
+        runOnIdle {
+            attach(session.pane, session.io, PickedFile("shot.png", "image/png", byteArrayOf(1, 2, 3)))
+            val id = session.pane.files.all.single().id
+            session.store.accept(ServerMsg.Pasted(PANE_ID, id, path = path, text = "$path "))
+        }
+        waitForIdle()
+        send("what is this")
+        runOnIdle { session.recorded("[image 1: shot-1762061518000.png] what is this") }
         waitForIdle()
         assertEquals(0, count("sending…"))
     }

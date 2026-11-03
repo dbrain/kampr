@@ -19,4 +19,11 @@ subprojects {
         // Compose's resource generator registers its output as a source set, and it is not ours to style.
         filter { exclude { it.file.path.contains("/build/generated/") } }
     }
+    plugins.withId("org.jetbrains.kotlin.multiplatform") {
+        extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension> {
+            sourceSets.matching { it.name.startsWith("wasmJs") }.configureEach {
+                languageSettings.optIn("kotlin.js.ExperimentalWasmJsInterop")
+            }
+        }
+    }
 }

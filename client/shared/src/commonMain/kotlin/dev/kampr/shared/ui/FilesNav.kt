@@ -1,6 +1,7 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ProvidableCompositionLocal
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -12,6 +13,8 @@ sealed interface FilesPlace {
     val anchor: String
 
     data class Dir(override val nodeId: String, override val anchor: String, val path: String) : FilesPlace
+
+    @Immutable
     data class File(override val nodeId: String, override val anchor: String, val path: String, val lookup: Lookup? = null) : FilesPlace
     data class Repo(override val nodeId: String, override val anchor: String, val path: String) : FilesPlace
     data class Commit(override val nodeId: String, override val anchor: String, val repo: String, val sha: String) : FilesPlace

@@ -1200,11 +1200,25 @@ the node reads straight back as the desk line and the composer's mirror. `typed`
 so every older client, and the terminal view, still get the path typed in.
 
 The answer is `pasted`, carrying the client's `id` back. `text` is what the reply should say for the
-file, and it is the node's call: the path and a space, or a bracketed paste of the path for a
-terminal running muffit's TUI (which attaches a picture only from one). The client puts each
-attachment's `text` ahead of its reply's words. A refusal, the ceiling included, is `refused` on the
+file, and it is the node's call: the path and a space, or a bracketed paste of the path where
+that is what makes it a picture (muffit's TUI, Claude, Codex). The client puts each
+attachment's `text` where its label stood in the reply box, the caret it was attached at. A refusal, the ceiling included, is `refused` on the
 same frame instead of an `error`, so it names the file it is about. Gating is unchanged: a device that
 may not type is still refused with `not_writer`.
+
+A typed `paste` with an `id` is answered the same way once the pane has taken the path (or a
+harness still starting up has it queued), so a client can drop the chip it held for the upload; a
+pane that refuses the write answers `refused`, so the chip stays to say so. A picture typed into a harness that takes one
+from a bracketed paste (Claude and Codex, whose `keys` carry `images: true`) goes in as one, and
+the harness draws `[Image #n]` at the pane's caret and sends the picture itself (#620). The
+composer moves the pane's caret to its own before it asks, so the token lands where the
+operator's caret was. A quiet `paste` into such a harness is answered with the bracketed form
+as its `text` too, so a held file is a picture when the reply goes.
+
+A lone Enter waits on the node until 300 ms after that pane's last other write, from whichever
+client: Claude keeps one written at once behind a retyped line or a pasted picture as a newline
+(#619, #621). It waits by itself: the socket goes straight on to its next message, and only
+writes to that pane, from any socket, queue behind it.
 
 Through a hub, the `paste` is relayed with `typed` and `id`, and the peer's `pasted` reaches the
 clients **watching** that pane, as a `convo.find` answer does; `id` is how the asker tells its own
@@ -1264,7 +1278,8 @@ which never gets one and is closed by its own real result.
 ```jsonc
 node -> client  { "t": "convo.composer", "pane": "01J/w1:p1",
                   "text": "push the branch when", "clear": "\u0003", "caret": 20,
-                  "keys": { "back": "\u007f", "left": "\u001b[D", "right": "\u001b[C", "newline": "\n" } }
+                  "keys": { "back": "\u007f", "left": "\u001b[D", "right": "\u001b[C", "newline": "\n",
+                            "images": true } }
 ```
 
 The line the operator has **half-typed at the pane's own keyboard** and not yet sent.

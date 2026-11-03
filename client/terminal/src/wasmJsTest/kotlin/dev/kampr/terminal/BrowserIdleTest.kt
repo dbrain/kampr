@@ -17,6 +17,7 @@ import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.Latches
 import dev.kampr.terminal.input.PaneTextInput
 import dev.kampr.terminal.input.focusInput
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -42,6 +43,7 @@ private object Untouched : ViewConfiguration {
 // Whether anything composed is still waiting on a frame once it has settled. In a browser every
 // frame anything awaits is a `requestAnimationFrame` and a full repaint of the scene, so a loop
 // that awaits one per turn holds the tab at the display's refresh rate for as long as it is open.
+@OptIn(ExperimentalCoroutinesApi::class)
 private fun TestScope.asksForFramesAtRest(content: @Composable () -> Unit): Boolean {
     val clock = BroadcastFrameClock()
     val recomposer = Recomposer(coroutineContext + clock)

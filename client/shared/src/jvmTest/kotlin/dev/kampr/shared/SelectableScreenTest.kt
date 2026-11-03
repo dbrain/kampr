@@ -23,7 +23,7 @@ import androidx.compose.ui.platform.TextToolbarStatus
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.ui.Breakpoint
@@ -62,7 +62,6 @@ private class SelectionToolbar : TextToolbar {
 @OptIn(ExperimentalComposeUiApi::class)
 private class HeldClipboard : Clipboard {
     var entry: ClipEntry? = null
-    override val nativeClipboard: Any get() = throw UnsupportedOperationException()
     override suspend fun getClipEntry(): ClipEntry? = entry
     override suspend fun setClipEntry(clipEntry: ClipEntry?) {
         entry = clipEntry
@@ -193,7 +192,7 @@ class SelectableScreenTest {
     fun whatIsCopiedIsWhatTheNodeSaidAndNotTheChromeAroundIt() {
         val pasted = copiedFrom(PANEL) { Scaffolded(Screen.Setup) }
         assertTrue(pasted != null, "copying across the screen produced nothing")
-        assertTrue(REFUSAL in pasted!!, "the node's own refusal was not copied: $pasted")
+        assertTrue(REFUSAL in pasted, "the node's own refusal was not copied: $pasted")
         assertTrue("kampr init" in pasted, "the screen's own prose was not copied: $pasted")
         assertTrue("192.168.1.24:8790" !in pasted, "an empty field's hint was copied: $pasted")
         assertTrue("Scan a pairing code" !in pasted, "a button's caption was copied: $pasted")

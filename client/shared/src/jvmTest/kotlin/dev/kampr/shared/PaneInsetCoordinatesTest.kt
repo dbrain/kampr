@@ -12,7 +12,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.KeyboardFloor
 import dev.kampr.shared.ui.PaneView

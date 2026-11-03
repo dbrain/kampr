@@ -538,7 +538,7 @@ class PaneScrollTest {
         // A row queued and not yet sent, against two rows the other way, is one row the other way:
         // reversing inside a gesture costs the program nothing rather than two wasted round trips.
         assertEquals(-1, scroll.queued, "the drag turned round and the rows did not net off")
-        while (scroll.drain()) Unit
+        while (scroll.drain()) continue
         assertEquals(listOf("\u001bOB"), sent, "back up the screen is a scroll down")
     }
 
@@ -688,7 +688,7 @@ class PaneScrollTest {
         val trace = ScrollTrace(on = true) { lines += it }
         val scroll = PaneScroll(ScrollKeys.Wheel, trace) { }
         repeat(5) { scroll.refused(100f, step = 100f, col = 0, row = 0) }
-        while (scroll.drain()) Unit
+        while (scroll.drain()) continue
         scroll.wheel(rows = 3, col = 0, row = 0)
         trace.arrived()
         scroll.rest()
@@ -753,7 +753,7 @@ class PaneScrollTest {
         scroll.rest()
         scroll.refused(90f, step = 100f, col = 0, row = 0)
         assertEquals(0, scroll.queued, "the last drag's leftovers arrived in this one")
-        while (scroll.drain()) Unit
+        while (scroll.drain()) continue
         assertEquals(emptyList(), sent)
     }
 

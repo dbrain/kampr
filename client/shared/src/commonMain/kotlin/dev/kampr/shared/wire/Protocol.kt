@@ -753,5 +753,7 @@ sealed interface ClientMsg {
     data object RequestCaps : ClientMsg
 }
 
+// `images`: the harness draws a picture pasted into its box as one `[Image #n]` that a single key
+// takes whole, and sends the picture with the message (#620).
 @Serializable
-data class EditKeys(val back: String, val left: String, val right: String, val newline: String)
+data class EditKeys(val back: String, val left: String, val right: String, val newline: String, val images: Boolean = false)

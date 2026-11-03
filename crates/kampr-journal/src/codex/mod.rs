@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, Origin};
-use crate::composer::{Caret, Composed, ComposerReader, EDIT_KEYS, Frame, Measured};
+use crate::composer::{Caret, Composed, ComposerReader, EDIT_KEYS, EditKeys, Frame, Measured};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
@@ -182,6 +182,10 @@ impl JournalAdapter for CodexAdapter {
 
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
+    }
+
+    fn pastes_images(&self) -> bool {
+        MEASURED.keys.is_some_and(|keys| keys.images)
     }
 
     fn composer(&self) -> Option<ComposerReader> {
@@ -380,7 +384,7 @@ fn message_turn(
     for item in content {
         match item.kind.as_str() {
             "input_text" | "output_text" => {
-                if let Some(text) = item.text.filter(|t| !t.is_empty()) {
+                if let Some(text) = item.text.filter(|t| !t.is_empty() && !image_wrapper(t)) {
                     push_text(&mut turn, text);
                 }
             }
@@ -396,6 +400,12 @@ fn message_turn(
         }
     }
     (!turn.blocks.is_empty()).then_some(turn)
+}
+
+/// The two items Codex writes around a picture pasted into its box, `<image name=[Image #1]
+/// path="…">` and `</image>` (#620). The `[Image #1]` in the typed line already says where it went.
+fn image_wrapper(text: &str) -> bool {
+    text == "</image>" || (text.starts_with("<image name=") && text.ends_with('>') && !text.contains('\n'))
 }
 
 /// Codex 0.149 opens both its assistant messages and its own status line with `•` in column zero.
@@ -420,7 +430,10 @@ const CLEAR: &str = "\u{15}";
 const MEASURED: Measured = Measured {
     margin: 1,
     clear: Some(CLEAR),
-    keys: Some(EDIT_KEYS),
+    keys: Some(EditKeys {
+        images: true,
+        ..EDIT_KEYS
+    }),
 };
 
 fn is_status(head: &str) -> bool {

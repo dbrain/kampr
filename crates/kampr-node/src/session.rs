@@ -11,7 +11,7 @@ use base64::Engine;
 use kampr_auth::{Device, Entry, Role};
 use kampr_core::PaneRegistry;
 use kampr_core::provider::Input;
-use kampr_core::registry::PaneHold;
+use kampr_core::registry::{PaneHold, Written};
 use kampr_core::wire::{ClientMsg, ErrorCode, PROTOCOL, PendingSource, ServerMsg};
 use kampr_journal::ListeningReader;
 use kampr_mesh::peers::PeerHold;
@@ -826,7 +826,9 @@ impl Session {
                 keys,
                 typed,
                 from,
-            } => self.input(&pane, text, b64, keys, typed, from).await,
+            } => {
+                self.input(&pane, text, b64, keys, typed, from).await;
+            }
             ClientMsg::Paste {
                 pane,
                 b64,
@@ -1511,9 +1513,9 @@ impl Session {
         keys: Option<Vec<String>>,
         typed: bool,
         from: Option<String>,
-    ) {
+    ) -> bool {
         if !self.may_write("input", Some(pane)) {
-            return;
+            return false;
         }
         let Some((session, local)) = self.node.resolve(pane) else {
             self.audit("input", Some(pane), Some(json!({ "peer": true })));
@@ -1525,7 +1527,7 @@ impl Session {
                     "typed": typed, "from": from,
                 }),
             );
-            return;
+            return true;
         };
         let supplied = [text.is_some(), b64.is_some(), keys.is_some()]
             .iter()
@@ -1537,7 +1539,7 @@ impl Session {
                 "input takes exactly one of text, b64, keys",
                 Some(pane),
             );
-            return;
+            return false;
         }
         let input = match (text, b64, keys) {
             (Some(text), _, _) => Input::Bytes(text.into_bytes()),
@@ -1557,7 +1559,7 @@ impl Session {
                             "b64 must decode to valid UTF-8",
                             Some(pane),
                         );
-                        return;
+                        return false;
                     }
                 }
             }
@@ -1576,11 +1578,14 @@ impl Session {
             let typist = from.filter(|_| self.caller == Caller::Hub);
             self.muffit_input(muffit.clone(), pane, &local, input, typist)
                 .await;
-            return;
+            return true;
         }
         let reader = (!typed).then(|| self.boot_hold_reader(pane)).flatten();
         match reader {
-            Some((listening, agent)) => self.park_input(pane, local, &session, input, listening, agent),
+            Some((listening, agent)) => {
+                self.park_input(pane, local, &session, input, listening, agent);
+                true
+            }
             // The episode is already holding this pane's input: park behind it, so a keystroke
             // that arrives after the pane stopped being booted — the harness quit, the shell is
             // the foreground now — cannot pass the text it is holding and the carriage return
@@ -1589,13 +1594,26 @@ impl Session {
                 let entry = self.boot_holds.get(pane).expect("checked above");
                 entry.hold.inputs.lock().unwrap().push_back(input);
                 entry.hold.notify.notify_one();
+                true
             }
-            None => {
-                if let Err(e) = session.registry.write(&local, input).await {
+            None => match session.registry.send(&local, input).await {
+                Written::Done(Ok(())) => true,
+                Written::Done(Err(e)) => {
                     self.wire
                         .error(offline_code(&session, &local), &e.to_string(), Some(pane));
+                    false
                 }
-            }
+                Written::Held(enter) => {
+                    let wire = self.wire.clone();
+                    let pane = pane.to_string();
+                    tokio::spawn(async move {
+                        if let Ok(Err(e)) = enter.await {
+                            wire.error(offline_code(&session, &local), &e.to_string(), Some(&pane));
+                        }
+                    });
+                    true
+                }
+            },
         }
     }
 
@@ -1787,8 +1805,12 @@ impl Session {
     }
 
     /// Bytes from a client, written to a file on the pane's own node and typed in as its path —
-    /// or, when not `typed`, answered with the path as `pasted` under the client's `id` and typed
-    /// nowhere.
+    /// or, when not `typed`, typed nowhere. Either is answered with the path as `pasted` when the
+    /// client numbered it with an `id`.
+    ///
+    /// A picture for a harness that takes one from a bracketed paste is one, typed now or held for
+    /// the reply, so the harness draws `[Image #n]` and sends the picture rather than its path
+    /// (#620).
     ///
     /// **This is typing, and it is gated as typing** — the same `may_write` and the same
     /// dispatch-time device refresh, because the alternative is the shape of #304: a verb that
@@ -1807,14 +1829,17 @@ impl Session {
             let mut relayed = json!({ "t": "paste", "pane": pane, "b64": b64, "name": name });
             if !typed {
                 relayed["typed"] = Value::Bool(false);
+            }
+            if id.is_some() {
                 relayed["id"] = json!(id);
             }
             self.relay_to_peer(pane, relayed);
             return;
         };
-        let refuse = |wire: &crate::wire::Wire, why: &str| match typed {
-            true => wire.error(ErrorCode::BadRequest, why, Some(pane)),
-            false => wire.send(&ServerMsg::Pasted {
+        let answered = !typed || id.is_some();
+        let refuse = |wire: &crate::wire::Wire, why: &str| match answered {
+            false => wire.error(ErrorCode::BadRequest, why, Some(pane)),
+            true => wire.send(&ServerMsg::Pasted {
                 pane: pane.to_string(),
                 id: id.clone(),
                 path: None,
@@ -1847,21 +1872,31 @@ impl Session {
             Some(pane),
             Some(json!({ "bytes": body.len(), "path": path.display().to_string(), "typed": typed })),
         );
+        let agent = self.node.herd().pane(pane).and_then(|entry| entry.agent.clone());
+        let pictured = crate::paste::is_image(&path) && self.node.journals().pastes_images(agent.as_deref());
         let text = match session.muffit_link(&local) {
             Some(tui) if tui.terminal => crate::paste::bracketed(&path),
+            _ if pictured => crate::paste::bracketed(&path),
             _ => crate::paste::typed(&path),
         };
-        match typed {
-            true => self.input(pane, Some(text), None, None, false, None).await,
-            false => {
-                self.wire.send(&ServerMsg::Pasted {
-                    pane: pane.to_string(),
-                    id,
-                    path: Some(path.display().to_string()),
-                    text: Some(text),
-                    refused: None,
-                });
+        if typed
+            && !self
+                .input(pane, Some(text.clone()), None, None, false, None)
+                .await
+        {
+            if answered {
+                refuse(&self.wire, "the pane did not take it");
             }
+            return;
+        }
+        if answered {
+            self.wire.send(&ServerMsg::Pasted {
+                pane: pane.to_string(),
+                id,
+                path: Some(path.display().to_string()),
+                text: Some(text),
+                refused: None,
+            });
         }
     }
 

@@ -1,14 +1,11 @@
 package dev.kampr.terminal.spike
 
 import kotlinx.browser.window
-import kotlin.js.ExperimentalWasmJsInterop
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun consoleLog(s: String) {
     js("console.log(s)")
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun postLine(s: String) {
     js(
         """
@@ -26,7 +23,6 @@ actual fun emitBench(line: String) {
 
 actual val platformLabel: String = "wasmJs/" + window.navigator.userAgent.take(90)
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun probeBackend(): String = js(
     """
     (function () {

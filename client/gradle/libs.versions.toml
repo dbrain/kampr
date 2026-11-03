@@ -1,19 +1,21 @@
 [versions]
-kotlin = "2.4.10"
-compose = "1.11.1"
+kotlin = "2.4.21"
+compose = "1.12.2"
 # The androidx Compose that Compose Multiplatform above resolves to. Only one artifact needs it by
 # name: `ui-test-manifest` has no multiplatform variant, and without it an instrumented Compose test
 # has no Activity to launch into. Check it against `:androidApp:dependencies` when `compose` moves.
-androidxCompose = "1.11.2"
-agp = "9.3.1"
-ktor = "3.5.2"
+androidxCompose = "1.12.1"
+agp = "9.5.0"
+ktor = "3.6.1"
 coroutines = "1.11.0"
-serialization = "1.11.0"
+serialization = "1.12.0"
 kotlinx-browser = "0.5.0"
 androidx-activityCompose = "1.13.0"
 # The dispatcher Compose's BackHandler registers into. Only the test needs it by name: it stands in
 # for the window so a test can press the device back button. Pinned to what `ui-backhandler` resolves.
-navigationevent = "1.0.1"
+navigationevent = "1.1.1"
+# The multiplatform `navigationevent-compose` that Compose Multiplatform above ships beside it.
+compose-navigationevent = "1.1.0"
 android-compileSdk = "37"
 android-minSdk = "26"
 android-targetSdk = "37"
@@ -22,9 +24,9 @@ androidx-testRunner = "1.7.0"
 # What `ui-test-junit4` drags in transitively is 3.5.0, whose idle sync calls
 # `InputManager.getInstance` and so fails every instrumented test on Android 17.
 androidx-espresso = "3.7.0"
-unifiedpush = "3.3.4"
+unifiedpush = "3.3.5"
 androidx-credentials = "1.6.0"
-androidx-camera = "1.6.1"
+androidx-camera = "1.6.2"
 zxing = "3.5.4"
 ktlint-cli = "1.8.0"
 ktlint-gradle = "14.2.0"
@@ -33,7 +35,7 @@ ktlint-gradle = "14.2.0"
 compose-runtime = { module = "org.jetbrains.compose.runtime:runtime", version.ref = "compose" }
 compose-foundation = { module = "org.jetbrains.compose.foundation:foundation", version.ref = "compose" }
 compose-ui = { module = "org.jetbrains.compose.ui:ui", version.ref = "compose" }
-compose-ui-backhandler = { module = "org.jetbrains.compose.ui:ui-backhandler", version.ref = "compose" }
+compose-navigationevent = { module = "org.jetbrains.androidx.navigationevent:navigationevent-compose", version.ref = "compose-navigationevent" }
 compose-components-resources = { module = "org.jetbrains.compose.components:components-resources", version.ref = "compose" }
 compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test", version.ref = "compose" }
 compose-ui-test-junit4 = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose" }

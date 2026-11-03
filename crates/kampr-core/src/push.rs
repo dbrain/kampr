@@ -139,7 +139,9 @@ pub fn watch_files(paths: &[PathBuf]) -> io::Result<FileWatch> {
 /// runtime.
 pub fn exited(pid: u32) -> io::Result<impl Future<Output = ()> + Send + 'static> {
     let fd = kampr_watch::Exit::open(pid)?
-        .map(|exit| AsyncFd::with_interest(exit, Interest::READABLE))
+        // SAFETY: `Exit` owns its fd and never swaps it, so it stays open and the same for as
+        // long as the `AsyncFd` holds it.
+        .map(|exit| unsafe { AsyncFd::register_with_interest(exit, Interest::READABLE) })
         .transpose()?;
     Ok(async move {
         if let Some(fd) = fd {

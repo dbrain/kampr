@@ -7,13 +7,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.platform.plainTextClip
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.GlyphTarget
 import dev.kampr.shared.ui.IconGlyph
@@ -22,6 +23,7 @@ import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.touchable
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class Copying(val copied: Boolean, val tint: Color, val copy: () -> Unit)
 
@@ -29,10 +31,8 @@ class Copying(val copied: Boolean, val tint: Color, val copy: () -> Unit)
 fun rememberCopying(text: String): Copying {
     val tokens = Kampr.tokens
 
-    // LocalClipboard replaces this, but its ClipEntry can only be built from a platform-native
-    // object, so a plain string still has no common-code path in CMP 1.11.
-    @Suppress("DEPRECATION")
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     var copied by remember(text) { mutableStateOf(false) }
     LaunchedEffect(copied) {
         if (copied) {
@@ -41,7 +41,7 @@ fun rememberCopying(text: String): Copying {
         }
     }
     return Copying(copied, if (copied) tokens.color.done else tokens.color.dim) {
-        clipboard.setText(AnnotatedString(text))
+        scope.launch { clipboard.setClipEntry(plainTextClip(text)) }
         copied = true
     }
 }

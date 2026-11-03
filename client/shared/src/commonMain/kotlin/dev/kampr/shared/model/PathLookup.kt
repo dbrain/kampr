@@ -1,8 +1,11 @@
 package dev.kampr.shared.model
 
+import androidx.compose.runtime.Immutable
+
 // What a tapped relative path was before it was joined to the pane's directory, and the
 // directories the reply named before it, nearest first. Enough to look for the file when the
 // join was the wrong guess.
+@Immutable
 data class Lookup(val tail: String, val cwd: String?, val near: List<String>)
 
 private const val MOST_NEAR = 6

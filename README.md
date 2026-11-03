@@ -138,7 +138,7 @@ optional.
 |---|---|
 | Herdr | **0.9.0 or newer** (protocol 22), running, on every box. A hard floor: below it nothing on the socket reports a pane's column count, so every pane would be streamed at its layout rect, which is not its width (#68, #524) |
 | OS | Linux or macOS 11+. **Windows is not supported** — the node reaches Herdr over a Unix socket and supervises itself with systemd or launchd. Use WSL2. |
-| To build *from source* | Rust 1.90+ and **JDK 21 exactly** — every module pins `jvmToolchain(21)`, so a newer JDK is not a substitute. Not needed if you install a release. Full list in [`docs/09-toolchain.md`](docs/09-toolchain.md) |
+| To build *from source* | Rust 1.99+ and **JDK 21 exactly** — every module pins `jvmToolchain(21)`, so a newer JDK is not a substitute. Not needed if you install a release. Full list in [`docs/09-toolchain.md`](docs/09-toolchain.md) |
 
 Kampr access is **unrestricted command execution** on the host it runs on. Treat a paired device
 the way you would treat an SSH key.

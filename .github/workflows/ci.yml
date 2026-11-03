@@ -19,7 +19,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       # The live suites fail outright without herdr, and a bare runner never has one. No grep
       # for a skip message: the suite panics rather than skipping, and says which of the two
       # failures it is — absent, or present and not listening (#233).
@@ -41,14 +41,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-nextest@0.9.148
+          tool: cargo-nextest@0.9.151
       - run: make check-darwin
 
   client:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'

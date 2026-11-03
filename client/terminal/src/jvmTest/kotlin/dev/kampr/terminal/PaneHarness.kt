@@ -7,7 +7,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.test.ComposeUiTest
@@ -41,16 +40,6 @@ import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.view.BOTTOM_CHROME_TAG
 import dev.kampr.terminal.view.TerminalView
-
-@Suppress("DEPRECATION")
-internal class Slate : ClipboardManager {
-    var held: AnnotatedString? = null
-    override fun setText(annotatedString: AnnotatedString) {
-        held = annotatedString
-    }
-    override fun getText(): AnnotatedString? = held
-    override fun hasText(): Boolean = held != null
-}
 
 internal object HushIo : PaneIo {
     override fun send(msg: ClientMsg) = Unit

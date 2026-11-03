@@ -5,14 +5,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.js.JsString
 import kotlin.js.Promise
 
 // Every branch a browser can take, resolved in JS because that is where the answers live —
 // `navigator.standalone`, `isSecureContext`, `Notification.permission` — and returned as one word
 // so the Kotlin side has a single thing to match on.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsCapability(): String = js(
     """
     (function () {
@@ -32,7 +30,6 @@ private fun jsCapability(): String = js(
 
 // Registration and the token hand-off are one call: the worker is useless without the token and
 // the token is useless without the worker.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsPrepare(token: String): Unit = js(
     """
     (function () {
@@ -52,7 +49,6 @@ private fun jsPrepare(token: String): Unit = js(
 // The permission prompt and the subscription in one round trip, because a browser only honours
 // `requestPermission` inside the user gesture that started it — splitting them across two suspend
 // points loses the gesture and the call silently resolves to 'default'.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsSubscribe(key: String): Promise<JsString?> = js(
     """
     (async function () {
@@ -80,7 +76,6 @@ private fun jsSubscribe(key: String): Promise<JsString?> = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsUnsubscribe(): Promise<JsString?> = js(
     """
     (async function () {
@@ -98,7 +93,6 @@ private fun jsUnsubscribe(): Promise<JsString?> = js(
 
 // Deliberately does not register the worker, request permission or subscribe: it reports what is
 // already there, so it is safe to call on every connect and outside a user gesture.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsSubscription(): Promise<JsString?> = js(
     """
     (async function () {
@@ -114,7 +108,6 @@ private fun jsSubscription(): Promise<JsString?> = js(
 // The page and the worker post under the same tags, so the page can take down what the worker put
 // up. `getNotifications` is scoped to this registration, so nothing else on the device is touched —
 // and it is scoped to one tag, so clearing what has been read never touches the other kind's slot.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsClearTag(tag: String): Unit = js(
     """
     (function () {

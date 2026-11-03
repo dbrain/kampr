@@ -23,7 +23,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.theme.LocalTokens
@@ -185,9 +185,9 @@ class TurnFoldSurfaceTest {
                 }
             },
         )
-        val pasted = clipboard.pasted
+        val pasted = clipboard.held
         assertTrue(pasted != null, "dragging across the folded message produced nothing at all")
-        assertTrue("inference" in pasted!!, "nothing above the folded message was copied: $pasted")
+        assertTrue("inference" in pasted, "nothing above the folded message was copied: $pasted")
         assertTrue(GIST !in pasted, "the folded message's own first line was copied: $pasted")
         assertTrue(STAMP !in pasted, "the stamp beside the folded message was copied: $pasted")
     }

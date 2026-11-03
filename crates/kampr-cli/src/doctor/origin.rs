@@ -18,7 +18,7 @@ pub async fn check(config: &Config) -> Check {
     };
     let response = match client.get(format!("{origin}/api/node")).send().await {
         Ok(response) => response,
-        Err(e) => return unreachable(&origin, &chain(&e)),
+        Err(e) => return unreachable(&origin, &chain(&e), e.is_dns()),
     };
     let status = response.status();
     let identity = response
@@ -73,17 +73,13 @@ fn chain(error: &reqwest::Error) -> String {
 /// Never a failure. A node that is not running is not a broken proxy — the `service` check
 /// already says that — and a hub whose public hostname resolves to a WAN address its own NAT will
 /// not hairpin back is a healthy deployment that simply cannot test itself from here.
-fn unreachable(origin: &str, detail: &str) -> Check {
+fn unreachable(origin: &str, detail: &str, dns: bool) -> Check {
     let text = detail.to_lowercase();
     if text.contains("certificate") || text.contains("tls") || text.contains("handshake") {
         return Check::warn("origin", format!("{origin} refused the TLS handshake: {detail}"))
             .fix("renew or replace the certificate the proxy serves for this hostname");
     }
-    if text.contains("dns")
-        || text.contains("failed to lookup")
-        || text.contains("name or service not known")
-        || text.contains("nodename nor servname")
-    {
+    if dns {
         return Check::warn("origin", format!("{origin} does not resolve from this machine")).fix(
             "point the hostname at this machine — or, if only your phone's DNS knows it, test it from there",
         );
@@ -110,6 +106,7 @@ mod tests {
             "https://kampr.example.com",
             "error sending request for url; client error; dns error: failed to lookup address \
              information: Name or service not known",
+            true,
         );
         assert_eq!(dns.status, Status::Warn);
         assert!(dns.detail.contains("does not resolve"), "{}", dns.detail);
@@ -117,12 +114,30 @@ mod tests {
         let tls = unreachable(
             "https://kampr.example.com",
             "error sending request; invalid peer certificate: Expired",
+            false,
         );
         assert_eq!(tls.status, Status::Warn);
         assert!(tls.fix.unwrap().contains("certificate"));
 
-        let refused = unreachable("http://127.0.0.1:8790", "tcp connect error: Connection refused");
+        let refused = unreachable(
+            "http://127.0.0.1:8790",
+            "tcp connect error: Connection refused",
+            false,
+        );
         assert_eq!(refused.status, Status::Warn);
+        assert!(refused.detail.contains("hairpin"), "{}", refused.detail);
+    }
+    /// RFC 6761 reserves `.invalid`, so no resolver anywhere answers it, and nothing listens on
+    /// port 1 of loopback: the check meets both failures the way a real one does.
+    #[tokio::test]
+    async fn a_name_that_does_not_resolve_is_told_apart_from_a_port_nothing_answers_on() {
+        let mut config = Config::bootstrap("x");
+        config.server.origin = "https://kampr.invalid".into();
+        let dns = check(&config).await;
+        assert!(dns.detail.contains("does not resolve"), "{}", dns.detail);
+
+        config.server.origin = "http://127.0.0.1:1".into();
+        let refused = check(&config).await;
         assert!(refused.detail.contains("hairpin"), "{}", refused.detail);
     }
 }

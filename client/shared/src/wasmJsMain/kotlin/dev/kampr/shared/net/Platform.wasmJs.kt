@@ -11,7 +11,6 @@ actual fun defaultEndpoint(): Endpoint? = Endpoint(window.location.protocol + "/
 
 // A browser name, not a fingerprint: the node already records the full user agent, and what the
 // device list needs is something a person can tell apart at a glance.
-@OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
 private fun jsDeviceName(): String = js(
     """
     (function () {
@@ -37,7 +36,6 @@ actual fun deviceName(): String = runCatching { jsDeviceName() }.getOrDefault("B
 
 actual fun nowMillis(): Double = window.performance.now()
 
-@OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
 private fun dateNow(): Double = js("Date.now()")
 
 actual fun wallClockMillis(): Double = dateNow()

@@ -39,11 +39,10 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -60,6 +59,7 @@ import dev.kampr.shared.platform.LocalReduceMotion
 import dev.kampr.shared.platform.PastedFiles
 import dev.kampr.shared.platform.filePickAvailable
 import dev.kampr.shared.platform.pickFile
+import dev.kampr.shared.platform.plainTextClip
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.theme.terminalPalette
 import dev.kampr.shared.ui.Breakpoint
@@ -312,18 +312,16 @@ fun TerminalView(
     val review = session.review
     val openPlace = LocalOpenPlace.current
 
-    // LocalClipboard's ClipEntry is constructed from a platform-native object in CMP 1.11.1,
-    // so the deprecated ClipboardManager is still the only clipboard reachable from common code.
-    @Suppress("DEPRECATION")
-    val clipboard = LocalClipboardManager.current
-    // Reading is the direction that deprecated clipboard cannot do: its wasm actual is a hard-coded
-    // null, so a Paste wired to it would be a button that silently does nothing on the web.
+    val clipboard = LocalClipboard.current
+    // Read through our own actuals rather than `clipboard`: a `ClipEntry` has nothing common to read
+    // a string out of, so a Paste wired to it would be a button with no answer on any platform.
     val readClipboard = LocalClipboardText.current
     val uris = LocalUriHandler.current
     val view = session.view
     val ground = palette.background(pane.styles[0])
 
     val scope = rememberCoroutineScope()
+    fun copyText(text: String) = scope.launch { clipboard.setClipEntry(plainTextClip(text)) }
     // A node refuses a paste with an error naming this pane — too large, not base64, nowhere to
     // write — and that error is quiet everywhere else by design, so this is the only place on this
     // surface it can be said.
@@ -810,7 +808,7 @@ fun TerminalView(
         // whether the pill goes away afterwards.
         fun copySelection() {
             val selection = view.selection ?: return
-            clipboard.setText(AnnotatedString(logical.copy(selection)))
+            copyText(logical.copy(selection))
             view.selection = null
         }
 
@@ -818,7 +816,7 @@ fun TerminalView(
         // finger already has the pill. The selection stays up so the pill can still be used.
         LaunchedEffect(view, logical) {
             snapshotFlow { view.mouseSelections }.drop(1).collect {
-                view.selection?.let { clipboard.setText(AnnotatedString(logical.copy(it))) }
+                view.selection?.let { clipboard.setClipEntry(plainTextClip(logical.copy(it))) }
             }
         }
 
@@ -1273,7 +1271,7 @@ fun TerminalView(
         view.target?.let { target ->
             val act = {
                 when (target.kind) {
-                    TargetKind.Path -> clipboard.setText(AnnotatedString(target.text))
+                    TargetKind.Path -> copyText(target.text)
                     TargetKind.File -> openPlace(filePlace(pane.id, target.text, target.lookup))
                     else -> uris.openUri(target.text)
                 }
@@ -1287,7 +1285,7 @@ fun TerminalView(
                 null
             } else {
                 {
-                    clipboard.setText(AnnotatedString(target.text))
+                    copyText(target.text)
                     view.aimOff()
                 }
             }

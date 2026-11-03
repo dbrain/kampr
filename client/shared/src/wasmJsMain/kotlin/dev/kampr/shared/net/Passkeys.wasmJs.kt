@@ -1,14 +1,12 @@
 package dev.kampr.shared.net
 
 import kotlinx.coroutines.await
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.js.JsString
 import kotlin.js.Promise
 
 // The whole base64url⇄ArrayBuffer dance lives in JS because that is the only place the browser's
 // own types exist: `webauthn-rs` serialises every buffer as base64url and `navigator.credentials`
 // takes and returns `ArrayBuffer`, so something has to translate and it cannot be Kotlin.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsAvailable(): Boolean = js(
     """
     (function () {
@@ -18,7 +16,6 @@ private fun jsAvailable(): Boolean = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsCreate(optionsJson: String): Promise<JsString?> = js(
     """
     (async function () {
@@ -53,7 +50,6 @@ private fun jsCreate(optionsJson: String): Promise<JsString?> = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsGet(optionsJson: String): Promise<JsString?> = js(
     """
     (async function () {

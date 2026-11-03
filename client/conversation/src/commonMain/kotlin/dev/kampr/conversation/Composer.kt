@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.InputTransformation
+import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.clearText
 import androidx.compose.foundation.text.input.rememberTextFieldState
@@ -21,6 +22,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
@@ -36,9 +38,11 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.BoxEdit
 import dev.kampr.shared.model.ComposerMirror
 import dev.kampr.shared.model.DeskLine
 import dev.kampr.shared.model.PendingFile
+import dev.kampr.shared.model.keepTokensWhole
 import dev.kampr.shared.platform.LocalHardKeyboard
 import dev.kampr.shared.platform.acceptsPastedFiles
 import dev.kampr.shared.theme.Kampr
@@ -92,6 +96,10 @@ fun Composer(
     mirror: ComposerMirror? = null,
     mirroring: Boolean = false,
     onKeys: (List<String>) -> Unit = {},
+    onCaret: (Int) -> Unit = {},
+    edits: List<BoxEdit> = emptyList(),
+    onEdit: (BoxEdit) -> Unit = {},
+    onLabelGone: (String) -> Unit = {},
 ) {
     val tokens = Kampr.tokens
     // The last bar on the pane whenever the conversation is showing, and the pane is the one screen
@@ -126,20 +134,50 @@ fun Composer(
         if (before != after) mirror?.typed(before, after, live)?.let(keys)
     }
 
+    // The caret goes where the pane's is, so a picture the pane drew at it leaves the caret after
+    // the picture rather than at the end of the line.
     fun adopt(text: String) {
         value.edit {
             replace(0, length, text)
-            placeCursorBeforeCharAt(length)
+            placeCursorBeforeCharAt(mirror?.at?.coerceIn(0, length) ?: length)
         }
         onDraft(text)
     }
 
+    val labels by rememberUpdatedState(files.mapNotNull { it.label })
+    val labelGone by rememberUpdatedState(onLabelGone)
     val report = remember(onDraft, mirror) {
         InputTransformation {
+            val before = originalText.toString()
+            val tokens = mirror?.images == true
+            keepTokensWhole(before, asCharSequence().toString(), labels).takeIf { tokens || labels.isNotEmpty() }?.let { (text, caret) ->
+                replace(0, length, text)
+                placeCursorBeforeCharAt(caret)
+            }
             val after = asCharSequence().toString()
+            labels.filter { it in before && it !in after }.forEach(labelGone)
             onDraft(after)
-            edited(originalText.toString(), after)
+            edited(before, after)
         }
+    }
+    // Outside edits are the box's own, never keys for the pane: a label stands for a file the
+    // reply carries, and the box stops being the pane's line while it holds one.
+    val edit by rememberUpdatedState(onEdit)
+    LaunchedEffect(value) {
+        // Drained whole rather than one a wake: an edit taken off the queue here is a write this
+        // flow is not told about until a later frame, so a second one queued with it would wait.
+        snapshotFlow { edits.toList() }.collect { queued ->
+            if (queued.isEmpty()) return@collect
+            for (next in queued) {
+                value.edit { applyBoxEdit(next) }
+                edit(next)
+            }
+            onDraft(value.text.toString())
+        }
+    }
+    val caretTo by rememberUpdatedState(onCaret)
+    LaunchedEffect(value) {
+        snapshotFlow { value.selection.max }.collect { caretTo(it) }
     }
     LaunchedEffect(mirror, desk) {
         mirror?.heard(desk, value.text.toString())?.let(::adopt)
@@ -333,6 +371,28 @@ fun Composer(
             ) {
                 IconGlyph(ConversationIcons.send, 18.dp, if (ready) tokens.color.onAccent else tokens.color.mute)
             }
+        }
+    }
+}
+
+// A label goes in at the caret set apart from the words either side, and comes out with the space
+// after it, so a removed file leaves the sentence as it was.
+private fun TextFieldBuffer.applyBoxEdit(edit: BoxEdit) {
+    val text = asCharSequence()
+    when (edit) {
+        is BoxEdit.Insert -> {
+            val at = selection.max
+            val lead = if (at > 0 && !text[at - 1].isWhitespace()) " " else ""
+            val trail = if (at < length && text[at].isWhitespace()) "" else " "
+            replace(at, at, lead + edit.label + trail)
+            placeCursorBeforeCharAt(at + lead.length + edit.label.length + trail.length)
+        }
+
+        is BoxEdit.Remove -> {
+            val at = text.indexOf(edit.label)
+            if (at < 0) return
+            val end = at + edit.label.length
+            replace(at, if (end < length && text[end] == ' ') end + 1 else end, "")
         }
     }
 }

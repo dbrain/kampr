@@ -360,7 +360,7 @@ class KamprStore {
             // not news about any transcript on screen.
             is ServerMsg.ConvoFound -> paneStates[msg.pane]?.convoFound = msg
 
-            is ServerMsg.Pasted -> paneStates[msg.pane]?.files?.answered(msg)
+            is ServerMsg.Pasted -> paneStates[msg.pane]?.let { pane -> pane.files.answered(msg)?.let(pane.mirror::placed) }
 
             is ServerMsg.Managed -> {
                 _managed.value = msg

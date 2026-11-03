@@ -6,11 +6,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.platform.MemoryPrefs
@@ -60,7 +60,7 @@ class SystemBackWiringTest {
             CompositionLocalProvider(
                 LocalTokens provides phoneTokens(),
                 LocalSafeArea provides BARS,
-                LocalCompatNavigationEventDispatcherOwner provides window,
+                LocalNavigationEventDispatcherOwner provides window,
             ) {
                 Box(Modifier.size(size.first, size.second)) {
                     AppScaffold(

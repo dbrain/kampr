@@ -5,7 +5,6 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.await
 import kotlinx.coroutines.test.runTest
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.js.Promise
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -22,7 +21,6 @@ import kotlin.time.Duration.Companion.seconds
 // It is dispatched on `document.body` with `bubbles`, not on `window`, so what is measured is the
 // listener seeing an event that started somewhere else on the page — which is every real paste,
 // wherever the focus happens to be.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun pasteFiles(names: String, mime: String, body: String): Boolean = js(
     """
     (function () {
@@ -39,7 +37,6 @@ private fun pasteFiles(names: String, mime: String, body: String): Boolean = js(
 
 // Real milliseconds, not the virtual ones `runTest` runs on: what has to elapse here is a
 // browser finishing a `FileReader`, and no test scheduler can advance that.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsSettle(ms: Int): Promise<JsString?> = js(
     "new Promise(function (resolve) { setTimeout(function () { resolve(null); }, ms); })",
 )
@@ -48,7 +45,6 @@ private suspend fun settle(ms: Int) {
     jsSettle(ms).await<JsString?>()
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun pasteText(text: String): Boolean = js(
     """
     (function () {

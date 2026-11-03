@@ -8,7 +8,7 @@ import androidx.compose.ui.test.ScrollWheel
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performMouseInput
 import androidx.compose.ui.test.performMultiModalInput
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.terminal.view.WHEEL_ROWS
 import kotlin.test.Test
 import kotlin.test.assertEquals

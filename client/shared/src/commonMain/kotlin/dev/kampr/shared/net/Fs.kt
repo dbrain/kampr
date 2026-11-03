@@ -1,5 +1,6 @@
 package dev.kampr.shared.net
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -42,6 +43,7 @@ data class RepoHead(
     val changed: Int = 0,
 )
 
+@Immutable
 @Serializable
 data class FsListing(
     val path: String,

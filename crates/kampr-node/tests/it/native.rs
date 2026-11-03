@@ -1599,6 +1599,32 @@ async fn input_held_for_a_booting_harness_goes_on_the_frame_that_shows_it_readin
     );
 }
 
+/// A file put into a pane that will not take it is refused, not reported as typed: the reply box
+/// would drop its chip as placed and the file would be gone without a word.
+#[tokio::test]
+async fn a_paste_the_pane_will_not_take_is_answered_as_refused() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    let id = client.create(&["sh", "-c", "cat; exit 1"], json!({})).await;
+    client.watch(&id, false).await;
+    client.type_text(&id, "\u{4}").await;
+    client.pane(&id, |p| p.get("exited").is_some()).await;
+
+    client
+        .send(json!({ "t": "paste", "pane": id, "b64": "aGk=", "name": "notes.txt", "typed": true, "id": "c1" }))
+        .await;
+    let answer = client
+        .until("the paste's answer", |c| {
+            c.others
+                .iter()
+                .find(|v| v["t"] == "pasted" && v["id"] == "c1")
+                .cloned()
+        })
+        .await;
+    assert!(answer["path"].is_null(), "{answer}");
+    assert!(answer["refused"].is_string(), "{answer}");
+}
+
 /// **No herdr anywhere is a first-class node.** `online` stays herdr's own answer, and the node says
 /// beside it that it serves native sessions, so nothing about it reads as offline: no error frame
 /// names it, and a session made, typed into, sized and hung up never meets a herdr code.

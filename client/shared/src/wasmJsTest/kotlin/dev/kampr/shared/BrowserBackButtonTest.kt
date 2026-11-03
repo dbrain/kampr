@@ -18,7 +18,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.w3c.dom.events.Event
 import kotlin.coroutines.resume
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -39,7 +38,6 @@ private suspend fun nextPopstate() = suspendCancellableCoroutine { done ->
     window.addEventListener("popstate", once)
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun armed(): Boolean = (window.history.state as? JsString)?.toString() == "kampr-back"
 
 // The report: back in a browser tab left Kampr with a file open. Driven through the page's real

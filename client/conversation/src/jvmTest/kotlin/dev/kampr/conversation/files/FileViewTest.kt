@@ -13,9 +13,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
-import androidx.compose.ui.text.AnnotatedString
+import dev.kampr.conversation.HeldClipboard
 import dev.kampr.conversation.pngBytes
 import dev.kampr.shared.model.Lookup
 import dev.kampr.shared.net.AttachmentBytes
@@ -88,14 +88,14 @@ class FileViewTest {
     @Test
     fun copyTakesTheWholeFileWithItsLineEndings() = runComposeUiTest {
         val whole = (0 until 2_100).joinToString("\r\n", postfix = "\r\n") { "line $it" }
-        val board = Pasteboard()
+        val board = HeldClipboard()
         val node = FileNode(mapOf(fileAttachmentId(NOTES) to text(whole)))
         val nav = Stack(filePlace(PANE, NOTES))
         setContent { WithClipboard(board) { Stage(node, nav) } }
         waitUntilAtLeastOneExists(hasContentDescription("Copy notes.kt"), 5_000)
         onNodeWithContentDescription("Copy notes.kt").performClick()
         waitUntil(timeoutMillis = 5_000) { board.held != null }
-        assertEquals(AnnotatedString(whole), board.held)
+        assertEquals(whole, board.held)
     }
 
     @Test

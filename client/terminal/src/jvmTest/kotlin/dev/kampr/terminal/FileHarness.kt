@@ -6,13 +6,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
@@ -61,16 +59,6 @@ internal class Route(
     }
 }
 
-@Suppress("DEPRECATION")
-internal class Pasteboard : ClipboardManager {
-    var held: AnnotatedString? = null
-    override fun setText(annotatedString: AnnotatedString) {
-        held = annotatedString
-    }
-    override fun getText(): AnnotatedString? = held
-    override fun hasText(): Boolean = held != null
-}
-
 internal fun words(text: String) = AttachmentBytes.Ok(text.encodeToByteArray(), "text/plain")
 
 // As tall as the desktop that made it, with the caret on the last line written. Both matter to
@@ -105,16 +93,16 @@ internal fun ComposeUiTest.gridTerminal(
     width: Dp = 411.dp,
     height: Dp = 914.dp,
     bars: SafeArea = Phone.BARS,
-    board: Pasteboard = Pasteboard(),
+    board: HeldClipboard = HeldClipboard(),
     opened: MutableList<FilesPlace> = mutableListOf(),
-): Pasteboard {
+): HeldClipboard {
     setContent {
         CompositionLocalProvider(
             LocalTokens provides Phone.tokens(),
             LocalPaneIo provides io,
             LocalSafeArea provides bars,
             LocalPaneChrome provides PaneChrome(CHROME),
-            LocalClipboardManager provides board,
+            LocalClipboard provides board,
             LocalOpenPlace provides { opened += it },
         ) {
             Box(Modifier.size(width, height).keyboardInset()) {
@@ -132,7 +120,7 @@ internal val DESK_WIDTH = 1440.dp
 internal val DESK_HEIGHT = 900.dp
 
 @OptIn(ExperimentalTestApi::class)
-internal fun ComposeUiTest.deskTerminal(pane: PaneState, session: PaneSession, io: PaneIo): Pasteboard = gridTerminal(pane, session, io, DESK_WIDTH, DESK_HEIGHT, SafeArea.None)
+internal fun ComposeUiTest.deskTerminal(pane: PaneState, session: PaneSession, io: PaneIo): HeldClipboard = gridTerminal(pane, session, io, DESK_WIDTH, DESK_HEIGHT, SafeArea.None)
 
 @OptIn(ExperimentalTestApi::class)
 internal fun ComposeUiTest.tapCell(session: PaneSession, row: Int, col: Int): Offset {

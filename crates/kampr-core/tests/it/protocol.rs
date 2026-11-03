@@ -481,7 +481,7 @@ fn a_desk_line_clears_with_a_null_text_and_omits_a_clear_nobody_measured() {
     assert_eq!(typed["caret"], 20);
     assert_eq!(
         typed["keys"],
-        serde_json::json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n" })
+        serde_json::json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n", "images": false })
     );
 
     let emptied = serde_json::to_value(ServerMsg::ConvoComposer {

@@ -1,12 +1,10 @@
 package dev.kampr.conversation
 
 import kotlin.io.encoding.Base64
-import kotlin.js.ExperimentalWasmJsInterop
 
 // The browser is the only honest answer about what the browser will play, and the answer differs
 // by engine and by build — Chromium ships no AAC in some Linux packages, Firefox reads FLAC and
 // not ALAC. So it is asked, rather than guessed at from a list written here.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsCanPlay(mime: String): Boolean = js(
     """
     (function () {
@@ -19,7 +17,6 @@ private fun jsCanPlay(mime: String): Boolean = js(
 // pointed at a second time — a media element cannot carry a bearer header. An object URL over the
 // bytes already in hand is the only form of playback available here, and it has to be revoked, so
 // the element is held on the JS side under a token rather than handed back across the boundary.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsOpen(mime: String, base64: String): Int = js(
     """
     (function () {
@@ -39,7 +36,6 @@ private fun jsOpen(mime: String, base64: String): Int = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsPlay(token: Int) {
     js(
         """
@@ -54,7 +50,6 @@ private fun jsPlay(token: Int) {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsPause(token: Int) {
     js(
         """
@@ -66,7 +61,6 @@ private fun jsPause(token: Int) {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsPlaying(token: Int): Boolean = js(
     """
     (function () {
@@ -76,7 +70,6 @@ private fun jsPlaying(token: Int): Boolean = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsRelease(token: Int) {
     js(
         """

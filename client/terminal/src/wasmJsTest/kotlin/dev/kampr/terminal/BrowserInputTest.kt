@@ -13,18 +13,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun stealFocus() {
     js("(function () { var s = globalThis.__kamprInput; if (s) s.el.blur(); })()")
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun typeKey(key: String) {
     js(
         """
@@ -40,7 +37,6 @@ private fun typeKey(key: String) {
 // the handler itself: Chrome carries `altKey` on the *first* keydown after a focus change exactly
 // as it does on the tenth, on a fresh page, and after a lone Alt press — so the modifier is never
 // the thing that goes missing here.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun altKey(key: String) {
     js(
         """
@@ -56,7 +52,6 @@ private fun altKey(key: String) {
 
 // What a printable key produces on this path: an IME and a soft keyboard both report keyCode 229
 // to keydown, so `beforeinput` is the one that carries the character.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun typeText(data: String) {
     js(
         """
@@ -70,7 +65,6 @@ private fun typeText(data: String) {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun composeKey(type: String, data: String) {
     js(
         """
@@ -87,7 +81,6 @@ private fun composeKey(type: String, data: String) {
 // for real — measured on Chrome 151: opening a popup leaves this page `visible` and still ticking
 // (32 frames in 500 ms), and a `display:none` iframe gets its frames too — so the two things the
 // browser does to a hidden tab are done to it here instead.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun parkTheTab() {
     js(
         """
@@ -104,7 +97,6 @@ private fun parkTheTab() {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun showTheTab() {
     js(
         """
@@ -120,7 +112,6 @@ private fun showTheTab() {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun framesAskedFor(): Int = js("globalThis.__kamprFramesAsked || 0")
 
 private const val TURN_MS = 20L
@@ -128,7 +119,6 @@ private const val TURN_MS = 20L
 // A rival for the one focus slot the page has. A `textarea` is the shape Compose's own text input
 // takes in this DOM, so it is what the conversation composer looks like from here; a `button` is
 // every other focusable thing on the page.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun putRival(tag: String) {
     js(
         """
@@ -145,7 +135,6 @@ private fun putRival(tag: String) {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun putShadowRival() {
     js(
         """
@@ -163,12 +152,10 @@ private fun putShadowRival() {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun shadowRivalFocused(): Boolean = js(
     "(function () { var h = globalThis.__kamprRival; return !!h && h.shadowRoot.activeElement !== null; })()",
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun dismissRival() {
     js(
         """

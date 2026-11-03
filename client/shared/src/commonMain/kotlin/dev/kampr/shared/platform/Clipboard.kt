@@ -1,6 +1,7 @@
 package dev.kampr.shared.platform
 
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.ClipEntry
 
 // Reading text off the clipboard is the one clipboard direction Compose has no common answer for.
 // `ClipboardManager.getText` is deprecated and, on the web, returns null by construction — the
@@ -16,3 +17,6 @@ expect suspend fun clipboardText(): String?
 // A local rather than a direct call, because no test can rely on a system clipboard: the desktop's
 // is AWT's and absent on a headless runner, and the browser's is behind a permission prompt.
 val LocalClipboardText = staticCompositionLocalOf<suspend () -> String?> { { clipboardText() } }
+
+// `Clipboard.setClipEntry` takes only a platform-native entry, and a string is one on none of them.
+expect fun plainTextClip(text: String): ClipEntry

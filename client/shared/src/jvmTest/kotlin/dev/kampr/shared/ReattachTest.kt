@@ -7,11 +7,11 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.Endpoint
@@ -92,7 +92,7 @@ class ReattachTest {
                     CompositionLocalProvider(
                         LocalTokens provides phoneTokens(),
                         LocalSafeArea provides BARS,
-                        LocalCompatNavigationEventDispatcherOwner provides SystemBackWindow(),
+                        LocalNavigationEventDispatcherOwner provides SystemBackWindow(),
                     ) {
                         Box(Modifier.size(1280.dp, 900.dp)) {
                             AppScaffold(

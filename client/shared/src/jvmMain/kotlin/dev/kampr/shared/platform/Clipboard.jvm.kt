@@ -1,8 +1,11 @@
 package dev.kampr.shared.platform
 
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.platform.ClipEntry
 import java.awt.GraphicsEnvironment
 import java.awt.Toolkit
 import java.awt.datatransfer.DataFlavor
+import java.awt.datatransfer.StringSelection
 
 // AWT throws for both of the ways there is nothing to paste — `UnsupportedFlavorException` when the
 // clipboard holds something that is not text, `IllegalStateException` when another process has it
@@ -14,3 +17,6 @@ actual suspend fun clipboardText(): String? {
     }.getOrNull()
     return text?.takeIf { it.isNotEmpty() }
 }
+
+@OptIn(ExperimentalComposeUiApi::class)
+actual fun plainTextClip(text: String): ClipEntry = ClipEntry(StringSelection(text))

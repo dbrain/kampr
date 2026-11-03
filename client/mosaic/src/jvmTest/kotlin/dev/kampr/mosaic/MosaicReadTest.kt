@@ -3,7 +3,7 @@ package dev.kampr.mosaic
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.unreadDone
 import dev.kampr.shared.net.KamprConnection

@@ -3,7 +3,6 @@ package dev.kampr.shared.net
 import kotlinx.browser.document
 import kotlinx.browser.window
 
-@OptIn(kotlin.js.ExperimentalWasmJsInterop::class)
 private fun documentHidden(): Boolean = js("document.hidden")
 
 // The listener is never unregistered: a Kotlin lambda handed to `addEventListener` is not

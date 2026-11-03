@@ -10,8 +10,8 @@ name = "kampr"
 path = "src/main.rs"
 
 [features]
-# Release-only. webauthn-rs pulls in openssl; a downloaded binary must not depend on finding a
-# matching libssl on the host, so release builds compile it in.
+# Release-only. web-push pulls in openssl (through `ece`); a downloaded binary must not depend on
+# finding a matching libssl on the host, so release builds compile it in.
 vendored-tls = ["dep:openssl-sys"]
 
 [dependencies]

@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlin.io.encoding.Base64
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.js.JsString
 import kotlin.js.Promise
 
@@ -19,7 +18,6 @@ actual val filePickAvailable: Boolean = true
 // a typed-array marshaller, and it is the shape the wire wants anyway. The input element is thrown
 // away with the choice: a browser fires no event at all when a picker is dismissed, so an element
 // left in the document is a listener that never runs again.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsPick(): Promise<JsString?> = js(
     """
     (function () {
@@ -74,7 +72,6 @@ private fun jsPick(): Promise<JsString?> = js(
 //
 // No state crosses between `js()` bodies except through the page, because each one compiles to a
 // standalone function with no closure of its own.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsNextPaste(): Promise<JsString?> = js(
     """
     (function () {
@@ -140,7 +137,6 @@ private fun pickedFrom(answer: String): PickedFile? {
     }
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 actual suspend fun pickFile(): PickedFile? {
     val answer = runCatching { jsPick().await<JsString?>() }.getOrNull()?.toString() ?: return null
     return pickedFrom(answer)
@@ -149,7 +145,6 @@ actual suspend fun pickFile(): PickedFile? {
 // A file the browser could not read is dropped rather than delivered, so the loop here is for the
 // one that is malformed after all of that — it goes back to waiting rather than reporting the end
 // of the clipboard, because one unreadable paste must not be the last one this pane will take.
-@OptIn(ExperimentalWasmJsInterop::class)
 actual suspend fun pastedFile(): PickedFile? {
     while (true) {
         val answer = runCatching { jsNextPaste().await<JsString?>() }

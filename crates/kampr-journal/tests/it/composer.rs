@@ -9,8 +9,8 @@
 use crate::common;
 
 use kampr_journal::{
-    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, EDIT_KEYS, Frame, GONE_AFTER,
-    JournalAdapter, OmpAdapter, TranscriptRoot,
+    AgyAdapter, Caret, ClaudeAdapter, CodexAdapter, Composed, ComposerFeed, EDIT_KEYS, EditKeys, Frame,
+    GONE_AFTER, JournalAdapter, OmpAdapter, TranscriptRoot,
 };
 
 /// A fixture's caret header and its grid. The caret has to travel with the screen: it is the only
@@ -134,11 +134,20 @@ fn a_caret_sent_home_is_the_line_with_the_caret_at_its_front() {
 
 /// The keys a reply box types with are the node's, like the clearing key: measured per harness
 /// (#564), and absent where nobody has measured them — omp's box is read and never typed into.
+/// Claude and Codex draw a pasted picture as one `[Image #n]` the keys step over whole (#620).
 #[test]
 fn a_harness_carries_the_keys_measured_to_edit_its_box_and_omp_carries_none() {
-    assert_eq!(composed(&claude(), "claude-typed").unwrap().keys, Some(EDIT_KEYS));
-    assert_eq!(composed(&codex(), "codex-typed").unwrap().keys, Some(EDIT_KEYS));
+    let images = EditKeys {
+        images: true,
+        ..EDIT_KEYS
+    };
+    assert_eq!(composed(&claude(), "claude-typed").unwrap().keys, Some(images));
+    assert_eq!(composed(&codex(), "codex-typed").unwrap().keys, Some(images));
     assert_eq!(composed(&agy(), "agy-typed").unwrap().keys, Some(EDIT_KEYS));
+    assert_eq!(
+        composed(&agy(), "agy-typed").unwrap().keys.map(|k| k.images),
+        Some(false)
+    );
     assert_eq!(composed(&omp(), "omp-typed").unwrap().keys, None);
 }
 

@@ -35,32 +35,56 @@ pub fn bracketed(path: &Path) -> String {
     format!("\u{1b}[200~{}\u{1b}[201~", path.display())
 }
 
-/// The pictures pasted into a message that goes to muffit as text: each word that is one of this
-/// node's pasted images leaves the text and goes with it as an image instead.
+/// The pictures pasted into a message that goes to muffit as text: each of this node's pasted
+/// images named in it goes with it as an image instead, and leaves a label where it stood in
+/// muffit's own TUI style, so the words around it still say which picture they mean (#621). The
+/// reply box lets punctuation or a line butt against a path, so a path ends at whitespace, less
+/// any trailing punctuation no pasted file is named with.
 pub fn lift_images(state_dir: &Path, text: &str) -> (String, Vec<kampr_muffit::wire::Image>) {
     use base64::Engine;
-    let pastes = state_dir.join("pastes");
+    let prefix = format!("{}/", state_dir.join("pastes").display());
     let mut images = Vec::new();
-    let mut words = Vec::new();
-    for word in text.split(' ') {
-        let path = Path::new(word);
-        let image = (path.parent() == Some(pastes.as_path()))
-            .then(|| image_mime(path))
-            .flatten()
-            .and_then(|mime| Some((mime, std::fs::read(path).ok()?)));
-        match image {
-            Some((mime, body)) => images.push(kampr_muffit::wire::Image {
-                mime: mime.into(),
-                data: base64::engine::general_purpose::STANDARD.encode(body),
-            }),
-            None => words.push(word),
+    let mut lifted = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(&prefix) {
+        lifted.push_str(&rest[..at]);
+        let word = &rest[at..];
+        let word = &word[..word.find(char::is_whitespace).unwrap_or(word.len())];
+        let found = (0..=word.len())
+            .rev()
+            .filter(|&end| word.is_char_boundary(end) && end > prefix.len())
+            .take_while(|&end| end == word.len() || !word[end..].starts_with(char::is_alphanumeric))
+            .find_map(|end| {
+                let path = Path::new(&word[..end]);
+                let mime = image_mime(path)?;
+                Some((end, path, mime, std::fs::read(path).ok()?))
+            });
+        match found {
+            Some((end, path, mime, body)) => {
+                images.push(kampr_muffit::wire::Image {
+                    mime: mime.into(),
+                    data: base64::engine::general_purpose::STANDARD.encode(body),
+                });
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                lifted.push_str(&format!("[image {}: {name}]", images.len()));
+                rest = &rest[at + end..];
+            }
+            None => {
+                lifted.push_str(word);
+                rest = &rest[at + word.len()..];
+            }
         }
     }
+    lifted.push_str(rest);
     let text = match images.is_empty() {
         true => text.to_string(),
-        false => words.join(" ").trim().to_string(),
+        false => lifted.trim().to_string(),
     };
     (text, images)
+}
+
+pub fn is_image(path: &Path) -> bool {
+    image_mime(path).is_some()
 }
 
 fn image_mime(path: &Path) -> Option<&'static str> {

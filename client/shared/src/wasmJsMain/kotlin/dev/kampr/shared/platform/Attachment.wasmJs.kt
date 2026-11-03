@@ -2,7 +2,6 @@ package dev.kampr.shared.platform
 
 import dev.kampr.shared.net.DownloadSink
 import kotlin.io.encoding.Base64
-import kotlin.js.ExperimentalWasmJsInterop
 
 // The bytes come out of an authorised `fetch`, so there is no URL a browser could be pointed at to
 // download them a second time — a bare `<a href download>` cannot carry a bearer header. An object
@@ -12,10 +11,8 @@ import kotlin.js.ExperimentalWasmJsInterop
 //
 // No state crosses between `js()` bodies except through the page, because each one compiles to a
 // standalone function with no closure of its own.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsBegin(key: String): Unit = js("(window.__kamprDownloads = window.__kamprDownloads || {})[key] = []")
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsChunk(key: String, base64: String): Unit = js(
     """
     (function () {
@@ -27,7 +24,6 @@ private fun jsChunk(key: String, base64: String): Unit = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsFinish(key: String, name: String, mime: String): Boolean = js(
     """
     (function () {
@@ -50,7 +46,6 @@ private fun jsFinish(key: String, name: String, mime: String): Boolean = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsAbort(key: String): Unit = js("delete (window.__kamprDownloads || {})[key]")
 
 private var downloads = 0

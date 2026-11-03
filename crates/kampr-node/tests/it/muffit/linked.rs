@@ -176,7 +176,7 @@ async fn a_picture_pasted_into_a_background_session_goes_with_the_next_message()
     client.input(&id, "what is this?").await;
     client.input(&id, "\r").await;
     let input = eventually("the message", || fake.attach_frames("input").into_iter().next()).await;
-    assert_eq!(input["text"], "what is this?", "{input}");
+    assert_labelled(&input, "", " what is this?");
     assert_eq!(
         input["images"],
         json!([{ "mime": "image/png", "data": ONE_PIXEL }]),
@@ -259,10 +259,76 @@ async fn a_picture_pasted_quietly_into_a_background_session_goes_with_the_reply_
     client.input(&id, &format!("{text}what is this?")).await;
     client.input(&id, "\r").await;
     let input = eventually("the message", || fake.attach_frames("input").into_iter().next()).await;
-    assert_eq!(input["text"], "what is this?", "{input}");
+    assert_labelled(&input, "", " what is this?");
     assert_eq!(
         input["images"],
         json!([{ "mime": "image/png", "data": ONE_PIXEL }]),
+        "{input}"
+    );
+}
+
+/// The reply box puts a picture where its caret was, so the words around it are about it. Muffit
+/// takes pictures beside the text rather than in it, so the path leaves the text and a label in
+/// muffit's own TUI style stays where it stood (#621).
+#[tokio::test]
+async fn a_picture_in_the_middle_of_a_reply_leaves_its_label_where_it_stood() {
+    let fake = Fake::start(vec![session("s1", "waiting_user", None)]).await;
+    fake.set_transcript("s1", vec![]);
+    let h = Harness::start(&fake).await;
+    let mut client = h.client().await;
+    let id = pane("s1");
+    client.watch(&id).await;
+    client.convo(&id).await;
+    eventually("the node attaches", || (fake.attached() > 0).then_some(())).await;
+
+    let answer = client.quiet_paste(&id, "c1", ONE_PIXEL).await;
+    let path = answer["path"].as_str().expect("a path").to_string();
+    client
+        .input(&id, &format!("compare {path} with the last one"))
+        .await;
+    client.input(&id, "\r").await;
+    let input = eventually("the message", || fake.attach_frames("input").into_iter().next()).await;
+    assert_labelled(&input, "compare ", " with the last one");
+    assert_eq!(
+        input["images"],
+        json!([{ "mime": "image/png", "data": ONE_PIXEL }]),
+        "{input}"
+    );
+}
+
+/// The reply box lets a word or a line butt against a label, so the path it becomes is not always
+/// a whole word.
+#[tokio::test]
+async fn a_picture_with_punctuation_or_a_line_against_it_is_still_lifted() {
+    for (before, after) in [("is ", ", or not?"), ("", "\nand the next line"), ("(", ")")] {
+        let fake = Fake::start(vec![session("s1", "waiting_user", None)]).await;
+        fake.set_transcript("s1", vec![]);
+        let h = Harness::start(&fake).await;
+        let mut client = h.client().await;
+        let id = pane("s1");
+        client.watch(&id).await;
+        client.convo(&id).await;
+        eventually("the node attaches", || (fake.attached() > 0).then_some(())).await;
+
+        let answer = client.quiet_paste(&id, "c1", ONE_PIXEL).await;
+        let path = answer["path"].as_str().expect("a path").to_string();
+        client.input(&id, &format!("{before}{path}{after}")).await;
+        client.input(&id, "\r").await;
+        let input = eventually("the message", || fake.attach_frames("input").into_iter().next()).await;
+        assert_labelled(&input, before, after);
+        assert_eq!(input["images"].as_array().map(Vec::len), Some(1), "{input}");
+    }
+}
+
+/// `[image 1: shot-<millis>.png]` between `before` and `after`.
+fn assert_labelled(input: &Value, before: &str, after: &str) {
+    let text = input["text"].as_str().expect("the text");
+    let label = text
+        .strip_prefix(before)
+        .and_then(|rest| rest.strip_suffix(after))
+        .unwrap_or_else(|| panic!("{input}"));
+    assert!(
+        label.starts_with("[image 1: shot-") && label.ends_with(".png]"),
         "{input}"
     );
 }

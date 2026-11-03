@@ -8,11 +8,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerIcon
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.semantics.SemanticsNode
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
+import dev.kampr.conversation.HeldClipboard
 import dev.kampr.conversation.PORTRAIT
 import dev.kampr.conversation.tokensFor
 import dev.kampr.shared.net.AttachmentBytes
@@ -91,18 +90,7 @@ internal fun SemanticsNode.cursor(): String? {
 
 internal val TEXT_CURSOR = PointerIcon.Text.toString()
 
-@Suppress("DEPRECATION")
-internal class Pasteboard : ClipboardManager {
-    var held: AnnotatedString? = null
-    override fun setText(annotatedString: AnnotatedString) {
-        held = annotatedString
-    }
-    override fun getText() = held
-    override fun hasText(): Boolean = held != null
-}
-
-@Suppress("DEPRECATION")
 @Composable
-internal fun WithClipboard(board: Pasteboard, content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalClipboardManager provides board, content = content)
+internal fun WithClipboard(board: HeldClipboard, content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalClipboard provides board, content = content)
 }

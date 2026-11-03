@@ -24,6 +24,8 @@ kotlin {
     wasmJs {
         outputModuleName.set("kamprConversation")
         browser()
+        // Compose UI browser tests load Skiko only from a webpack bundle (CMP-4906).
+        binaries.executable()
     }
 
     sourceSets {
@@ -32,7 +34,7 @@ kotlin {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.ui)
-            implementation(libs.compose.ui.backhandler)
+            implementation(libs.compose.navigationevent)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
@@ -41,6 +43,9 @@ kotlin {
             implementation(compose.desktop.currentOs)
             implementation(libs.compose.ui.test)
             implementation(libs.navigationevent)
+        }
+        wasmJsTest.dependencies {
+            implementation(libs.compose.ui.test)
         }
     }
 }

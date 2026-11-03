@@ -1,7 +1,6 @@
 package dev.kampr.shared.platform
 
 import androidx.compose.runtime.Composable
-import kotlin.js.ExperimentalWasmJsInterop
 
 // Three answers, because the browser gives three and folding the third into either of the others
 // is what shipped a key row onto a desk. `pointer` and `hover` describe the *primary* input
@@ -24,7 +23,6 @@ import kotlin.js.ExperimentalWasmJsInterop
 // and the design was wrong about every machine but the test's.
 internal enum class PointerKind { Desk, Touch, Unknown }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun mediaMatches(query: String): Boolean = js(
     """
     (function () {

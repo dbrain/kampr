@@ -4,7 +4,6 @@ import dev.kampr.shared.platform.PointerKind
 import dev.kampr.shared.platform.deskBrowser
 import dev.kampr.shared.platform.pointerKind
 import dev.kampr.shared.platform.touchBrowser
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,7 +17,6 @@ import kotlin.test.assertTrue
 // `maxTouchPoints` is faked alongside, and it is faked *against* the media query on purpose: it is
 // what the previous reading believed and what read an operator's desk as a phone, so a row that
 // sets it high while reporting a fine pointer is the one that fails if it ever comes back.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun pretendBrowser(hover: String, pointer: String, touchPoints: Int) {
     js(
         """
@@ -42,7 +40,6 @@ private fun pretendBrowser(hover: String, pointer: String, touchPoints: Int) {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun stopPretending() {
     js(
         """

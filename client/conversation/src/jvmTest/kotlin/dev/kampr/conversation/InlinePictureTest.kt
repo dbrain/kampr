@@ -9,7 +9,7 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.conversation.files.Stack
 import dev.kampr.conversation.files.Stage
 import dev.kampr.shared.model.KamprStore
@@ -91,11 +91,10 @@ class InlinePictureTest {
             onAllNodesWithContentDescription("Open kampr-3f2.png").fetchSemanticsNodes().isNotEmpty()
         }
         onNodeWithContentDescription("Open kampr-3f2.png").performClick()
-        waitForIdle()
-        onNodeWithContentDescription(
-            "kampr-3f2.png, pinch to zoom, double tap to fit",
-            substring = true,
-        ).assertExists()
+        waitUntil(timeoutMillis = 5_000) {
+            onAllNodesWithContentDescription("kampr-3f2.png, pinch to zoom, double tap to fit", substring = true)
+                .fetchSemanticsNodes().isNotEmpty()
+        }
     }
 
     // Narrow on purpose. `filePathOf` refuses to search prose for paths at all, and the only thing

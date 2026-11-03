@@ -7,9 +7,9 @@ members = ["crates/*"]
 # `kampr update` compares against the release tag. **Bump it to the tag before tagging**: a
 # release whose binary reports the previous version tells every node in the herd, forever, that
 # it is one release behind — and updating does not clear it.
-version = "0.1.133"
+version = "0.1.134"
 edition = "2024"
-rust-version = "1.90"
+rust-version = "1.99"
 license = "MIT"
 repository = "https://github.com/dbrain/kampr"
 
@@ -28,62 +28,65 @@ mem_forget = "deny"
 [workspace.dependencies]
 alacritty_terminal = { version = "0.26.0", default-features = false }
 anyhow = "1.0.104"
+# Held at 0.5 because webauthn-rs 0.6 reaches it through crypto-glue 0.2, which requires `^0.5.2`:
+# 0.6 would put a second argon2 and blake2 in the binary for nothing this crate calls, since
+# `hash_password_into` and the default parameters are the same in both.
 argon2 = { version = "0.5.3", default-features = false, features = ["alloc"] }
 async-trait = "0.1.92"
 axum = { version = "0.8.9", features = ["ws", "macros"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls-no-provider"] }
 base64 = "0.23.1"
-clap = { version = "4.6.6", features = ["derive", "env"] }
-crossterm = { version = "0.29", features = ["event-stream", "bracketed-paste"] }
+clap = { version = "4.6.7", features = ["derive", "env"] }
+crossterm = { version = "0.29.0", features = ["event-stream", "bracketed-paste"] }
 ed25519-dalek = { version = "3.0.0", default-features = false }
 flate2 = "1.1.10"
 futures-util = "0.3.34"
 getrandom = "0.4.3"
 hex = "0.4.3"
-icy_sixel = "0.6.0"
+icy_sixel = "0.7.0"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
-pulldown-cmark = { version = "0.13.4", default-features = false }
-libc = "0.2.180"
+pulldown-cmark = { version = "0.13.6", default-features = false }
+libc = "0.2.191"
 memchr = "2.8.3"
 mime_guess = "2.0.5"
-openssl-sys = { version = "0.9.117", features = ["vendored"] }
+openssl-sys = { version = "0.9.118", features = ["vendored"] }
 postcard = { version = "1.1.3", default-features = false, features = ["use-std"] }
 qrcode = { version = "0.14.1", default-features = false }
 ratatui = { version = "0.30.2", features = ["crossterm_0_29"] }
-rust-embed = "8.12.0"
-rustix = { version = "1.1.4", features = ["pty", "termios", "process", "stdio"] }
-rustls = { version = "0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rust-embed = "8.13.0"
+rustix = { version = "1.1.6", features = ["pty", "termios", "process", "stdio"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 semver = "1.0.28"
-serde_json = "1.0.151"
-sha2 = "0.11.0"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
 sqlx = { version = "0.9.0", default-features = false, features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
-thiserror = "2.0.20"
+thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "process", "net", "io-util", "sync", "time", "signal", "fs"] }
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread", "process", "net", "io-util", "sync", "time", "signal", "fs"] }
 tokio-stream = "0.1.19"
-toml = "1.1.4"
+toml = "1.1.8"
 tower = "0.5.3"
-tower-http = { version = "0.7.0", features = ["compression-br", "compression-gzip", "set-header", "trace"] }
+tower-http = { version = "0.7.1", features = ["compression-br", "compression-gzip", "set-header", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 ulid = "3.0.0"
 unicode-segmentation = "1.13.3"
-unicode-width = "0.2.2"
+unicode-width = "0.2.3"
 url = "2.5.8"
 web-push = { version = "0.11.0", default-features = false }
 # `workaround-google-passkey-specific-issues` is the crate's own name for the one thing Android
 # needs: GMS does not perform authenticator selection, so the relying party has to state a
 # discoverable platform credential and drop `credProtect` itself.
-webauthn-rs = { version = "0.5.5", features = ["workaround-google-passkey-specific-issues"] }
-zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2"] }
+webauthn-rs = { version = "0.6.2", features = ["workaround-google-passkey-specific-issues"] }
+zip = { version = "9.2.2", default-features = false, features = ["deflate-flate2"] }
 # The ES256 keypair generator. Held at 0.12 because web-push 0.11 requires `^0.12.11`, so 0.13
 # cannot unify — it would put two jwt-simple trees (and two of p256, k256, rand) in the binary.
 # Safe to hold: this crate only ever calls `ES256KeyPair::generate()`, never verifies a token, so
 # the 0.13 `exp` validation fixes are not on any path Kampr takes.
 jwt-simple = { version = "0.12.17", default-features = false, features = ["pure-rust"] }
 
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "http2", "charset"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2", "charset"] }
 # The WebSocket client every non-browser client of a node is built on: the mesh link a peer dials
 # out over, and `kampr-client`.
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
@@ -91,9 +94,9 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"]
 # dev
 # `ring` rather than the default aws-lc, so the tree carries one crypto backend and it is
 # the one rustls is configured with.
-rcgen = { version = "0.14.9", default-features = false, features = ["ring", "pem"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 tempfile = "3.27.0"
-tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring"] }
 
 # Release artefacts are downloaded, not built, so size and start-up cost more than build time.
 [profile.release]

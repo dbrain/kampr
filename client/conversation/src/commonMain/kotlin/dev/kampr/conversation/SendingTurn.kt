@@ -31,13 +31,20 @@ fun sendingTurn(send: PendingSend): Turn = Turn(
 // Drawn as the user turn it is standing in for, so the record that replaces it lands where it is.
 // The offer to try again is a box of its own under it, and only on a reply that needs one.
 @Composable
-fun SendingCard(send: PendingSend, agent: String?, now: Double, onResend: () -> Unit, onDismiss: () -> Unit) {
+fun SendingCard(
+    send: PendingSend,
+    agent: String?,
+    now: Double,
+    attachments: AttachmentStore,
+    onResend: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     val turn = sendingTurn(send)
     if (send.state == PendingSend.State.Sending) {
-        TurnView(turn, "", emptyList(), {}, now = now, agent = agent)
+        TurnView(turn, "", emptyList(), {}, attachments = attachments, now = now, agent = agent)
         return
     }
-    TurnView(turn, "", emptyList(), {}, now = now, agent = agent, edge = BlockEdge.Head)
+    TurnView(turn, "", emptyList(), {}, attachments = attachments, now = now, agent = agent, edge = BlockEdge.Head)
     BlockFrame(speakerSkin(speakerOf(turn), agent), BlockEdge.Foot) {
         DisableSelection {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

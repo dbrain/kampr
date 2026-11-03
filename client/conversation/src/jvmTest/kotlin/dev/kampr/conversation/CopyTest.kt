@@ -6,15 +6,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.ClipboardManager
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
-import androidx.compose.ui.test.runComposeUiTest
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.LocalTokens
@@ -26,16 +24,6 @@ import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
 import kotlin.test.Test
 import kotlin.test.assertEquals
-
-@Suppress("DEPRECATION")
-private class Pasteboard : ClipboardManager {
-    var held: AnnotatedString? = null
-    override fun setText(annotatedString: AnnotatedString) {
-        held = annotatedString
-    }
-    override fun getText(): AnnotatedString? = held
-    override fun hasText(): Boolean = held != null
-}
 
 private const val QUOTED =
     "Herdr's `truncated` means there was more than you asked for.\nA short read can be truncated too."
@@ -88,12 +76,11 @@ private fun paneOf(vararg turns: Turn): PaneState {
 }
 
 @Composable
-@Suppress("DEPRECATION")
-private fun Screen(board: Pasteboard, pane: PaneState) {
+private fun Screen(board: HeldClipboard, pane: PaneState) {
     CompositionLocalProvider(
         LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
         LocalPaneIo provides RecordingIo,
-        LocalClipboardManager provides board,
+        LocalClipboard provides board,
     ) {
         Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
             ConversationView(pane, demoInfo(), Modifier.fillMaxSize())
@@ -108,10 +95,11 @@ class CopyTest {
     // the line breaks the writer wrote rather than the ones the paragraph was laid out with.
     @Test
     fun copying_a_quote_yields_the_words_without_the_markers_that_marked_them() = runComposeUiTest {
-        val board = Pasteboard()
+        val board = HeldClipboard()
         setContent { Screen(board, paneOf(QUOTING)) }
         onNodeWithContentDescription("Copy the quote").performClick()
-        assertEquals(QUOTED, board.held?.text)
+        waitForIdle()
+        assertEquals(QUOTED, board.held)
         onNodeWithContentDescription("Copied").assertIsDisplayed()
     }
 
@@ -119,16 +107,17 @@ class CopyTest {
     // it was written in — not the notes the agent left on its way there, and not its tool output.
     @Test
     fun copying_a_reply_yields_the_last_thing_it_said_and_nothing_before_it() = runComposeUiTest {
-        val board = Pasteboard()
+        val board = HeldClipboard()
         setContent { Screen(board, paneOf(*ANSWERING)) }
         onNodeWithContentDescription(COPY_REPLY, substring = true).performClick()
-        assertEquals("$CLOSING\n\n$SIGNING_OFF", board.held?.text)
+        waitForIdle()
+        assertEquals("$CLOSING\n\n$SIGNING_OFF", board.held)
         onNodeWithContentDescription("Copied").assertIsDisplayed()
     }
 
     @Test
     fun a_reply_that_said_nothing_offers_nothing_to_copy() = runComposeUiTest {
-        setContent { Screen(Pasteboard(), paneOf(ASKING, calling("a-1"))) }
+        setContent { Screen(HeldClipboard(), paneOf(ASKING, calling("a-1"))) }
         onNodeWithContentDescription("Put away the reply of", substring = true).assertExists()
         onNodeWithContentDescription(COPY_REPLY, substring = true).assertDoesNotExist()
         onNodeWithContentDescription(COPY_PINNED, substring = true).assertDoesNotExist()
@@ -138,11 +127,12 @@ class CopyTest {
     // them; the bar pinned in its place is where the copy has to be.
     @Test
     fun a_long_reply_is_copied_from_the_bar_pinned_where_the_reader_is() = runComposeUiTest {
-        val board = Pasteboard()
+        val board = HeldClipboard()
         setContent { Screen(board, paneOf(*LONG_ANSWERING)) }
         waitForIdle()
         onNodeWithText("assertEquals(3, window(4))", substring = true).assertIsDisplayed()
         onNodeWithContentDescription(COPY_PINNED, substring = true).assertIsDisplayed().performClick()
-        assertEquals(CLOSING, board.held?.text)
+        waitForIdle()
+        assertEquals(CLOSING, board.held)
     }
 }

@@ -1,8 +1,8 @@
 package dev.kampr.shared.platform
 
+import androidx.compose.ui.platform.ClipEntry
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.await
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.js.JsString
 import kotlin.js.Promise
 
@@ -13,7 +13,6 @@ import kotlin.js.Promise
 //
 // Which is also why it can come back empty for a reason that is not an empty clipboard: a refusal,
 // an insecure origin, or a gesture the browser no longer considers live. The caller says so.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsReadText(): Promise<JsString?> = js(
     """
     (function () {
@@ -30,3 +29,5 @@ actual suspend fun clipboardText(): String? = try {
 } catch (_: Throwable) {
     null
 }
+
+actual fun plainTextClip(text: String): ClipEntry = ClipEntry.withPlainText(text)

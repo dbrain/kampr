@@ -9,13 +9,11 @@ import androidx.compose.ui.Modifier
 import dev.kampr.shared.platform.touchBrowser
 import dev.kampr.terminal.PaneSession
 import kotlinx.coroutines.delay
-import kotlin.js.ExperimentalWasmJsInterop
 
 // Android soft keyboards report keyCode 229 for every printable key, so keydown is unusable as
 // the text path in a browser. The readable input is an offscreen contenteditable driven through
 // beforeinput / input / composition*, diffed against what it last held. keydown is kept
 // only for the keys a hardware keyboard sends and an IME never does.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: () -> Unit) {
     js(
         """
@@ -185,7 +183,6 @@ private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: (
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 internal fun drainInput(): String = js("(function () { var s = globalThis.__kamprInput; if (!s || !s.queue.length) return ''; var out = s.queue.join(''); s.queue.length = 0; return out; })()")
 
 // The queue used to be emptied from a Compose frame loop, and `withFrameNanos` is
@@ -275,7 +272,6 @@ internal fun holdsInput(enabled: Boolean, keyboardAsked: Boolean, touch: Boolean
 // `yieldToText` is for a claim nobody gestured for — `enabled` coming back on — which must not
 // take the slot from a text field that has it. The hold is still set, so the reclaim hands the
 // keys to the pane when that field lets go.
-@OptIn(ExperimentalWasmJsInterop::class)
 internal fun focusInput(open: Boolean, yieldToText: Boolean = false) {
     js(
         """
@@ -332,7 +328,6 @@ internal fun focusInput(open: Boolean, yieldToText: Boolean = false) {
 // all — is not typing, and the pane takes the slot back.
 private const val RECLAIM_BACKSTOP_MS = 250L
 
-@OptIn(ExperimentalWasmJsInterop::class)
 internal fun reclaimInputFocus() {
     js(
         """

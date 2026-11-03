@@ -53,19 +53,24 @@ internal const val MOST_BYTES_HANDED_OVER = 8 * 1024 * 1024
 private val CHIP = 40.dp
 private val THUMB = 30.dp
 
-// The node writes the bytes and types nothing (`typed = false`): a path typed now would sit on the
-// harness's input line and come straight back as the desk line over this box. The path arrives in
-// `pasted` and goes with the reply instead.
-internal fun attach(pane: PaneState, io: PaneIo, picked: PickedFile) {
+// A box that is the pane's line takes the file in the pane, at the reply box's caret: the node
+// types it there, a harness that draws a picture draws its token (#620), and it comes back as the
+// line this box mirrors. Any other box holds it as a label at its caret, and the node writes the
+// bytes and types nothing (`typed = false`): a path typed now would sit on the harness's input line
+// and come straight back as the desk line over this box. `live` is a box that may type.
+internal fun attach(pane: PaneState, io: PaneIo, picked: PickedFile, live: Boolean = false) {
     val name = picked.name?.takeIf { it.isNotBlank() } ?: "the file"
     if (picked.bytes.size > MOST_BYTES_HANDED_OVER) {
         pane.files.add(name, ByteArray(0), PendingFile.State.Refused("larger than the 8 MiB a node will take"))
         return
     }
     pane.clearRefusal()
-    val file = pane.files.add(name, picked.bytes)
     val undelivered = pane.undelivered
-    io.send(ClientMsg.Paste(pane.id, Base64.encode(picked.bytes), picked.name, typed = false, id = file.id))
+    val placing = pane.mirror.place(pane.draft, pane.draftCaret, live)
+    val picture = picked.mime?.startsWith("image/") == true
+    val file = pane.files.add(name, picked.bytes, inline = placing != null, picture = picture)
+    placing?.forEach { io.send(ClientMsg.InputText(pane.id, it)) }
+    io.send(ClientMsg.Paste(pane.id, Base64.encode(picked.bytes), picked.name, typed = placing != null, id = file.id))
     // Dropped rather than queued, as a keystroke is, so a chip still saying "sending" would be a lie.
     if (pane.undelivered > undelivered) pane.files.refuse(file.id, "not sent, there is no connection to the node")
 }

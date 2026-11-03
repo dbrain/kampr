@@ -121,13 +121,17 @@ Defended by:
 
 - **Pane output is never HTML.** It is a cell grid drawn to a canvas. There is no innerHTML path and
   no markup interpretation anywhere in the terminal surface.
-- **A strict CSP with no external origins.** `default-src 'self'`, `connect-src 'self'`,
+- **A strict CSP with one external origin.** `default-src 'self'`, `connect-src 'self'`,
   `frame-ancestors 'none'`, `base-uri 'none'`, `object-src 'none'`, `form-action 'none'`. Scripts
   get `'wasm-unsafe-eval'` — required by Skiko and strictly weaker than `'unsafe-eval'`. Styles are a
   **single hash** covering the one `<style>` element Compose injects into its shadow root; the node
   used to carry `'unsafe-inline'`, which permitted it, and a hash is the better trade at the most
   attacker-influenced surface in the product. Note the two cannot be combined — a browser ignores
-  `'unsafe-inline'` once any hash is present.
+  `'unsafe-inline'` once any hash is present. The one origin beyond the node is
+  `https://fonts.gstatic.com`, in `connect-src` and `font-src` only: Compose fetches a Noto face
+  from it for a glyph the bundled fonts lack. What it learns is that a Kampr page met a script or
+  symbol it had no font for, and a font is all it can return; a script injected into the page gains
+  no channel it can address to anyone else.
 - **Link detection is conservative, and nothing auto-navigates.** An OSC 8 hyperlink is a
   harness-*declared* URI and is treated as such; a bare URL found in cell text is *detected*, which
   is not the same thing. Detection is a strict scheme match rather than "anything with a dot in it",

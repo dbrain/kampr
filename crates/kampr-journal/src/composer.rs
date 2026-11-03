@@ -33,6 +33,9 @@ pub struct EditKeys {
     pub left: &'static str,
     pub right: &'static str,
     pub newline: &'static str,
+    /// A bracketed paste of an image path is drawn as one `[Image #n]` that a single `back`,
+    /// `left` or `right` takes whole, and the picture is sent with the message (#620).
+    pub images: bool,
 }
 
 /// Claude 2.1.285, Codex and agy alike (#564): one `\x7f` takes the character before the
@@ -43,6 +46,7 @@ pub const EDIT_KEYS: EditKeys = EditKeys {
     left: "\u{1b}[D",
     right: "\u{1b}[C",
     newline: "\n",
+    images: false,
 };
 
 /// What one harness's box has been measured to do.

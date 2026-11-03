@@ -1,8 +1,9 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.ExperimentalComposeUiApi
-import androidx.compose.ui.backhandler.BackHandler
+import androidx.navigationevent.NavigationEventInfo
+import androidx.navigationevent.compose.NavigationBackHandler
+import androidx.navigationevent.compose.rememberNavigationEventState
 
 // Where the system's back gesture leads, or null where it must be left alone and allowed to leave
 // the app. Android hands one gesture to the whole window and finishes the activity when nothing
@@ -29,7 +30,7 @@ internal fun backTarget(screen: Screen, breakpoint: Breakpoint, paired: Boolean)
 // A sheet floats over whatever screen is showing and everything it acts on is behind it, so it is
 // what back closes first — the screen underneath has not been left yet. An open file floats over
 // the sheet too. One handler for all three: Android re-registers lifecycle-aware callbacks on
-// resume, so the order between two `BackHandler`s is not one anything can rely on. The browser's
+// resume, so the order between two back handlers is not one anything can rely on. The browser's
 // back button is fed the same decision, since nothing in Compose hears it.
 private fun AppState.backTarget(breakpoint: Breakpoint): Screen? = backTarget(screen, breakpoint, endpoint?.token != null)
 
@@ -44,9 +45,12 @@ private fun AppState.goBack(breakpoint: Breakpoint) {
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 internal fun SystemBack(state: AppState, breakpoint: Breakpoint) {
-    BackHandler(enabled = state.canGoBack(breakpoint)) { state.goBack(breakpoint) }
+    NavigationBackHandler(
+        state = rememberNavigationEventState(NavigationEventInfo.None),
+        isBackEnabled = state.canGoBack(breakpoint),
+        onBackCompleted = { state.goBack(breakpoint) },
+    )
     BrowserBack(wanted = { state.canGoBack(breakpoint) }, back = { state.goBack(breakpoint) })
 }

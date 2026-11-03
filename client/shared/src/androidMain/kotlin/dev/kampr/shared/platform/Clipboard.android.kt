@@ -1,7 +1,9 @@
 package dev.kampr.shared.platform
 
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.ui.platform.ClipEntry
 
 // Reading the primary clip is what raises Android's own "pasted from your clipboard" notice, so it
 // happens on the press and never to decide whether to offer one — a Paste control that had to ask
@@ -18,3 +20,5 @@ actual suspend fun clipboardText(): String? {
         .mapNotNull { clip.getItemAt(it).coerceToText(context)?.toString() }
         .firstOrNull { it.isNotEmpty() }
 }
+
+actual fun plainTextClip(text: String): ClipEntry = ClipEntry(ClipData.newPlainText("Kampr", text))

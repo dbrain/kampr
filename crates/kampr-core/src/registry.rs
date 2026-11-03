@@ -257,12 +257,27 @@ impl Drop for PaneEntry {
     }
 }
 
+/// How long a lone Enter waits behind the pane's last other write (#619, #621). Claude took a
+/// carriage return written within milliseconds of a retyped line, or of a pasted picture, for part
+/// of it and kept it as a newline; one written 300 ms later submitted every time.
+pub const SUBMIT_GAP: Duration = Duration::from_millis(300);
+
+/// How a write left [`PaneRegistry::send`]: written, or an Enter waiting out [`SUBMIT_GAP`] on its
+/// own while it keeps the pane's turn.
+pub enum Written {
+    Done(Result<()>),
+    Held(tokio::task::JoinHandle<Result<()>>),
+}
+
 /// One emulator per pane, shared by every viewer and refcounted by [`Watcher`]s. The provider
 /// stream is opened on the first watcher and dropped with the last.
 pub struct PaneRegistry {
     provider: Arc<dyn Provider>,
     config: RegistryConfig,
     panes: Mutex<HashMap<String, Weak<PaneEntry>>>,
+    /// Each pane's turn to be written to, taken in the order writes arrive from every socket, and
+    /// when the pane last took something other than an Enter.
+    turns: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<tokio::time::Instant>>>>>,
     opening: tokio::sync::Mutex<()>,
     /// A revision, not a count: it only ever goes up, and a reader wants the edge.
     watcher_changes: Arc<tokio::sync::watch::Sender<u64>>,
@@ -278,6 +293,7 @@ impl PaneRegistry {
             provider,
             config,
             panes: Mutex::new(HashMap::new()),
+            turns: Mutex::new(HashMap::new()),
             opening: tokio::sync::Mutex::new(()),
             watcher_changes: Arc::new(tokio::sync::watch::channel(0).0),
         })
@@ -293,8 +309,47 @@ impl PaneRegistry {
         self.provider.topology()
     }
 
-    pub async fn write(&self, pane_id: &str, input: Input) -> Result<()> {
-        self.provider.write_pane(pane_id, input).await
+    pub async fn write(self: &Arc<Self>, pane_id: &str, input: Input) -> Result<()> {
+        match self.send(pane_id, input).await {
+            Written::Done(written) => written,
+            Written::Held(enter) => enter.await?,
+        }
+    }
+
+    /// Writes in the order writes arrive, but returns once the write has its turn: an Enter that
+    /// has to wait goes on waiting by itself, so the caller is free for other panes, and the
+    /// next write to this pane queues behind it.
+    pub async fn send(self: &Arc<Self>, pane_id: &str, input: Input) -> Written {
+        let turn = self
+            .turns
+            .lock()
+            .unwrap()
+            .entry(pane_id.to_string())
+            .or_default()
+            .clone();
+        let mut turn = turn.lock_owned().await;
+        let submit = match &input {
+            Input::Bytes(bytes) => bytes == b"\r",
+            Input::Keys(keys) => keys.len() == 1 && keys[0] == "Enter",
+        };
+        if !submit {
+            *turn = Some(tokio::time::Instant::now());
+        }
+        let due = turn
+            .filter(|_| submit)
+            .map(|at| at + SUBMIT_GAP)
+            .filter(|due| *due > tokio::time::Instant::now());
+        let Some(due) = due else {
+            return Written::Done(self.provider.write_pane(pane_id, input).await);
+        };
+        let registry = self.clone();
+        let pane = pane_id.to_string();
+        Written::Held(tokio::spawn(async move {
+            tokio::time::sleep_until(due).await;
+            let written = registry.provider.write_pane(&pane, input).await;
+            drop(turn);
+            written
+        }))
     }
 
     /// The ring as it stands, rendered.

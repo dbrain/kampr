@@ -20,7 +20,7 @@ fi
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
 env -u GRADLE_HOME ./gradlew -I gradle/tests-must-run.init.gradle.kts \
-  check :webApp:stageNodeBundle :androidApp:assembleDebug 2>&1 | tee "$log"
+  check :webApp:stageNodeBundle :webApp:compileDevelopmentExecutableKotlinWasmJs :androidApp:assembleDebug 2>&1 | tee "$log"
 # A closed set of test-*execution* task names, not a `Test` suffix: `compileAndroidHostTest`,
 # `javaPreCompileDebugUnitTest` and `lintAnalyzeDebugAndroidTest` all end in `Test` and are
 # honestly cacheable.
@@ -33,3 +33,5 @@ for task in :shared:jvmTest :terminal:jvmTest :shared:testAndroidHostTest; do
 done
 test -s ../crates/kampr-node/dist/index.html || { echo "error: no staged index.html" >&2; exit 1; }
 ls ../crates/kampr-node/dist/*.wasm >/dev/null
+# Read from the development build: the production one has no names to say which class it is.
+python3 ../scripts/wasm-stability-check.py webApp/build/compileSync/wasmJs/main/developmentExecutable/kotlin/kamprWeb.wasm

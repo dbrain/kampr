@@ -37,15 +37,18 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// `'unsafe-inline'` entirely once any hash is present, so the two cannot be combined as a
 /// belt-and-braces. If a CMP upgrade changes that rule, the console names the expected hash.
 ///
-/// `connect-src 'self'` and nothing else. A bare `ws:` / `wss:` matches *any* host, which hands
-/// anything that gets a script onto this page a clean channel out; CSP3 resolves `'self'` to the
-/// same-origin WebSocket, so the schemes bought nothing.
+/// `connect-src 'self'` and Google Fonts' file host, nothing else. A bare `ws:` / `wss:` matches
+/// *any* host, which hands anything that gets a script onto this page a clean channel out; CSP3
+/// resolves `'self'` to the same-origin WebSocket, so the schemes bought nothing. Compose 1.12
+/// fetches a Noto face from `fonts.gstatic.com` for a glyph the bundled fonts lack, which needs
+/// both the fetch (`connect-src`) and the face (`font-src`); refused, it retries for as long as
+/// the page is open and the glyph stays tofu.
 const CSP: &str = "default-src 'self'; \
      script-src 'self' 'wasm-unsafe-eval'; \
      style-src 'self' 'sha256-+bHRyQ0Z1/Lb6dgSILtTESBRCIFl8jkBb/dPQA4Pdnw='; \
      img-src 'self' data: blob:; \
-     font-src 'self' data:; \
-     connect-src 'self'; \
+     font-src 'self' data: https://fonts.gstatic.com; \
+     connect-src 'self' https://fonts.gstatic.com; \
      worker-src 'self' blob:; \
      frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'none'";
 

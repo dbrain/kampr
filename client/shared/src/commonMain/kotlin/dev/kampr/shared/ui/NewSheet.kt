@@ -20,11 +20,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.BackHandler
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.NavigationEventInfo
+import androidx.navigationevent.compose.NavigationBackHandler
+import androidx.navigationevent.compose.rememberNavigationEventState
 import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.model.isNative
 import dev.kampr.shared.model.paneTitle
@@ -73,7 +74,6 @@ object NoAgentArgs : AgentArgs {
     override fun remember(kind: String, text: String?) = Unit
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun NewSheet(
     breakpoint: Breakpoint,
@@ -323,7 +323,11 @@ fun NewSheet(
         step = Step.Menu
         refusal = null
     }
-    BackHandler(enabled = step != Step.Menu, onBack = stepBack)
+    NavigationBackHandler(
+        state = rememberNavigationEventState(NavigationEventInfo.None),
+        isBackEnabled = step != Step.Menu,
+        onBackCompleted = stepBack,
+    )
 
     BottomSheet(breakpoint, onDismiss) {
         SheetHeader(
@@ -477,7 +481,7 @@ fun NewSheet(
                         if (workspaceId == null) {
                             "Open a pane in a workspace first — a tab is created inside one."
                         } else {
-                            "In ${pane?.workspace ?: workspaceId}."
+                            "In ${pane.workspace ?: workspaceId}."
                         },
                     )
                 }

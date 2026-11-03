@@ -14,13 +14,11 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlin.io.encoding.Base64
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.js.JsString
 import kotlin.js.Promise
 
 // The chosen `File` stays on the page and only its name and size cross into Kotlin: the bytes are
 // read off the disk by the browser as they are sent, never copied into the wasm heap.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsPickUpload(): Promise<JsString?> = js(
     """
     (function () {
@@ -48,7 +46,6 @@ private fun jsPickUpload(): Promise<JsString?> = js(
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsSlice(key: String, start: Double, end: Double): Promise<JsString> = js(
     """
     window.__kamprUploads[key].file.slice(start, end).arrayBuffer().then(function (buffer) {
@@ -59,7 +56,6 @@ private fun jsSlice(key: String, start: Double, end: Double): Promise<JsString> 
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsPost(key: String, url: String, bearer: String): Promise<JsString?> = js(
     """
     new Promise(function (resolve) {
@@ -78,10 +74,8 @@ private fun jsPost(key: String, url: String, bearer: String): Promise<JsString?>
     """,
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsSent(key: String): Double = js("(window.__kamprUploads[key] || { sent: 0 }).sent")
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun jsForget(key: String): Unit = js(
     """
     (function () {
@@ -97,7 +91,6 @@ private class BrowserFile(private val key: String, override val name: String, ov
     DirectUpload {
     private var offset = 0L
 
-    @OptIn(ExperimentalWasmJsInterop::class)
     override suspend fun read(into: ByteArray): Int {
         if (offset >= size) return -1
         val end = minOf(size, offset + into.size)
@@ -109,7 +102,6 @@ private class BrowserFile(private val key: String, override val name: String, ov
 
     override suspend fun close() = jsForget(key)
 
-    @OptIn(ExperimentalWasmJsInterop::class)
     override suspend fun post(url: String, bearer: String?, progress: (Long) -> Unit): DirectUpload.Answer? = try {
         coroutineScope {
             val watch = launch {
@@ -140,7 +132,6 @@ private fun answerOf(text: String): DirectUpload.Answer? {
     return DirectUpload.Answer(status, obj.field("body")?.contentOrNull.orEmpty())
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 actual suspend fun pickUpload(): UploadSource? {
     val answer = runCatching { jsPickUpload().await<JsString?>() }.getOrNull()?.toString() ?: return null
     val obj = runCatching { Json.parseToJsonElement(answer) as? JsonObject }.getOrNull() ?: return null

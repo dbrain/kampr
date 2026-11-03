@@ -282,9 +282,7 @@ private fun CellHeader(
         watchersTag(presence.others)?.let {
             KText(it.uppercase(), tokens.type.metaSmall, tokens.color.mute)
         }
-        statusWord(status)?.let {
-            KText(it, tokens.type.metaSmall, if (quiet) tokens.color.mute else statusColor(status))
-        }
+        KText(statusWord(status), tokens.type.metaSmall, if (quiet) tokens.color.mute else statusColor(status))
         PaneManageAction(pane.id, 28.dp)
         GlyphAction(
             KamprIcons.cross,

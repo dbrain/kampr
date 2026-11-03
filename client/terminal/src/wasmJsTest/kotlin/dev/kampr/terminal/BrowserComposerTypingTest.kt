@@ -23,16 +23,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun putStage(): org.w3c.dom.Element = js(
     "(function () { var d = document.createElement('div'); d.id = 'typing-stage'; document.body.appendChild(d); return d; })()",
 )
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun removeStage() {
     js("(function () { var d = document.getElementById('typing-stage'); if (d) d.remove(); })()")
 }
@@ -53,7 +50,6 @@ private var mounted by mutableStateOf(false)
 private var prompt by mutableStateOf(true)
 private var composed by mutableStateOf("")
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun typeIntoWhateverHasTheFocus(text: String) {
     js(
         """

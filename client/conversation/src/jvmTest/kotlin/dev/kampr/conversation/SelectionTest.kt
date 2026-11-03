@@ -30,7 +30,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.LocalTokens
@@ -126,19 +126,6 @@ internal class SelectionToolbar : TextToolbar {
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
-internal class HeldClipboard : Clipboard {
-    var entry: ClipEntry? = null
-    override val nativeClipboard: Any get() = throw UnsupportedOperationException()
-    override suspend fun getClipEntry(): ClipEntry? = entry
-    override suspend fun setClipEntry(clipEntry: ClipEntry?) {
-        entry = clipEntry
-    }
-
-    val pasted: String?
-        get() = (entry?.nativeClipEntry as? Transferable)?.getTransferData(DataFlavor.stringFlavor) as String?
-}
-
 // A long press is what starts a selection on a phone, and it is a real wall-clock wait: the
 // gesture is timed off the scene's own clock, which only a rendered frame advances.
 @OptIn(ExperimentalComposeUiApi::class)
@@ -180,7 +167,7 @@ private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 255f): Strin
             }
         },
     )
-    return clipboard.pasted
+    return clipboard.held
 }
 
 @Composable
@@ -249,7 +236,7 @@ class SelectionTest {
         // same place; this one's is its prose, above the code card.
         val pasted = copiedFromTheTranscript(paneOf(CARDS), fromY = 255f)
         assertTrue(pasted != null, "copying across the cards produced nothing")
-        assertTrue("herdr pane list --json" in pasted!!, "the code itself was not copied: $pasted")
+        assertTrue("herdr pane list --json" in pasted, "the code itself was not copied: $pasted")
         assertTrue("shot.png" in pasted, "the attachment's name was not copied: $pasted")
         assertTrue("Copy" !in pasted, "the copy button's caption was copied: $pasted")
         assertTrue("Show image" !in pasted, "the attachment button's caption was copied: $pasted")

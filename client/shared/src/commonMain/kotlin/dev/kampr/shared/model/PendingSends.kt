@@ -1,5 +1,6 @@
 package dev.kampr.shared.model
 
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.mutableStateListOf
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.Queued
@@ -11,6 +12,7 @@ import kotlin.random.Random
 // prompt up, and a reply to a pane that is still booting is exactly the one this card is for.
 const val UNSEEN_AFTER_MS = 45_000L
 
+@Immutable
 class PendingSend(
     val id: String,
     val text: String,
@@ -102,16 +104,17 @@ class PendingSends {
     }
 }
 
-private const val BRACKETED_OPEN = "\u001b[200~"
 private const val BRACKETED_CLOSE = "\u001b[201~"
 private val IMAGE_MARKER = Regex("""^\[Image #\d+]$""")
+private val MUFFIT_LABEL = Regex("""\[image \d+: [^\]]*]""")
 
-// What a reply and its record have in common. The paths this client put ahead of the words are
-// lifted out by muffit and dressed as pictures by the node, Claude writes an image it took from a
-// path as `[Image #n]`, and a harness keeps or drops a trailing newline as it likes — so all of
-// that goes, and what is left is the words, with their spacing collapsed.
+// What a reply and its record have in common. The node lifts a picture's path out of a muffit
+// reply and leaves `[image n: file]` where it stood, Claude writes an image it took from a path as
+// `[Image #n]`, and a harness keeps or drops a trailing newline as it likes — so all of that goes,
+// and what is left is the words, with their spacing collapsed.
 fun sentKey(text: String): String = text
-    .replace(BRACKETED_OPEN, " ")
+    .replace(MUFFIT_LABEL, " ")
+    .replace(BRACKETED_PASTE, " ")
     .replace(BRACKETED_CLOSE, " ")
     .split(' ', '\t', '\n', '\r')
     .filter { it.isNotEmpty() && "/pastes/" !in it && !IMAGE_MARKER.matches(it) }

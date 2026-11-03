@@ -13,9 +13,9 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
-import androidx.compose.ui.text.AnnotatedString
+import dev.kampr.conversation.HeldClipboard
 import dev.kampr.conversation.pngBytes
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.net.AttachmentSlice
@@ -102,14 +102,14 @@ class FileStreamTest {
 
     @Test
     fun copyFetchesWhatIsNotLoadedYetAndTakesTheWholeFile() = runComposeUiTest {
-        val board = Pasteboard()
+        val board = HeldClipboard()
         val node = RangedNode(WHOLE)
         val nav = Stack(filePlace(PANE, BIG))
         setContent { WithClipboard(board) { Stage(node, nav) } }
         waitUntilAtLeastOneExists(hasContentDescription("Copy all of big.log"), 5_000)
         onNodeWithContentDescription("Copy all of big.log").performClick()
         waitUntil(timeoutMillis = 10_000) { board.held != null }
-        assertEquals(AnnotatedString(WHOLE.decodeToString()), board.held)
+        assertEquals(WHOLE.decodeToString(), board.held)
     }
 
     @Test

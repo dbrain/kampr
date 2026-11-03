@@ -44,7 +44,9 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.files.LocalHeldBytes
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.PLACED_ANSWER_WAIT_MS
 import dev.kampr.shared.model.PaneState
+import dev.kampr.shared.model.PendingFile
 import dev.kampr.shared.model.PendingSend
 import dev.kampr.shared.model.UNSEEN_AFTER_MS
 import dev.kampr.shared.model.paints
@@ -241,9 +243,25 @@ fun ConversationView(
             }
         }
     }
+    for (file in pane.files.all) {
+        if (!file.inline || file.state != PendingFile.State.Sending) continue
+        key(file.id) {
+            LaunchedEffect(Unit) {
+                val since = pane.files.waiting(file.id, clock()) ?: return@LaunchedEffect
+                delay((since + PLACED_ANSWER_WAIT_MS - clock()).toLong().coerceAtLeast(0))
+                pane.files.unanswered(file.id)
+            }
+        }
+    }
     // The attach button's path, reached by the gesture a desk actually uses. A clipboard with no
     // file on it never gets here, so pasting words into the reply box is untouched.
-    PastedFiles(!io.readOnly) { picked -> attach(pane, io, picked) }
+    // A digit answers a dialog (#413, #421, #487), so a question standing on the pane is a box
+    // nothing is typed into; the words wait in the reply box.
+    val mirroring = !io.readOnly &&
+        answering(LocalConnectionStatus.current, pane.undelivered).enabled &&
+        pane.pending?.question == null
+    val typing by rememberUpdatedState(mirroring)
+    PastedFiles(!io.readOnly) { picked -> attach(pane, io, picked, typing) }
     val held = LocalHeldBytes.current
     val openPlace = LocalOpenPlace.current
 
@@ -262,9 +280,10 @@ fun ConversationView(
     // node decide there is nothing older by clearing `more`.
     var asked by remember { mutableStateOf<String?>(null) }
     val offering by rememberUpdatedState(pageable)
+    // Read together, so a list already at the top asks the moment paging is on offer, not at the
+    // reader's next scroll.
     LaunchedEffect(pane.id) {
-        snapshotFlow { listState.firstVisibleItemIndex }.collect { first ->
-            val cursor = pane.convoCursor
+        snapshotFlow { Triple(listState.firstVisibleItemIndex, offering, pane.convoCursor) }.collect { (first, offering, cursor) ->
             if (first <= 1 && offering && cursor != null && cursor != asked) {
                 asked = cursor
                 io.send(ClientMsg.ConvoLoad(pane.id, cursor))
@@ -571,6 +590,7 @@ fun ConversationView(
                                 send,
                                 info?.agent,
                                 now,
+                                attachments,
                                 onResend = { pane.sends.resent(send.id, pane.turns, pane.facets.queued, say(send.text), clock()) },
                                 onDismiss = { pane.sends.dismiss(send.id) },
                             )
@@ -639,14 +659,16 @@ fun ConversationView(
                 enabled = !io.readOnly,
                 answering = answer,
                 onSend = { text ->
-                    val said = (pane.files.take() + text).trimEnd()
+                    val said = pane.files.take(text)
                     pane.sends.sent(said, pane.turns, pane.facets.queued, say(said), clock())
                 },
                 mirror = pane.mirror,
-                // A digit answers a dialog (#413, #421, #487), so a question standing on the pane
-                // is a box nothing is typed into; the words wait in this one.
-                mirroring = !io.readOnly && answer.enabled && question == null,
+                mirroring = mirroring,
                 onKeys = type,
+                onCaret = { pane.draftCaret = it },
+                edits = pane.files.edits,
+                onEdit = { pane.files.edits.remove(it) },
+                onLabelGone = pane.files::gone,
                 draft = pane.draft,
                 onDraft = { pane.draft = it },
                 onAttach = if (io.readOnly || !filePickAvailable) {
@@ -655,7 +677,7 @@ fun ConversationView(
                     {
                         scope.launch {
                             val picked = pickFile() ?: return@launch
-                            attach(pane, io, picked)
+                            attach(pane, io, picked, typing)
                         }
                     }
                 },

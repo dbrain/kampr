@@ -8,10 +8,10 @@ import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.ui.imeInset
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlin.js.ExperimentalWasmJsInterop
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -26,7 +26,6 @@ private object Inert : AbstractApplier<Any?>(null) {
 
 // A keyboard 300 px tall, the way a phone browser reports one: the layout viewport keeps its
 // height and the visual viewport loses it.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun raiseKeyboard(px: Int) {
     js(
         """
@@ -41,7 +40,6 @@ private fun raiseKeyboard(px: Int) {
     )
 }
 
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun lowerKeyboard() {
     js(
         """
@@ -59,6 +57,7 @@ private fun lowerKeyboard() {
 // The report: a Kampr tab held half a core with nothing on it moving. In a browser every frame
 // anything awaits is a `requestAnimationFrame` and a repaint of the whole scene, and the keyboard
 // inset awaited one every frame just to read a number that moves only when a keyboard does.
+@OptIn(ExperimentalCoroutinesApi::class)
 class BrowserIdleTest {
     @Test
     fun theKeyboardInsetAsksForNoFramesAndStillFollowsTheKeyboard() = runTest {

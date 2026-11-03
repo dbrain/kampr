@@ -11,7 +11,9 @@ use serde_json::Value;
 
 use crate::adapter::{JournalAdapter, SessionKind, SessionRef};
 use crate::attach::{self, Fetched, FileRef, Origin};
-use crate::composer::{Caret, Composed, ComposerReader, EDIT_KEYS, Frame, ListeningReader, Measured};
+use crate::composer::{
+    Caret, Composed, ComposerReader, EDIT_KEYS, EditKeys, Frame, ListeningReader, Measured,
+};
 use crate::discover;
 use crate::envelope::push_text;
 use crate::error::JournalError;
@@ -211,6 +213,10 @@ impl JournalAdapter for ClaudeAdapter {
 
     fn screen(&self) -> Option<ScreenReader> {
         Some(live)
+    }
+
+    fn pastes_images(&self) -> bool {
+        MEASURED.keys.is_some_and(|keys| keys.images)
     }
 
     fn composer(&self) -> Option<ComposerReader> {
@@ -571,7 +577,10 @@ const CLEAR: &str = "\u{3}";
 const MEASURED: Measured = Measured {
     margin: 2,
     clear: Some(CLEAR),
-    keys: Some(EDIT_KEYS),
+    keys: Some(EditKeys {
+        images: true,
+        ..EDIT_KEYS
+    }),
 };
 
 /// `Write(notes.md)`, `Bash(herdr pane list)`, `Read(…)`. Prose does not open with a bare

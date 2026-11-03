@@ -5,13 +5,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.InternalComposeUiApi
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.backhandler.LocalCompatNavigationEventDispatcherOwner
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performSemanticsAction
-import androidx.compose.ui.test.runComposeUiTest
+import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.NewSheet
@@ -35,7 +35,7 @@ class NewSheetBackTest {
         setContent {
             CompositionLocalProvider(
                 LocalTokens provides phoneTokens(),
-                LocalCompatNavigationEventDispatcherOwner provides window,
+                LocalNavigationEventDispatcherOwner provides window,
             ) {
                 Box(Modifier.size(420.dp, 900.dp)) {
                     NewSheet(

@@ -2,7 +2,9 @@ use anyhow::Result;
 use async_trait::async_trait;
 use kampr_core::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
 use kampr_core::push::{PaneChanges, Pulse};
-use kampr_core::registry::{HistoryPolicy, PaneRegistry, PaneUpdate, RegistryConfig, RowRate, Watcher};
+use kampr_core::registry::{
+    HistoryPolicy, PaneRegistry, PaneUpdate, RegistryConfig, RowRate, SUBMIT_GAP, Watcher, Written,
+};
 use kampr_core::wire::Cursor;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -355,6 +357,82 @@ async fn input_reaches_the_provider() {
     assert_eq!(w.len(), 2);
     assert!(matches!(&w[0].1, Input::Bytes(b) if b == b"\x1b[5~"));
     assert!(matches!(&w[1].1, Input::Keys(k) if k == &["ctrl+c".to_string()]));
+}
+
+/// **An Enter close behind what it submits is taken for part of it** (#619, #621): Claude kept a
+/// carriage return written within milliseconds of a retyped line, or of a pasted picture, as a
+/// newline, and submitted every one written 300 ms later. So a lone submit waits that long behind
+/// the pane's last write, wherever it came from, and nothing else waits at all.
+#[tokio::test(start_paused = true)]
+async fn an_enter_close_behind_a_write_waits_until_the_write_has_been_read() {
+    let (p, reg) = setup().await;
+    let start = tokio::time::Instant::now();
+    reg.write("p", Input::Bytes(b"look at this".to_vec()))
+        .await
+        .unwrap();
+    reg.write("p", Input::Bytes(b"\r".to_vec())).await.unwrap();
+    assert_eq!(
+        start.elapsed(),
+        SUBMIT_GAP,
+        "the Enter went on the heels of the words"
+    );
+
+    tokio::time::advance(Duration::from_secs(5)).await;
+    let alone = tokio::time::Instant::now();
+    reg.write("p", Input::Bytes(b"\r".to_vec())).await.unwrap();
+    reg.write("q", Input::Bytes(b"words".to_vec())).await.unwrap();
+    reg.write("p", Input::Bytes(b"\r".to_vec())).await.unwrap();
+    assert_eq!(
+        alone.elapsed(),
+        Duration::ZERO,
+        "an Enter waited behind another Enter or another pane"
+    );
+
+    let typed = tokio::time::Instant::now();
+    reg.write("p", Input::Bytes(b"a".to_vec())).await.unwrap();
+    reg.write("p", Input::Bytes(b"b".to_vec())).await.unwrap();
+    assert_eq!(typed.elapsed(), Duration::ZERO, "a keystroke waited");
+    assert_eq!(p.writes.lock().await.len(), 7);
+}
+
+/// A held Enter waits on its own: a socket that sent it goes on to other panes at once, while the
+/// next write to the same pane, from any socket, still lands after it.
+#[tokio::test(start_paused = true)]
+async fn a_held_enter_holds_up_only_its_own_pane() {
+    let (p, reg) = setup().await;
+    let start = tokio::time::Instant::now();
+    reg.write("p", Input::Bytes(b"look at this".to_vec()))
+        .await
+        .unwrap();
+    let Written::Held(enter) = reg.send("p", Input::Bytes(b"\r".to_vec())).await else {
+        panic!("an Enter on the heels of the words did not wait");
+    };
+    reg.write("q", Input::Bytes(b"elsewhere".to_vec())).await.unwrap();
+    assert_eq!(
+        start.elapsed(),
+        Duration::ZERO,
+        "another pane waited behind the Enter"
+    );
+
+    reg.write("p", Input::Bytes(b"next".to_vec())).await.unwrap();
+    assert_eq!(
+        start.elapsed(),
+        SUBMIT_GAP,
+        "the next words did not wait for the Enter"
+    );
+    enter.await.unwrap().unwrap();
+    let order: Vec<_> = p
+        .writes
+        .lock()
+        .await
+        .iter()
+        .filter(|(pane, _)| pane == "p")
+        .map(|(_, input)| input.clone())
+        .collect();
+    assert_eq!(
+        order,
+        [b"look at this".as_slice(), b"\r", b"next"].map(|b| Input::Bytes(b.to_vec())),
+    );
 }
 
 #[tokio::test]

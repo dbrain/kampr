@@ -119,8 +119,10 @@ runs once. `ctrl-c` and `esc` interrupt the running turn. Everything else a term
 
 **Pictures go with the message.** A paste is written to the node's pastes directory and its path
 typed, as on any pane. When the line is sent, each word that is one of those pasted images (png,
-jpg, gif, webp) leaves the text and goes as an `images` entry instead; muffit shrinks it to what
-the model takes. In a terminal running the TUI the path is typed as a bracketed paste, which the
+jpg, gif, webp) goes as an `images` entry instead, and leaves `[image N: <file>]` where it stood
+in the text — the TUI's own label — so words around it still point at it (#621); muffit shrinks
+the picture to what the model takes. The reply box holds such a file as a label at its caret and
+puts the path there when the reply goes. In a terminal running the TUI the path is typed as a bracketed paste, which the
 TUI attaches itself.
 
 ## Making and ending one

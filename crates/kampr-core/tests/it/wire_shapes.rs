@@ -357,6 +357,7 @@ fn server() -> Vec<ServerMsg> {
                 left: "\u{1b}[D",
                 right: "\u{1b}[C",
                 newline: "\u{1b}\r",
+                images: true,
             }),
         },
         ServerMsg::Error {

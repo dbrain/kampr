@@ -211,6 +211,32 @@ fn an_attached_image_is_named_rather_than_dropped() {
     assert!(!wire.contains("base64"), "{wire}");
 }
 
+/// A picture pasted into Codex's box arrives wrapped in two text items naming it (#620). They are
+/// Codex's own bookkeeping, not anything the person wrote, and the `[Image #1]` they typed already
+/// says where the picture went.
+#[test]
+fn a_pasted_picture_is_shown_without_the_wrapper_codex_writes_around_it() {
+    let record = serde_json::json!({
+        "type": "response_item",
+        "timestamp": "2026-11-03T01:06:00.000Z",
+        "payload": { "type": "message", "role": "user", "content": [
+            { "type": "input_text", "text": "<image name=[Image #1] path=\"/home/u/.local/state/kampr/pastes/shot-1.png\">" },
+            { "type": "input_image",
+              "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" },
+            { "type": "input_text", "text": "</image>" },
+            { "type": "input_text", "text": "what colour is[Image #1]  this picture" }
+        ] }
+    });
+    let mut scratch = scratch_codex("codex-pasted-image", &[record]);
+    let turns = scratch.turns();
+
+    assert_eq!(
+        md_texts(&turns),
+        vec!["[image · png]", "what colour is[Image #1]  this picture"]
+    );
+    assert_eq!(attachments(&turns).len(), 1);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Identity: the thread a pid is on.
 // ---------------------------------------------------------------------------------------------

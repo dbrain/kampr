@@ -8,7 +8,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import kotlin.js.ExperimentalWasmJsInterop
 
 // A browser keyboard resizes the *visual* viewport and leaves the layout viewport — and so the
 // canvas Compose measures itself against — exactly as tall as it was. The difference between the
@@ -17,7 +16,6 @@ import kotlin.js.ExperimentalWasmJsInterop
 // Pushed, not polled: a frame awaited to read this is a `requestAnimationFrame` and a repaint of
 // the whole scene, so polling it held every open tab at the display's refresh rate. There is one
 // caller, `systemSafeArea` at the app's root, so one listener slot is enough.
-@OptIn(ExperimentalWasmJsInterop::class)
 private fun watchOsk(notify: (Double) -> Unit): Double = js(
     """
     (function () {

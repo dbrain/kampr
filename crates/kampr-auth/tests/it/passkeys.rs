@@ -2,14 +2,15 @@
 //!
 //! There is no soft authenticator in this workspace and adding one is a dependency. A `none`
 //! attestation carries no signature to verify, so the authenticator's half of a *registration* is
-//! a CBOR document and a public key that is genuinely on the curve — OpenSSL is asked, so a
+//! a CBOR document and a public key that is genuinely on the curve — webauthn-rs checks, so a
 //! made-up coordinate pair is refused. That is all this builds, and it is enough to reach the
 //! code under test the way a phone reaches it.
 
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use kampr_auth::{
-    AuditLog, Auth, AuthError, Client, Delivery, Device, Enrolment, Policy, Role, Store, Tier, now,
+    AuditLog, Auth, AuthError, Client, Credential, Delivery, Device, Enrolment, Policy, Role, Store, Tier,
+    now,
 };
 use sha2::{Digest, Sha256};
 use webauthn_rs::prelude::RegisterPublicKeyCredential;
@@ -166,4 +167,40 @@ async fn revoking_the_device_that_registered_a_passkey_takes_the_passkey_with_it
             "a token survived the revocation of its device"
         );
     }
+}
+
+/// Exactly what webauthn-rs 0.5.5 stored for the credential `register` builds. A passkey row
+/// that no longer parses is skipped without a word, so a format change in an upgrade would sign
+/// every phone out of its passkey and show nothing in any log.
+const STORED_BY_WEBAUTHN_0_5: &str = r#"{"cred":{"cred_id":"Y3JlZGVudGlhbC0wMDA1","cred":{"type_":"ES256","key":{"EC_EC2":{"curve":"SECP256R1","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU"}}},"counter":0,"transports":null,"user_verified":true,"backup_eligible":false,"backup_state":false,"registration_policy":"required","extensions":{"cred_protect":"Ignored","hmac_create_secret":"NotRequested","appid":"NotRequested","cred_props":"Ignored"},"attestation":{"data":"None","metadata":"None"},"attestation_format":"none"}}"#;
+
+#[tokio::test]
+async fn a_passkey_stored_by_an_earlier_webauthn_release_still_signs_in() {
+    let a = tier_one().await;
+    let phone = paired(&a, "phone").await;
+    let rp_id = a.passkeys().unwrap().rp_id().to_string();
+    a.store()
+        .save_credential(
+            &Credential {
+                id: hex::encode(b"credential-0005"),
+                device_id: phone.device.id.clone(),
+                rp_id,
+                passkey: STORED_BY_WEBAUTHN_0_5.to_string(),
+            },
+            now(),
+        )
+        .await
+        .unwrap();
+
+    let (_, options) = a
+        .start_passkey_authentication(PEER)
+        .await
+        .expect("the stored passkey is offered");
+    let offered: Vec<_> = options
+        .public_key
+        .allow_credentials
+        .iter()
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(offered, vec![b"credential-0005".to_vec()]);
 }

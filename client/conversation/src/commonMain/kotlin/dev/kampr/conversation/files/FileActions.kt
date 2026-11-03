@@ -16,10 +16,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.platform.attachmentFileName
+import dev.kampr.shared.platform.plainTextClip
 import dev.kampr.shared.platform.saveToDevice
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
@@ -47,10 +47,7 @@ private sealed interface Copy {
 internal fun CopyAll(name: String, stream: TextStream) {
     val tokens = Kampr.tokens
 
-    // LocalClipboard replaces this, but its ClipEntry can only be built from a platform-native
-    // object, so a plain string still has no common-code path in CMP 1.11.
-    @Suppress("DEPRECATION")
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     var copy by remember(stream) { mutableStateOf<Copy>(Copy.Idle) }
     val reachable = stream.version.let { stream.complete } || (stream.total ?: Long.MAX_VALUE) <= COPY_MOST
@@ -75,7 +72,7 @@ internal fun CopyAll(name: String, stream: TextStream) {
         scope.launch {
             copy = Copy.Fetching
             val all = if (reachable) stream.all() else stream.complete
-            clipboard.setText(AnnotatedString(stream.lines.text()))
+            clipboard.setClipEntry(plainTextClip(stream.lines.text()))
             copy = Copy.Done(if (all) "Copied" else "Copied the first ${stream.lines.lines.size} lines")
             delay(1400)
             copy = Copy.Idle

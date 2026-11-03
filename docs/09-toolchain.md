@@ -10,7 +10,7 @@ machine and useless on a fresh one. A dependency pass stalled for an afternoon o
 
 | | | |
 |---|---|---|
-| Rust | **1.90+** | `rust-version` in the workspace manifest |
+| Rust | **1.99+** | `rust-version` in the workspace manifest |
 | Herdr | **0.9.0+** (protocol 22) | a hard floor, not a preference — see below |
 
 ### Why 0.9.0 is a floor rather than a minimum tested version

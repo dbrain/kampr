@@ -43,7 +43,7 @@ private class RefusingNode {
         server = null
     }
 
-    private fun refuse(client: Socket) = client.use {
+    private fun refuse(client: Socket): Unit = client.use {
         val header = StringBuilder()
         while (!header.endsWith("\r\n\r\n")) {
             val byte = it.getInputStream().read()
