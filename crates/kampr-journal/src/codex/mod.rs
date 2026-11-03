@@ -419,6 +419,7 @@ const LAYOUT: Layout = Layout {
     indent: 2,
     input: 2,
     reject: is_status,
+    floor: None,
 };
 
 /// One `ctrl+u` takes the whole buffer, wrapped or not — measured against a 200-column entry over

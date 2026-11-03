@@ -1,0 +1,41 @@
+caret 13 37
+
+ ▐▛███▛█   Claude Code v2.1.311
+▝▜██████▀  Opus 5.5 with medium effort · Claude Max
+ ▝▝   ▝▝   /tmp/kampr-paragraphs-cUXv9O · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ push the branch when the tests go green
+
+  then tag it
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ don't ask on (shift+tab to cycle)

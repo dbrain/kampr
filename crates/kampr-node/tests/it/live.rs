@@ -11768,6 +11768,29 @@ async fn until_composer(socket: &mut Socket, pane: &str, wanted: impl Fn(&Value)
 /// line half-typed into it and the caret at the end of the words.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_line_half_typed_into_claudes_own_box_reaches_the_conversation() {
+    claudes_box_reaches_the_conversation(
+        &["\\302\\240push the branch when"],
+        (2, 23),
+        "push the branch when",
+    )
+    .await;
+}
+
+/// The operator: *"i pasted a message and sent now my conversation log has the message i sent as
+/// "you" and another copy as "sending""*. Claude 2.1.311 draws a blank line in its box as an empty
+/// row (#622), and a read that stopped there lost the caret under it: the box went out as gone, the
+/// reply box lost step with the pane, and the record came back holding the message twice.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_message_of_two_paragraphs_in_claudes_own_box_reaches_the_conversation() {
+    claudes_box_reaches_the_conversation(
+        &["\\302\\240push the branch when", "", "  then tag it"],
+        (4, 14),
+        "push the branch when\n\nthen tag it",
+    )
+    .await;
+}
+
+async fn claudes_box_reaches_the_conversation(rows: &[&str], caret: (u16, u16), text: &str) {
     let home = tempfile::tempdir().unwrap();
     let project = home.path().join(".claude/projects/-tmp");
     std::fs::create_dir_all(&project).unwrap();
@@ -11798,21 +11821,23 @@ async fn a_line_half_typed_into_claudes_own_box_reaches_the_conversation() {
     until_pane(&mut socket, "convo", &pane, 25).await;
 
     let rule = "─".repeat(60);
+    let boxed = rows.join("\\r\\n");
+    let (row, col) = caret;
     h._session
         .call(
             "pane.send_text",
             json!({
                 "pane_id": local,
                 "text": format!(
-                    "printf '\\033[2J\\033[1;1H{rule}\\r\\n❯\\302\\240push the branch when\\r\\n{rule}\\r\\n  \
-                     ⏵⏵ auto mode on (shift+tab to cycle)\\033[2;23H'; read -r _\n"
+                    "printf '\\033[2J\\033[1;1H{rule}\\r\\n❯{boxed}\\r\\n{rule}\\r\\n  \
+                     ⏵⏵ auto mode on (shift+tab to cycle)\\033[{row};{col}H'; read -r _\n"
                 ),
             }),
         )
         .await;
 
-    let composer = until_pane(&mut socket, "convo.composer", &pane, 15).await;
-    assert_eq!(composer["text"], "push the branch when", "{composer}");
+    let composer = until_composer(&mut socket, &pane, |m| m["text"].is_string()).await;
+    assert_eq!(composer["text"], text, "{composer}");
     assert_eq!(composer["clear"], "\u{3}", "{composer}");
 }
 

@@ -50,6 +50,10 @@ pub struct Layout {
     pub input: usize,
     /// Whether a head line is the harness rather than the answer — a spinner, a tool card.
     pub reject: fn(&str) -> bool,
+    /// The rule drawn under the composer, where one has been measured. A blank line the operator
+    /// writes is an empty row above it (#622), so only a box with a floor can tell that row from
+    /// the end of the box.
+    pub floor: Option<char>,
 }
 
 /// The block the harness is painting at the foot of its screen, if that block is prose.

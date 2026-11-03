@@ -162,13 +162,23 @@ pub fn listening(screen: &[&str], caret: Caret, layout: &Layout) -> bool {
 /// is on one of them.
 fn holding_caret(screen: &[&str], caret: Caret, layout: &Layout) -> Option<(usize, usize)> {
     let head = screen.iter().rposition(|line| opens(line, layout.prompt))?;
-    let mut last = head;
-    for (at, line) in screen.iter().enumerate().skip(head + 1) {
-        if !is_continuation(line, layout.indent) {
-            break;
-        }
-        last = at;
-    }
+    let floor = layout.floor.and_then(|rule| {
+        let below = screen.iter().skip(head + 1);
+        let at = below.clone().position(|line| line.starts_with(rule))?;
+        below
+            .take(at)
+            .all(|line| line.trim().is_empty() || is_continuation(line, layout.indent))
+            .then_some(head + at)
+    });
+    let last = floor.unwrap_or_else(|| {
+        screen
+            .iter()
+            .enumerate()
+            .skip(head + 1)
+            .take_while(|(_, line)| is_continuation(line, layout.indent))
+            .last()
+            .map_or(head, |(at, _)| at)
+    });
     (head..=last)
         .contains(&(caret.row as usize))
         .then_some((head, last))

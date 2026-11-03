@@ -293,6 +293,7 @@ const LAYOUT: Layout = Layout {
     indent: 2,
     input: 2,
     reject: is_not_a_thought,
+    floor: None,
 };
 
 /// One `ctrl+u` takes the whole buffer, wrapped or not. **`ctrl+c` must not be sent to this

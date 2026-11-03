@@ -564,6 +564,7 @@ const LAYOUT: Layout = Layout {
     indent: 2,
     input: 2,
     reject: is_tool_card,
+    floor: Some('─'),
 };
 
 /// **`ctrl+u` is the wrong key here and looks like the right one.** Measured against a 200-column

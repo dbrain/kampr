@@ -131,7 +131,7 @@ def run(harness, cfg, call):
 
     mirror = Mirror()
     box = ""
-    steps = [("type", c) for c in "push the branch"] + [
+    steps = [("type", c) for c in "push the branch"] + ([("type", c) for c in "\n\nthen tag it"] if os.environ.get("PARAGRAPHS") else []) + [
         ("edit", "push now the branch"), ("edit", "push the branch"), ("edit", "push the main branch"),
         ("edit", "push the main branch\nand tag it"), ("edit", "push the main branch\nand tag"),
         ("edit", "git push the main branch\nand tag"),

@@ -115,6 +115,17 @@ fn a_line_too_long_for_the_box_is_read_whole_and_not_just_its_first_row() {
     }
 }
 
+/// Claude 2.1.311 draws a blank line in its box as an empty row between the two rules (#622). A
+/// read that ended there lost the caret below it and published a message of two paragraphs as no
+/// box at all.
+#[test]
+fn a_blank_line_inside_claudes_box_is_part_of_the_line() {
+    let line = composed(&claude(), "claude-paragraphs").expect("nothing read");
+    let text = format!("{TYPED}\n\nthen tag it");
+    assert_eq!(line.text, text);
+    assert_eq!(line.caret, text.chars().count());
+}
+
 /// `ctrl+a` puts the caret back at the input column with the operator's text still on the line.
 /// A placeholder is drawn faint and the operator's words are not (#565), so the line is read
 /// with the caret at its front — a reply box that took it for empty would type in front of it.
