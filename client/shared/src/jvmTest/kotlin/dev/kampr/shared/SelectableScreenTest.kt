@@ -85,14 +85,14 @@ private fun Scaffolded(screen: Screen) {
     }
 }
 
-private fun <T> scene(content: @Composable () -> Unit, body: (ImageComposeScene) -> T): T {
+private fun <T> scene(content: @Composable () -> Unit, body: (ImageComposeScene) -> T): T = onSceneThread {
     val density = Density(2f)
     val made = ImageComposeScene(
         width = with(density) { 390.dp.roundToPx() },
         height = with(density) { 844.dp.roundToPx() },
         density = density,
     ) { content() }
-    return try {
+    try {
         body(made)
     } finally {
         made.close()

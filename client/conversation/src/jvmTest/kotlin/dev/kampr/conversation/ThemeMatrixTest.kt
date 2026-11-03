@@ -99,7 +99,7 @@ private fun sheet(
     scale: TypeScale,
     name: String,
     content: @Composable (ThemeSpec) -> Unit,
-) {
+) = onSceneThread {
     val density = Density(2f)
     val scene = ImageComposeScene(
         width = with(density) { (width * AllThemes.size).roundToPx() },

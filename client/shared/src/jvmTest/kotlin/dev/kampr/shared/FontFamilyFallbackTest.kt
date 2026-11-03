@@ -27,7 +27,7 @@ private fun face(name: String) = Font(name, File(FONTS, "$name.ttf").readBytes()
 
 // Lit subpixels rather than a control image: an antialiasing difference of a few pixels is not a
 // different glyph, and #271 already learned that comparing images here fails on 212 of them.
-private fun ink(family: FontFamily, text: String): Int {
+private fun ink(family: FontFamily, text: String): Int = onSceneThread {
     val scene = ImageComposeScene(width = 140, height = 140, density = Density(1f)) {
         Box(Modifier.fillMaxSize()) {
             BasicText(text, style = TextStyle(fontFamily = family, fontSize = 72.sp, color = Color.White))
@@ -39,7 +39,7 @@ private fun ink(family: FontFamily, text: String): Int {
     check(image.readPixels(bitmap)) { "the scene rendered no pixels" }
     val bytes = bitmap.readPixels()!!
     scene.close()
-    return (bytes.indices step 4).count { bytes[it].toInt() and 0xFF != 0 }
+    (bytes.indices step 4).count { bytes[it].toInt() and 0xFF != 0 }
 }
 
 // The claim the whole terminal-face build rests on, asserted rather than repeated. `terminalmono`

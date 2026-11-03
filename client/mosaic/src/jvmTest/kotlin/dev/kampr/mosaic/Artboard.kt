@@ -104,7 +104,7 @@ fun renderArtboard(
     file: File,
     ground: Ground = Ground.Dark,
     content: @Composable () -> Unit,
-) {
+) = onSceneThread {
     val density = Density(2f)
     val scene = ImageComposeScene(
         width = with(density) { width.roundToPx() },
@@ -286,3 +286,12 @@ fun Fixture.fourPanes() {
 val PORTRAIT = 390.dp to 844.dp
 val LANDSCAPE = 844.dp to 390.dp
 val DESKTOP = 1440.dp to 900.dp
+
+// Every scene is driven on the AWT event thread: Compose posts its layout bookkeeping there, and a
+// scene driven from the test's own thread can close over a half-updated list and throw (CMP-10678).
+internal fun <T> onSceneThread(block: () -> T): T {
+    if (javax.swing.SwingUtilities.isEventDispatchThread()) return block()
+    var result: Result<T>? = null
+    javax.swing.SwingUtilities.invokeAndWait { result = runCatching(block) }
+    return result!!.getOrThrow()
+}

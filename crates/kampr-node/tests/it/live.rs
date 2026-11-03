@@ -8620,14 +8620,21 @@ async fn a_paste_into_claude_is_bracketed_so_it_becomes_the_picture() {
     h._session
         .call(
             "pane.send_text",
-            json!({ "pane_id": local, "text": "printf '\\e[?2004h'; IFS= read -r line; case \"$line\" in $'\\e[200~'/*$'\\e[201~') v=BRACKETED;; *) v=PLAIN;; esac; echo VERDICT=$v\n" }),
+            json!({ "pane_id": local, "text": "printf '\\e[?2004h'; echo RE\"\"ADY; IFS= read -r line; case \"$line\" in $'\\e[200~'/*$'\\e[201~') v=BRACKETED;; *) v=PLAIN;; esac; echo VERDICT=$v\n" }),
         )
         .await;
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
-    until(&mut socket, "grid.reset", 15).await;
     // Bash discards unread input as readline hands the terminal back, so the paste waits for the
-    // `read` to be running.
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // command to be running: `READY` is printed by it, and spelled apart in the line typed.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut running = false;
+    while tokio::time::Instant::now() < deadline && !running {
+        if let Some(message) = recv(&mut socket, Duration::from_secs(3)).await {
+            running = matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset"))
+                && message.to_string().contains("READY");
+        }
+    }
+    assert!(running, "the shell never started the read");
 
     send(
         &mut socket,
@@ -8646,16 +8653,14 @@ async fn a_paste_into_claude_is_bracketed_so_it_becomes_the_picture() {
     // A harness with no transcript yet is one the node holds input for (#535), so the newline
     // that ends the shell's `read` waits until the path is on its line.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    while tokio::time::Instant::now() < deadline {
-        let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
-            continue;
-        };
-        if matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset"))
-            && message.to_string().contains("clshot-")
-        {
-            break;
+    let mut landed = false;
+    while tokio::time::Instant::now() < deadline && !landed {
+        if let Some(message) = recv(&mut socket, Duration::from_secs(3)).await {
+            landed = matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset"))
+                && message.to_string().contains("clshot-");
         }
     }
+    assert!(landed, "the path never reached the pane's line");
     h._session
         .call("pane.send_text", json!({ "pane_id": local, "text": "\n" }))
         .await;

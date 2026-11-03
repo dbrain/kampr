@@ -38,7 +38,7 @@ private fun face(name: String, weight: FontWeight = FontWeight.W400) = Font(name
 private val UI = FontFamily(face("manrope_400"))
 private val TERMINAL = FontFamily(face("terminalmono_regular"))
 
-private fun ink(text: AnnotatedString, family: FontFamily): Int {
+private fun ink(text: AnnotatedString, family: FontFamily): Int = onSceneThread {
     val scene = ImageComposeScene(width = 200, height = 120, density = Density(1f)) {
         Box(Modifier.fillMaxSize()) {
             BasicText(
@@ -53,7 +53,7 @@ private fun ink(text: AnnotatedString, family: FontFamily): Int {
     check(image.readPixels(bitmap)) { "the scene rendered no pixels" }
     val bytes = bitmap.readPixels()!!
     scene.close()
-    return (bytes.indices step 4).count { bytes[it].toInt() and 0xFF != 0 }
+    (bytes.indices step 4).count { bytes[it].toInt() and 0xFF != 0 }
 }
 
 // The other half of the report. `terminalmono` is rebuilt to carry every symbol an agent draws,

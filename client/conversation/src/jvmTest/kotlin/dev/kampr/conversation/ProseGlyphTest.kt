@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
 private const val PROSE = "✅ the width inference landed ● and ⎿ the tree held ⇒ done 🎧"
 private const val PLAIN = "the width inference landed and the tree held, done."
 
-private fun drawn(source: String, tokens: KamprTokens): Int {
+private fun drawn(source: String, tokens: KamprTokens): Int = onSceneThread {
     val scene = ImageComposeScene(width = 420, height = 260, density = Density(2f)) {
         CompositionLocalProvider(LocalTokens provides tokens) {
             Box(Modifier.fillMaxSize()) { Markdown(source, "", Modifier.fillMaxSize()) }
@@ -41,7 +41,7 @@ private fun drawn(source: String, tokens: KamprTokens): Int {
     // The ground is opaque, so ink is whatever is not the ground. Counted rather than compared as
     // an image: #271 already learned that a control image here fails on antialiasing alone.
     val ground = bytes.copyOfRange(0, 4).toList()
-    return (bytes.indices step 4).count { bytes.copyOfRange(it, it + 4).toList() != ground }
+    (bytes.indices step 4).count { bytes.copyOfRange(it, it + 4).toList() != ground }
 }
 
 // The seam, end to end through the view that renders a message. `routed = false` is the same

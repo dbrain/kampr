@@ -224,8 +224,11 @@ class PasteSurfaceTest {
         waitForIdle()
         onNodeWithContentDescription("Send this reply to claude").assertIsNotEnabled()
 
-        mainClock.advanceTimeBy(PLACED_ANSWER_WAIT_MS + 1_000)
-        waitForIdle()
+        // In steps, so the wait is over however late in the first frames its effect began.
+        repeat(((PLACED_ANSWER_WAIT_MS + 1_000) / 1_000).toInt() * 2) {
+            mainClock.advanceTimeBy(1_000)
+            waitForIdle()
+        }
         absent("Sending shot.png")
         onNodeWithContentDescription("Send this reply to claude").assertIsEnabled()
     }

@@ -68,7 +68,7 @@ private fun terminalFamily(): FontFamily {
     )
 }
 
-private fun render(rows: List<List<Run>>, name: String): Pair<BufferedImage, Float> {
+private fun render(rows: List<List<Run>>, name: String): Pair<BufferedImage, Float> = onSceneThread {
     val state = paneOf(*rows.toTypedArray())
     val surface = SurfaceRows(state)
     val family = terminalFamily()
@@ -109,7 +109,7 @@ private fun render(rows: List<List<Run>>, name: String): Pair<BufferedImage, Flo
             }
         }
     }
-    return try {
+    try {
         scene.render()
         val image = scene.render()
         OUT.mkdirs()

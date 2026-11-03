@@ -183,7 +183,7 @@ fun <T> withScene(
     ground: Ground,
     content: @Composable () -> Unit,
     body: (ImageComposeScene) -> T,
-): T {
+): T = onSceneThread {
     val density = Density(2f)
     val scene = ImageComposeScene(
         width = with(density) { width.roundToPx() },
@@ -198,7 +198,7 @@ fun <T> withScene(
             Box(Modifier.fillMaxSize()) { content() }
         }
     }
-    return try {
+    try {
         body(scene)
     } finally {
         scene.close()
@@ -224,3 +224,12 @@ fun renderArtboard(
 val PORTRAIT = 390.dp to 844.dp
 val LANDSCAPE = 844.dp to 390.dp
 val DESKTOP = 1440.dp to 900.dp
+
+// Every scene is driven on the AWT event thread: Compose posts its layout bookkeeping there, and a
+// scene driven from the test's own thread can close over a half-updated list and throw (CMP-10678).
+internal fun <T> onSceneThread(block: () -> T): T {
+    if (javax.swing.SwingUtilities.isEventDispatchThread()) return block()
+    var result: kotlin.Result<T>? = null
+    javax.swing.SwingUtilities.invokeAndWait { result = runCatching(block) }
+    return result!!.getOrThrow()
+}

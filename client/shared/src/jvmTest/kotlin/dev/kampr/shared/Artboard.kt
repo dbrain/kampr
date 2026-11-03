@@ -79,7 +79,7 @@ internal fun render(
     ground: Ground = Ground.Dark,
     density: Density = Density(2f),
     content: @Composable () -> Unit,
-): org.jetbrains.skia.Image {
+): org.jetbrains.skia.Image = onSceneThread {
     val scene = ImageComposeScene(
         width = with(density) { width.roundToPx() },
         height = with(density) { height.roundToPx() },
@@ -89,7 +89,7 @@ internal fun render(
             Box(Modifier.fillMaxSize()) { content() }
         }
     }
-    return try {
+    try {
         scene.render()
         val image = scene.render()
         file.parentFile.mkdirs()
@@ -98,4 +98,13 @@ internal fun render(
     } finally {
         scene.close()
     }
+}
+
+// Every scene is driven on the AWT event thread: Compose posts its layout bookkeeping there, and a
+// scene driven from the test's own thread can close over a half-updated list and throw (CMP-10678).
+internal fun <T> onSceneThread(block: () -> T): T {
+    if (javax.swing.SwingUtilities.isEventDispatchThread()) return block()
+    var result: Result<T>? = null
+    javax.swing.SwingUtilities.invokeAndWait { result = runCatching(block) }
+    return result!!.getOrThrow()
 }
