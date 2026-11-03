@@ -33,5 +33,6 @@ for task in :shared:jvmTest :terminal:jvmTest :shared:testAndroidHostTest; do
 done
 test -s ../crates/kampr-node/dist/index.html || { echo "error: no staged index.html" >&2; exit 1; }
 ls ../crates/kampr-node/dist/*.wasm >/dev/null
+python3 ../scripts/wasm-csp-check.py ../crates/kampr-node/dist ../crates/kampr-node/src/http.rs tools/fixture-node.py
 # Read from the development build: the production one has no names to say which class it is.
 python3 ../scripts/wasm-stability-check.py webApp/build/compileSync/wasmJs/main/developmentExecutable/kotlin/kamprWeb.wasm

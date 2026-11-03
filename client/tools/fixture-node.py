@@ -20,7 +20,7 @@ CSP = (
     "default-src 'self'; "
     "script-src 'self' 'wasm-unsafe-eval'; "
     # Compose Multiplatform injects one :host stylesheet into its shadow root at runtime.
-    "style-src 'self' 'sha256-+bHRyQ0Z1/Lb6dgSILtTESBRCIFl8jkBb/dPQA4Pdnw='; "
+    "style-src 'self' 'sha256-2DtT88WYuzB8DiHdoLqEYkONEwxf9gqsOdTY44QuLA4='; "
     "img-src 'self' data: blob:; "
     "font-src 'self'; "
     "connect-src 'self' ws: wss:; "

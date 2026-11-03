@@ -29,13 +29,13 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// `'wasm-unsafe-eval'` is what a Compose Multiplatform wasm bundle needs and is strictly weaker
 /// than `'unsafe-eval'`: it permits WebAssembly compilation and nothing else.
 ///
-/// The `style-src` hash covers the single `<style>` CMP injects into its shadow root:
-/// `:host { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none;
-/// position: relative }`. Dropping it costs an OS long-press callout over the terminal and the
-/// positioning ancestor the offscreen input anchors to. A hash rather than `'unsafe-inline'`
-/// because pane output is the most attacker-influenced surface here — and note a browser ignores
-/// `'unsafe-inline'` entirely once any hash is present, so the two cannot be combined as a
-/// belt-and-braces. If a CMP upgrade changes that rule, the console names the expected hash.
+/// The `style-src` hash covers the single `<style>` CMP injects into its shadow root: the
+/// `:host` rule that stops the OS long-press callout and anchors the offscreen input, and since
+/// 1.12 that input's own rules, which keep its caret and text invisible and place it where the IME
+/// expects. A hash rather than `'unsafe-inline'` because pane output is the most
+/// attacker-influenced surface here — and note a browser ignores `'unsafe-inline'` entirely once
+/// any hash is present, so the two cannot be combined as a belt-and-braces.
+/// `scripts/wasm-csp-check.py` fails the gate when a CMP upgrade changes the stylesheet.
 ///
 /// `connect-src 'self'` and Google Fonts' file host, nothing else. A bare `ws:` / `wss:` matches
 /// *any* host, which hands anything that gets a script onto this page a clean channel out; CSP3
@@ -45,7 +45,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 /// the page is open and the glyph stays tofu.
 const CSP: &str = "default-src 'self'; \
      script-src 'self' 'wasm-unsafe-eval'; \
-     style-src 'self' 'sha256-+bHRyQ0Z1/Lb6dgSILtTESBRCIFl8jkBb/dPQA4Pdnw='; \
+     style-src 'self' 'sha256-2DtT88WYuzB8DiHdoLqEYkONEwxf9gqsOdTY44QuLA4='; \
      img-src 'self' data: blob:; \
      font-src 'self' data: https://fonts.gstatic.com; \
      connect-src 'self' https://fonts.gstatic.com; \
