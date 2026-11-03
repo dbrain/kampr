@@ -8620,7 +8620,7 @@ async fn a_paste_into_claude_is_bracketed_so_it_becomes_the_picture() {
     h._session
         .call(
             "pane.send_text",
-            json!({ "pane_id": local, "text": "printf '\\e[?2004h'; echo RE\"\"ADY; IFS= read -r line; case \"$line\" in $'\\e[200~'/*$'\\e[201~') v=BRACKETED;; *) v=PLAIN;; esac; echo VERDICT=$v\n" }),
+            json!({ "pane_id": local, "text": "printf '\\e[?2004h'; echo RE\"\"ADY; IFS= read -r line; case \"$line\" in $'\\e[200~'/*$'\\e[201~') v=BRACKETED;; *) v=PLAIN;; esac; echo VERDICT=$v; printf 'READ=%q.\\n' \"$line\"\n" }),
         )
         .await;
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
@@ -8696,9 +8696,22 @@ async fn a_paste_into_claude_is_bracketed_so_it_becomes_the_picture() {
         }
     }
     let got = got.expect("the shell never printed what it read");
+    let screen = h
+        ._session
+        .call(
+            "pane.read",
+            json!({ "pane_id": local, "source": "visible", "lines": 40 }),
+        )
+        .await;
+    let read = screen.to_string();
+    let read = read
+        .rsplit("READ=")
+        .next()
+        .and_then(|rest| rest.split(".\\n").next())
+        .unwrap_or("nothing");
     assert_eq!(
         got, "VERDICT=BRACKETED",
-        "the path did not arrive as one bracketed paste: {got}"
+        "the path did not arrive as one bracketed paste; the shell read {read}"
     );
     assert!(std::path::Path::new(&path).is_file(), "{path}");
 
