@@ -8602,7 +8602,10 @@ async fn a_quiet_paste_lands_on_the_node_answers_with_its_path_and_types_nothing
 #[tokio::test(flavor = "multi_thread")]
 async fn a_paste_into_claude_is_bracketed_so_it_becomes_the_picture() {
     let home = tempfile::tempdir().unwrap();
-    let h = harness!("paste-claude");
+    // A node knows Claude only where Claude has a home: a runner that has never run it has none.
+    std::fs::create_dir_all(home.path().join(".claude/projects")).unwrap();
+    let home_path = home.path().display().to_string();
+    let h = harness!("paste-claude", |c: &mut Config| c.journals.home = home_path);
     let token = h.token(Role::Full).await;
     let mut socket = h.connect(&token).await;
     until(&mut socket, "hello", 10).await;
