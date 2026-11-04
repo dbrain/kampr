@@ -58,6 +58,7 @@ fn a_transcript_maps_to_turns_the_way_docs_18_says() {
                 { "id": "m3", "role": "assistant", "blocks": [
                     { "b": "md", "text": "Looking." },
                     { "b": "tool", "name": "bash", "summary": "ls -la src", "lines": 40, "state": "done" },
+                    { "b": "code", "lang": "bash", "text": "ls -la\n  src" },
                     { "b": "code", "text": "a\nb\nc", "role": "output" } ] }
             ]),
         ),
@@ -212,7 +213,10 @@ fn a_failed_call_is_an_error() {
     let turn = live.turn(&Workers::default()).unwrap();
     assert_eq!(
         serde_json::to_value(&turn.blocks).unwrap(),
-        json!([{ "b": "tool", "name": "bash", "summary": "false", "state": "error" }])
+        json!([
+            { "b": "tool", "name": "bash", "summary": "false", "state": "error" },
+            { "b": "code", "lang": "bash", "text": "false" }
+        ])
     );
 }
 

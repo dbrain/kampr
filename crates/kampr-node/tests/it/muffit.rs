@@ -396,6 +396,11 @@ async fn watching_serves_the_transcript_then_the_live_turn_then_what_was_recorde
     assert_eq!(blocks[0]["state"], "running", "{live}");
     assert_eq!(
         blocks[1],
+        json!({ "b": "code", "lang": "bash", "text": "ls" }),
+        "{live}"
+    );
+    assert_eq!(
+        blocks[2],
         json!({ "b": "code", "text": "a.rs", "role": "output" }),
         "{live}"
     );
@@ -422,7 +427,8 @@ async fn watching_serves_the_transcript_then_the_live_turn_then_what_was_recorde
         .find(|t| t["id"] == "m4")
         .unwrap_or_else(|| panic!("m4 beside m6: {recorded}"));
     assert_eq!(m4["blocks"][0]["state"], "done", "{recorded}");
-    assert_eq!(m4["blocks"][1]["text"], "a.rs", "{recorded}");
+    assert_eq!(m4["blocks"][1]["text"], "ls", "{recorded}");
+    assert_eq!(m4["blocks"][2]["text"], "a.rs", "{recorded}");
     client
         .turn("the live turn withdrawn", |t| {
             t["id"] == "live" && t["blocks"] == json!([])

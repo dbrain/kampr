@@ -50,6 +50,7 @@ struct Call {
     name: String,
     summary: Option<String>,
     title: Option<String>,
+    command: Option<String>,
     failed: bool,
     finished: bool,
     lines: Option<u32>,
@@ -136,6 +137,7 @@ impl TurnBuilder {
                 if !args.is_empty() {
                     call.summary = one_line(args);
                     call.title = arg_title(args);
+                    call.command = arg_command(args);
                 }
             }
             None => {
@@ -145,6 +147,7 @@ impl TurnBuilder {
                         name: tool.to_string(),
                         summary: one_line(args),
                         title: arg_title(args),
+                        command: arg_command(args),
                         failed,
                         finished,
                         lines: None,
@@ -208,6 +211,13 @@ impl TurnBuilder {
                             depth: None,
                         });
                     }
+                    if let Some(command) = &call.command {
+                        out.push(Block::Code {
+                            lang: Some("bash".into()),
+                            text: command.clone(),
+                            role: None,
+                        });
+                    }
                     if let Some(output) = call.output.as_deref().filter(|o| !o.trim().is_empty()) {
                         out.push(Block::Code {
                             lang: None,
@@ -269,8 +279,16 @@ pub fn turns<'a>(entries: impl IntoIterator<Item = &'a TranscriptEntry>, workers
 }
 
 fn arg_title(args: &str) -> Option<String> {
+    arg_text(args, "title")
+}
+
+fn arg_command(args: &str) -> Option<String> {
+    arg_text(args, "command")
+}
+
+fn arg_text(args: &str, key: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(args).ok()?;
-    value["title"].as_str().map(str::to_string)
+    value[key].as_str().map(str::to_string)
 }
 
 /// The arguments a tool was called with, as one line a card can carry.
