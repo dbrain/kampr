@@ -16,6 +16,9 @@ pub mod handshake;
 pub mod peers;
 pub mod shadow;
 pub mod transport;
+pub mod ws;
+
+pub const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub use dial::{DialPolicy, Hub, dial, mesh_url, supervise};
 pub use handshake::{Accepted, HandshakeError, HubIdentity, MESH_PROTOCOL, Presence, accept, greet};

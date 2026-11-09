@@ -1,11 +1,9 @@
 use crate::session;
 use crate::state::{BUILD, Node};
-use axum::extract::ws::{Message, WebSocket};
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
 use kampr_auth::{Entry, MeshRole};
 use kampr_mesh::dial::{DialPolicy, Hub};
-use kampr_mesh::{HubIdentity, Incoming, Link, Outgoing, Presence};
+use kampr_mesh::ws::ServerSocket;
+use kampr_mesh::{HubIdentity, Outgoing, Presence};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -58,62 +56,13 @@ impl Drop for Supervised {
     }
 }
 
-pub struct WsOut(SplitSink<WebSocket, Message>);
-
-pub struct WsIn(SplitStream<WebSocket>, Arc<Heard>);
-
-/// Whether anything has arrived from the far end since it was last asked.
-///
-/// A pong is the only frame a frozen peer still produces — its websocket library answers one
-/// without waking the application — so this counts *every* frame rather than only the text ones
-/// `recv` passes up. Read and cleared by the writer's keepalive; see [`Outgoing::ping`].
-///
-/// **One flag for both transports**, the accepted link and the dialled one, because it answers
-/// the same question about both and only one of them had it (#500).
-pub use kampr_mesh::Heard;
-
-impl Outgoing for WsOut {
-    async fn send(&mut self, text: String) -> bool {
-        self.0.send(Message::text(text)).await.is_ok()
-    }
-
-    async fn close(&mut self) {
-        let _ = self.0.close().await;
-    }
-
-    async fn ping(&mut self) -> bool {
-        self.0.send(Message::Ping(Default::default())).await.is_ok()
-    }
-}
-
-impl Incoming for WsIn {
-    async fn recv(&mut self) -> Option<String> {
-        loop {
-            match self.0.next().await? {
-                Ok(Message::Text(text)) => {
-                    self.1.note();
-                    return Some(text.to_string());
-                }
-                Ok(Message::Close(_)) | Err(_) => return None,
-                Ok(_) => self.1.note(),
-            }
-        }
-    }
-}
-
-pub fn split(socket: WebSocket) -> (Link<WsOut, WsIn>, Arc<Heard>) {
-    let (sink, stream) = socket.split();
-    let heard = Arc::new(Heard::default());
-    (Link::new(WsOut(sink), WsIn(stream, heard.clone())), heard)
-}
-
 /// The hub half: a node dialled in, so authenticate it and then let it drive this node's panes.
 ///
 /// The refusal path is deliberately as loud as the acceptance path in the audit log. An
 /// unenrolled node reaching a hub is either an operator halfway through a join or somebody
 /// knocking, and both are worth a line.
 pub async fn accept(
-    socket: WebSocket,
+    socket: ServerSocket,
     node: Arc<Node>,
     peer: String,
     permit: tokio::sync::OwnedSemaphorePermit,
@@ -125,7 +74,7 @@ pub async fn accept(
             return;
         }
     };
-    let (mut link, _heard) = split(socket);
+    let (mut link, _heard) = kampr_mesh::ws::split(socket);
     let presence = node.presence();
     let accepted = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,

@@ -4,12 +4,11 @@ use crate::attach;
 use crate::session;
 use crate::state::{BUILD, Node};
 use anyhow::{Context, Result};
-use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::{ConnectInfo, FromRequestParts, Path, State};
 use axum::http::header::{
     AUTHORIZATION, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, HeaderMap, HeaderName,
-    IF_NONE_MATCH, ORIGIN, REFERRER_POLICY, STRICT_TRANSPORT_SECURITY, X_CONTENT_TYPE_OPTIONS,
-    X_FRAME_OPTIONS,
+    IF_NONE_MATCH, ORIGIN, REFERRER_POLICY, SEC_WEBSOCKET_PROTOCOL, STRICT_TRANSPORT_SECURITY,
+    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
 };
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode, Uri};
@@ -18,6 +17,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use kampr_auth::{AuthError, Delivery, Device, Role};
 use kampr_core::wire::ErrorCode;
+use kampr_mesh::ws::{IncomingUpgrade, ServerSocket};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::net::SocketAddr;
@@ -57,11 +57,12 @@ const TOKEN_PROTOCOL: &str = "kampr.token.";
 
 /// The largest client message the node will read.
 ///
-/// Every message but one is small — a `prefs` blob is capped at 2 KiB by the store — and
-/// tungstenite's own default of 64 MiB is a `serde_json::Value` a stranger can ask this node to
-/// build. The exception is `paste`, which carries a file the operator chose, and it is the reason
-/// this may not simply be a round number: the client refuses at [`kampr_journal::attach::MAX_BYTES`]
-/// and *says so on screen*, so everything under that must fit through here. A 1 MiB ceiling meant
+/// Every message but one is small — a `prefs` blob is capped at 2 KiB by the store — and a
+/// library's default, tungstenite's was 64 MiB, is a `serde_json::Value` a stranger can ask this
+/// node to build. The exception is `paste`, which carries a file the operator chose, and it is
+/// the reason this may not simply be a round number: the client refuses at
+/// [`kampr_journal::attach::MAX_BYTES`] and *says so on screen*, so everything under that must
+/// fit through here. A 1 MiB ceiling meant
 /// every attachment between the two was encoded, sent, and killed the socket mid-write — with the
 /// composer already reading "sent", because a paste has no acknowledgement to withdraw.
 ///
@@ -76,7 +77,7 @@ const MAX_MESSAGE_BYTES: usize = (kampr_journal::attach::MAX_BYTES as usize).div
 /// *frame*, so it is the real ceiling on anything a peer can send today; applying it as the
 /// message ceiling too cuts that from 64 MiB and changes nothing that works. What bounds the
 /// anonymous half of this endpoint is the handshake semaphore, not this.
-const MAX_MESH_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MESH_MESSAGE_BYTES: usize = kampr_mesh::MAX_MESSAGE_BYTES;
 
 pub fn router(node: Arc<Node>) -> Router {
     let secured = |name: HeaderName, value: &'static str| {
@@ -434,7 +435,7 @@ async fn websocket(
     State(node): State<Arc<Node>>,
     auth: Authenticated,
     headers: HeaderMap,
-    upgrade: WebSocketUpgrade,
+    upgrade: IncomingUpgrade,
 ) -> Response {
     let Authenticated { device, peer } = auth;
     // One token opens as many sockets as its holder likes and each is a session with its own
@@ -445,34 +446,48 @@ async fn websocket(
             "this node is serving all the sessions it will",
         );
     };
-    let upgrade = match headers
-        .get("sec-websocket-protocol")
+    let protocol = headers
+        .get(SEC_WEBSOCKET_PROTOCOL)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| {
             v.split(',')
                 .map(str::trim)
                 .find(|p| p.starts_with(TOKEN_PROTOCOL))
-        }) {
-        Some(protocol) => upgrade.protocols([protocol.to_string()]),
-        None => upgrade,
-    };
-    bounded(upgrade, MAX_MESSAGE_BYTES).on_upgrade(move |socket| async move {
+        })
+        .and_then(|p| HeaderValue::from_str(p).ok());
+    upgraded(upgrade, MAX_MESSAGE_BYTES, protocol, move |socket| async move {
         let _permit = permit;
         session::run(socket, node, device, peer).await;
     })
 }
 
-/// Both halves of the size bound. `max_message_size` alone leaves a single 16 MiB frame readable,
-/// and a frame is buffered whole before the message it belongs to is assembled.
-fn bounded(upgrade: WebSocketUpgrade, max: usize) -> WebSocketUpgrade {
-    upgrade.max_message_size(max).max_frame_size(max)
+fn upgraded<F, Fut>(upgrade: IncomingUpgrade, max: usize, protocol: Option<HeaderValue>, serve: F) -> Response
+where
+    F: FnOnce(ServerSocket) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let (response, socket) = match upgrade.upgrade(kampr_mesh::ws::options(max)) {
+        Ok(upgraded) => upgraded,
+        Err(e) => return refuse(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    tokio::spawn(async move {
+        match socket.await {
+            Ok(socket) => serve(socket).await,
+            Err(e) => tracing::debug!(error = %e, "a websocket upgrade did not complete"),
+        }
+    });
+    let mut response = response.map(axum::body::Body::new);
+    if let Some(protocol) = protocol {
+        response.headers_mut().insert(SEC_WEBSOCKET_PROTOCOL, protocol);
+    }
+    response
 }
 
 /// A peer node dialling in. **No device token and no `Origin` check**, deliberately: mesh
 /// authentication is a mutual ed25519 handshake carried inside the socket, and it is a different
 /// credential space from anything a browser holds. A page that opens this socket gets as far as
 /// being asked to sign a challenge with a key it does not have.
-async fn mesh_socket(State(node): State<Arc<Node>>, Peer(peer): Peer, upgrade: WebSocketUpgrade) -> Response {
+async fn mesh_socket(State(node): State<Arc<Node>>, Peer(peer): Peer, upgrade: IncomingUpgrade) -> Response {
     if !node.config.mesh.accept {
         return refuse(StatusCode::NOT_FOUND, "this node does not accept mesh links");
     }
@@ -489,8 +504,9 @@ async fn mesh_socket(State(node): State<Arc<Node>>, Peer(peer): Peer, upgrade: W
             "this node is busy; try again shortly",
         );
     };
-    bounded(upgrade, MAX_MESH_MESSAGE_BYTES)
-        .on_upgrade(move |socket| crate::mesh::accept(socket, node, peer, permit))
+    upgraded(upgrade, MAX_MESH_MESSAGE_BYTES, None, move |socket| {
+        crate::mesh::accept(socket, node, peer, permit)
+    })
 }
 
 /// The herd's own membership list: who may join, who is joined, and how far away they are.

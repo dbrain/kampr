@@ -6,7 +6,6 @@ use crate::outbox::{Frame, Outbox};
 use crate::pending;
 use crate::state::{BUILD, Node};
 use crate::wire::Wire;
-use axum::extract::ws::WebSocket;
 use base64::Engine;
 use kampr_auth::{Device, Entry, Role};
 use kampr_core::PaneRegistry;
@@ -133,8 +132,8 @@ const CLIENT_VERBS: [&str; 13] = [
     "ping",
 ];
 
-pub async fn run(socket: WebSocket, node: Arc<Node>, device: Device, peer: String) {
-    let (link, heard) = crate::mesh::split(socket);
+pub async fn run(socket: kampr_mesh::ws::ServerSocket, node: Arc<Node>, device: Device, peer: String) {
+    let (link, heard) = kampr_mesh::ws::split(socket);
     let (out, incoming) = link.split();
     run_on_watched(out, incoming, node, device, peer, Caller::Client, Some(heard)).await;
 }
@@ -191,7 +190,7 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
     device: Device,
     peer: String,
     caller: Caller,
-    heard: Option<Arc<crate::mesh::Heard>>,
+    heard: Option<Arc<kampr_mesh::Heard>>,
 ) {
     let outbox = Arc::new(Outbox::new(node.config.limits.client_queue));
     let wire = Arc::new(Wire::new(outbox.clone()));

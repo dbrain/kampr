@@ -3,11 +3,11 @@ use crate::frames::{ConvoPage, Event, Failure, Hello, Managed, NodeCaps, Pending
 use crate::herd::Herd;
 use crate::pane::PaneState;
 use crate::resolve::Session;
-use futures_util::{SinkExt, StreamExt};
 use kampr_core::Backoff;
 use kampr_core::scrollback::ScrollbackDoc;
 use kampr_core::wire::{Cursor, HerdDelta, NodeEntry, PaneEntry, RowRuns, Styles};
 use kampr_mesh::shadow::{StyleTable, decode_row};
+use kampr_mesh::{Incoming, Outgoing};
 use kampr_term::RowDiff;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -15,7 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
 /// How long a connection must stand before it counts as a success worth resetting the backoff
@@ -420,28 +419,26 @@ impl Inner {
     }
 
     async fn serve(self: &Arc<Self>, socket: Socket) -> String {
-        let (mut sink, mut stream) = socket.split();
+        let (mut out, mut incoming) = kampr_mesh::ws::split(socket).0.split();
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         self.opening();
         *self.link.lock().expect("the link lock") = Some(tx);
         self.resubscribe();
         let writer = tokio::spawn(async move {
             while let Some(text) = rx.recv().await {
-                if sink.send(Message::text(text)).await.is_err() {
+                if !out.send(text).await {
                     break;
                 }
             }
         });
         let reason = loop {
-            match stream.next().await {
-                Some(Ok(Message::Text(text))) => {
+            match incoming.recv().await {
+                Some(text) => {
                     if let Some(close) = self.receive(&text) {
                         break close;
                     }
                 }
-                Some(Ok(Message::Close(_))) | None => break "the node closed the socket".into(),
-                Some(Err(e)) => break e.to_string(),
-                Some(Ok(_)) => {}
+                None => break "the node closed the socket".into(),
             }
         };
         writer.abort();

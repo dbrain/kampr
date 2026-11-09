@@ -644,10 +644,12 @@ either without limit. All three are ceilings on the hub side now, generous again
 measured here and unreachable by anything speaking the protocol honestly.
 
 Live sockets and inbound message size are bounded too: `limits.sockets` client sessions at once,
-`limits.mesh_handshakes` handshakes, 1 MiB per message and per frame on `/ws`, and 16 MiB on
-`/mesh` — against tungstenite's 64 MiB/16 MiB defaults. The two differ because a mesh link is the
-client protocol backwards, so a hub *reads* a peer's server frames, and a scrollback document runs
-to several megabytes on a pane deep enough to fill the ring.
+`limits.mesh_handshakes` handshakes, and about 11 MiB per message on `/ws` (the largest paste,
+base64'd) and 16 MiB on `/mesh` — against tungstenite's 64 MiB/16 MiB defaults when it served them.
+The two differ because a mesh link is the client protocol backwards, so a hub *reads* a peer's
+server frames, and a scrollback document runs to several megabytes on a pane deep enough to fill
+the ring. **Both ceilings are on what a message inflates to**, not its bytes on the wire: both
+sockets speak permessage-deflate, and 32 MiB of one character arrives as 32 KB.
 
 A cap on sessions is only a bound if sessions are also *released*, and one class of client never
 released: a peer that freezes rather than closing — a phone suspended in the background, a laptop
@@ -708,6 +710,21 @@ is now surfaced as `herdr_unavailable`, and it is recorded here because *an inte
 frozen terminal as a live one is a security-relevant lie*: it invites someone to believe a command
 took effect. The same failure multiplies across a mesh link, which is why per-node health is part of
 the design rather than a nicety.
+
+### 7.11 Compression puts pane content and attacker content in one deflate context
+
+Every socket that offers permessage-deflate gets it, with one context for the life of the
+connection, because that context is the whole saving (a busy pane's patches: 183 KB as text, 7 KB
+through it). That is the shape CRIME and BREACH exploit: when a secret and attacker-chosen text are
+compressed together, the compressed length says how much of the attacker's guess matched.
+
+Here the secret would be another pane's content and the guess would be text the attacker gets into
+a pane the same client is watching. It needs all of: content in a watched pane, a view of the
+ciphertext's lengths, and many rounds with the victim watching both panes while the guesses go by.
+No credential rides in a compressed frame — the token is in the upgrade's headers, which are not —
+and an attacker who can already type into a watched pane (§3.3) has easier ways to read the
+terminal next to it. Accepted, and recorded because it is a property of the transport rather than
+of any one message.
 
 ---
 

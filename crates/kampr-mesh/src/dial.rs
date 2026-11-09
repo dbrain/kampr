@@ -1,64 +1,14 @@
 use crate::handshake::{HandshakeError, HubIdentity, Presence, greet};
-use crate::transport::{Heard, Incoming, Link, Outgoing};
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
+use crate::ws::{self, ClientSocket, HttpRequestBuilder};
 use kampr_auth::NodeIdentity;
 use kampr_core::Backoff;
 use std::future::Future;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use tracing::{info, warn};
 
-type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-pub struct WsOut(SplitSink<Ws, Message>);
-
-pub struct WsIn(SplitStream<Ws>, Arc<Heard>);
-
-impl WsIn {
-    /// **The half of #284 the dialling side was missing.** A hub is served by the same code that
-    /// serves a browser, and that code asks a socket whether it is still there — but only when it
-    /// is given somewhere to record the answer. Without this the ping arm never ran on an outbound
-    /// link at all: a hub that stopped delivering was indistinguishable from a hub with nothing to
-    /// say, and the node went on serving a socket the hub had already dropped it from, until a
-    /// write happened to fail. Measured on a real herd at **three hours**, ended by the operator
-    /// typing into a pane.
-    pub fn heard(&self) -> Arc<Heard> {
-        self.1.clone()
-    }
-}
-
-impl Outgoing for WsOut {
-    async fn send(&mut self, text: String) -> bool {
-        self.0.send(Message::text(text)).await.is_ok()
-    }
-
-    async fn close(&mut self) {
-        let _ = self.0.close().await;
-    }
-
-    async fn ping(&mut self) -> bool {
-        self.0.send(Message::Ping(Default::default())).await.is_ok()
-    }
-}
-
-impl Incoming for WsIn {
-    async fn recv(&mut self) -> Option<String> {
-        loop {
-            match self.0.next().await? {
-                Ok(Message::Text(text)) => {
-                    self.1.note();
-                    return Some(text.to_string());
-                }
-                Ok(Message::Close(_)) | Err(_) => return None,
-                Ok(_) => self.1.note(),
-            }
-        }
-    }
-}
+pub type WsOut = ws::WsOut<yawc::MaybeTlsStream<TcpStream>>;
+pub type WsIn = ws::WsIn<yawc::MaybeTlsStream<TcpStream>>;
 
 /// A hub this node dials out to.
 #[derive(Debug, Clone)]
@@ -125,31 +75,17 @@ pub async fn dial(
     me: &Presence,
     timeout: Duration,
 ) -> Result<(HubIdentity, WsOut, WsIn), DialError> {
-    // tokio-tungstenite builds its rustls client config from the process default provider, and
-    // this tree carries exactly one — ring. Installing twice is not an error worth reporting.
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let url = mesh_url(&hub.url);
-    let socket = open(&url, timeout).await?;
-    let (sink, stream) = socket.split();
-    let mut link = Link::new(WsOut(sink), WsIn(stream, Arc::default()));
+    let (mut link, _) = ws::split(open(&url, timeout).await?);
     let hub_identity = greet(&mut link, identity, me, hub.join.as_deref(), hub.key.as_deref()).await?;
     let (out, incoming) = link.split();
     Ok((hub_identity, out, incoming))
 }
 
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-// The link carries every relayed keystroke and its echo, a few dozen bytes each way, so Nagle's
-// wait for an ACK is latency on every one of them.
-async fn open(url: &str, timeout: Duration) -> Result<Socket, DialError> {
-    let (socket, _) = tokio::time::timeout(
-        timeout,
-        tokio_tungstenite::connect_async_with_config(url, None, true),
-    )
-    .await
-    .map_err(|_| DialError::Connect(url.to_string(), "timed out".into()))?
-    .map_err(|e| DialError::Connect(url.to_string(), e.to_string()))?;
-    Ok(socket)
+async fn open(url: &str, timeout: Duration) -> Result<ClientSocket, DialError> {
+    ws::connect(url, HttpRequestBuilder::new(), crate::MAX_MESSAGE_BYTES, timeout)
+        .await
+        .map_err(|e| DialError::Connect(url.to_string(), e.to_string()))
 }
 
 /// Keeps one outbound link up for as long as the process lives.
@@ -193,24 +129,33 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn the_link_to_a_hub_sends_a_keystroke_s_frame_the_moment_it_is_written() {
+    async fn the_link_to_a_hub_offers_compression() {
+        use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let addr = listener.local_addr().expect("addr");
         let hub = tokio::spawn(async move {
             let (tcp, _) = listener.accept().await.expect("accept");
-            tokio_tungstenite::accept_async(tcp).await.expect("upgrade")
+            let mut offered = None;
+            #[allow(clippy::result_large_err)]
+            let read = |request: &Request, response: Response| {
+                offered = request
+                    .headers()
+                    .get("sec-websocket-extensions")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                Ok(response)
+            };
+            let socket = tokio_tungstenite::accept_hdr_async(tcp, read)
+                .await
+                .expect("upgrade");
+            (offered, socket)
         });
-        let socket = open(&format!("ws://{addr}/mesh"), Duration::from_secs(5))
+        let _socket = open(&format!("ws://{addr}/mesh"), Duration::from_secs(5))
             .await
-            .expect("dial");
-        let MaybeTlsStream::Plain(tcp) = socket.get_ref() else {
-            panic!("a ws:// link is a plain socket");
-        };
-        assert!(
-            tcp.nodelay().expect("getsockopt"),
-            "Nagle is on, so a relayed frame written while the last is unacknowledged waits"
-        );
-        drop(hub.await);
+            .expect("a hub that declines still links");
+        let (offered, _) = hub.await.expect("the hub");
+        let offered = offered.unwrap_or_default();
+        assert!(offered.starts_with("permessage-deflate"), "offered {offered:?}");
     }
 
     #[test]

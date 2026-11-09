@@ -14,16 +14,20 @@ kampr-auth = { path = "../kampr-auth" }
 kampr-core = { path = "../kampr-core" }
 kampr-term = { path = "../kampr-term" }
 rustls.workspace = true
+rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tokio-tungstenite.workspace = true
+tokio-rustls.workspace = true
 tracing.workspace = true
+url.workspace = true
+yawc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite.workspace = true
 
 [lints]
 workspace = true

@@ -7,6 +7,14 @@ One WebSocket per client at `/ws`, JSON text frames, every message a tagged obje
 Unknown `t` values and unknown fields are **ignored, not errors** — that is how v1 clients survive
 v1.1 nodes.
 
+**Every socket speaks permessage-deflate (RFC 7692) when its client offers it**, `/ws` and `/mesh`
+alike, with one deflate context for the life of the connection. Browsers and OkHttp offer it
+unasked, so the client code does nothing; a client that offers nothing is answered in plain text.
+The context is the point: consecutive frames repeat each other, and a busy pane's `grid.patch`
+stream measured 183 KB as JSON, 133 KB deflated a message at a time and 7 KB through one context.
+A binary encoding of the same model came to the same 102 KB once deflated, which is why the frames
+stay JSON. Message ceilings apply to what a message inflates to.
+
 ## Why cells, not ANSI
 
 The node runs one VT emulator per pane (`kampr-term`, `alacritty`-free, built on `vte`) and ships

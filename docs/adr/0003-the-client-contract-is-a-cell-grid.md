@@ -109,7 +109,10 @@ as cells or as rows — so the wrapped-rows alternative would have paid the same
   contract. The grid is the richer form and rows derive from it; the reverse is not true.
 - **Wire cost becoming the bottleneck on a real cellular link.** The compression numbers are against
   per-cell JSON, not against a binary encoding. If bytes ever matter more than debuggability, the
-  answer is a binary framing of the *same* model — not a different model.
+  answer is a binary framing of the *same* model — not a different model. Measured since: both
+  sockets now deflate with one context per connection, and on a captured stream JSON, MessagePack
+  and CBOR all came to 102 KB that way (from 550, 473 and 475 KB). Binary framing buys nothing
+  that compression has not already taken.
 - **A per-segment `from_top` or a gap sentinel for scrollback.** Named here because it is the one
   known, specified, deliberately-deferred addition to this protocol.
   See [ADR 0004](./0004-scrollback-is-stitched-and-a-gap-discards.md).

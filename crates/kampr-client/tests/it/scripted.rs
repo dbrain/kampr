@@ -20,6 +20,7 @@ const BEAT: Duration = Duration::from_secs(2);
 struct Conn {
     to_client: mpsc::UnboundedSender<Message>,
     from_client: mpsc::UnboundedReceiver<String>,
+    extensions: Option<String>,
 }
 
 impl Conn {
@@ -71,11 +72,17 @@ impl Fake {
                     // offered nothing back has no way to tell a node from anything else on the
                     // port. The fake does what the node does.
                     let mut offered = None;
+                    let mut extensions = None;
                     let accepted = tokio_tungstenite::accept_hdr_async(
                         stream,
                         #[allow(clippy::result_large_err)]
                         |request: &Request, mut response: Response| {
                             offered = request.headers().get("sec-websocket-protocol").cloned();
+                            extensions = request
+                                .headers()
+                                .get("sec-websocket-extensions")
+                                .and_then(|v| v.to_str().ok())
+                                .map(str::to_string);
                             if let Some(protocol) = offered.clone() {
                                 response.headers_mut().insert("sec-websocket-protocol", protocol);
                             }
@@ -91,6 +98,7 @@ impl Fake {
                         .send(Conn {
                             to_client,
                             from_client,
+                            extensions,
                         })
                         .is_err()
                     {
@@ -206,6 +214,20 @@ async fn the_greeting_is_three_frames_and_the_first_prefs_is_not_a_write_ack() {
         "a prefs frame after the greeting is the answer to a write"
     );
     assert_eq!(client.state().prefs["01JNODE/w1:p1"]["zoom"], json!(1.6));
+}
+
+/// A terminal on a hotel's Wi-Fi is the same paid-for link a phone is. The fake agrees to nothing,
+/// so the greeting that follows is also the client falling back to plain text.
+#[tokio::test]
+async fn the_client_offers_compression_and_still_reads_a_node_that_declines_it() {
+    let mut fake = Fake::start().await;
+    let client = fake.client();
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let offered = conn.extensions.clone().unwrap_or_default();
+    assert!(offered.starts_with("permessage-deflate"), "offered {offered:?}");
+    conn.greet(json!([node("01JNODE", "scripted")]), json!([]));
+    assert!(matches!(next(&mut events).await, Event::Connected(_)));
 }
 
 #[tokio::test]

@@ -42,10 +42,13 @@ url.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
+# Only the fake muffit daemon serves a websocket through axum; the node serves its own through yawc.
+axum = { workspace = true, features = ["ws"] }
 kampr-proc = { path = "../kampr-proc" }
 kampr-testkit = { path = "../kampr-testkit" }
 libc.workspace = true
 async-trait.workspace = true
+flate2.workspace = true
 getrandom.workspace = true
 rcgen.workspace = true
 # One test makes the device store genuinely unreadable — a table renamed out from under the

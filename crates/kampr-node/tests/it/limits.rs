@@ -18,9 +18,9 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-struct Harness {
+pub(crate) struct Harness {
     node: Arc<Node>,
-    origin: String,
+    pub(crate) origin: String,
     home: tempfile::TempDir,
     server: tokio::task::JoinHandle<()>,
 }
@@ -33,7 +33,7 @@ impl Drop for Harness {
 }
 
 impl Harness {
-    async fn start(tweak: impl FnOnce(&mut Config)) -> Self {
+    pub(crate) async fn start(tweak: impl FnOnce(&mut Config)) -> Self {
         let home = tempfile::tempdir().expect("a home");
         let listener = http::bind("127.0.0.1:0".parse().unwrap()).expect("a port");
         let port = listener.local_addr().expect("an address").port();
@@ -105,7 +105,7 @@ impl Harness {
         sqlx::query(sql).execute(&mut db).await.expect("a statement");
     }
 
-    async fn token(&self, role: Role) -> String {
+    pub(crate) async fn token(&self, role: Role) -> String {
         let pairing = self
             .node
             .auth

@@ -1,9 +1,8 @@
+use kampr_mesh::ws::{self, ConnectError, HttpRequestBuilder};
+use reqwest::header::HeaderValue;
 use std::time::Duration;
-use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub type Socket = ws::ClientSocket;
 
 /// The exact spelling the node resolves a token from, and the only one it accepts.
 const TOKEN_PROTOCOL: &str = "kampr.token.";
@@ -45,29 +44,19 @@ pub fn ws_url(origin: &str) -> String {
 /// echoes it back verbatim; any other spelling fails the handshake rather than falling back to
 /// something that works.
 pub async fn connect(origin: &str, token: &str, timeout: Duration) -> Result<Socket, DialError> {
-    // tokio-tungstenite builds its rustls client config from the process default provider, and
-    // this tree carries exactly one. Installing twice is not an error worth reporting.
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let url = ws_url(origin);
-    let mut request = url
-        .as_str()
-        .into_client_request()
-        .map_err(|e| DialError::Url(url.clone(), e.to_string()))?;
-    let protocol = format!("{TOKEN_PROTOCOL}{token}");
-    let value = protocol
-        .parse()
+    let protocol = HeaderValue::from_str(&format!("{TOKEN_PROTOCOL}{token}"))
         .map_err(|_| DialError::Url(url.clone(), "the token is not a header value".into()))?;
-    request.headers_mut().insert("sec-websocket-protocol", value);
-    let (socket, _) = tokio::time::timeout(timeout, tokio_tungstenite::connect_async(request))
+    let request = HttpRequestBuilder::new().header("sec-websocket-protocol", protocol);
+    // A node's frames are read here the way a hub reads a peer's, scrollback documents included.
+    ws::connect(&url, request, kampr_mesh::MAX_MESSAGE_BYTES, timeout)
         .await
-        .map_err(|_| DialError::Timeout(url.clone()))?
         .map_err(|e| match e {
-            tokio_tungstenite::tungstenite::Error::Http(response) if response.status() == 401 => {
-                DialError::Refused(origin.trim_end_matches('/').to_string())
-            }
+            ConnectError::Timeout => DialError::Timeout(url.clone()),
+            ConnectError::Status(401) => DialError::Refused(origin.trim_end_matches('/').to_string()),
+            ConnectError::Url(e) => DialError::Url(url.clone(), e),
             e => DialError::Connect(url.clone(), e.to_string()),
-        })?;
-    Ok(socket)
+        })
 }
 
 #[cfg(test)]
