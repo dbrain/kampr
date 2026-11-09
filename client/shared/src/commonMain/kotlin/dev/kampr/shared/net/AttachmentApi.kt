@@ -21,6 +21,7 @@ import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.readAvailable
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CancellationException
+import kotlinx.serialization.Serializable
 
 // Bytes or a sentence. A blank box where a picture should be is the defect this whole surface is
 // most likely to grow, so there is nowhere here for a failure to become an empty success.
@@ -71,6 +72,23 @@ class AttachmentApi(private val client: HttpClient, private val endpoint: Endpoi
         return sliceOf(response.status.value, response.headers[HttpHeaders.ContentRange], response.mime(), body, start, endInclusive)
     }
 
+    // The device's token goes on this request and never into what it answers: a media element
+    // cannot send a header, so it is handed a ticket the node minted for this one file.
+    suspend fun streamUrl(pane: String, id: String): String? = try {
+        val response = client.post(url(pane, id)) { bearer() }
+        if (response.status != HttpStatusCode.OK) {
+            null
+        } else {
+            lenient.decodeFromString<Minted>(response.bodyAsText()).ticket
+                .takeIf { it.isNotEmpty() }
+                ?.let { "${endpoint.httpBase}/api/stream/${it.encodeURLPathPart()}" }
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Throwable) {
+        null
+    }
+
     // Chunk by chunk from the socket into the sink: the whole file never sits in memory, which is
     // what a download of anything larger than a phone's heap needs.
     suspend fun download(pane: String, id: String, sink: (mime: String?) -> DownloadSink?): String? = try {
@@ -119,6 +137,9 @@ class AttachmentApi(private val client: HttpClient, private val endpoint: Endpoi
         return uploadResultOf(response.status.value, runCatching { response.bodyAsText() }.getOrDefault(""))
     }
 }
+
+@Serializable
+private class Minted(val ticket: String = "")
 
 private fun io.ktor.client.statement.HttpResponse.mime() = headers[HttpHeaders.ContentType]?.substringBefore(';')?.trim()
 

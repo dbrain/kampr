@@ -160,7 +160,9 @@ Defended by:
   makes `Origin == Host` true for a DNS-rebinding attacker, which is the whole trick.
 - **No credential this node accepts is ambient.** A token travels as a WebSocket subprotocol
   (`kampr.token.<token>`) or an `Authorization` header, and a cross-origin page can set neither
-  without a preflight the node will fail. The node once also accepted a `kampr_session` cookie as a
+  without a preflight the node will fail. The one credential that travels in a URL, a
+  [stream ticket](#stream-tickets), is not ambient either: a browser never attaches it by itself, it
+  reads one file and nothing else, and it is minted only by an authenticated, same-origin `POST`. The node once also accepted a `kampr_session` cookie as a
   fallback for a cookie-based client that was never built; that path is **gone**, because a cookie is
   the one credential a browser attaches by itself and keeping it left every un-gated `GET` one
   deployment decision away from being a CSRF read.
@@ -422,6 +424,24 @@ type-confusion between a registration and an authentication challenge is not pos
 verification is required and counter regression is rejected by the library, which Kampr relies on
 rather than re-implementing. Credentials are scoped to the RP ID **and** joined to a live device, so a
 passkey registered against a hostname the node no longer answers on authenticates nobody.
+
+<a id="stream-tickets"></a>**Stream tickets.** A media element (`<audio>`, `<video>`, Android's
+`MediaPlayer`) fetches a URL and cannot carry an `Authorization` header, so `POST
+/api/attachment/{locator}` mints a ticket and `GET /api/stream/{ticket}` serves that one attachment
+with no header. A ticket is a **capability URL for one file**: 256 bits from the system CSPRNG,
+standing for the minting device's token and one locator, and for nothing else. Minting applies the
+attachment route's own gates (a read-only device is refused a path form with the same audited 403)
+and passes the same-origin gate, so a page on another origin can neither mint one nor learn one. It
+lives **12 hours** — a recording can be hours long and its player re-requests on every seek — and in
+memory only, capped at 512 with the expired evicted first, then the oldest. The TTL is **not** what
+revocation rests on: **every stream request authenticates the stored token again**, so revoking or
+expiring the device stops a player on its next range request. `Referrer-Policy: no-referrer` is
+already on every response, so a ticket never leaves in a `Referer`.
+
+**Residual risk:** a ticket is in a URL, so it lands where URLs land — browser history, devtools,
+the media player's own logs, a proxy's access log. Whoever holds a leaked one can read **that one
+file**, for at most 12 hours from minting and only while the device that minted it is live. They
+can do nothing else with it: it is not a token, opens no socket and names no other path.
 
 **Audit log**, JSONL at 0600, rotating at 8 MiB into one previous generation. It records pairing
 creation, arming, rejection, rate-limiting and redemption; authentication rejection and rate-limiting;

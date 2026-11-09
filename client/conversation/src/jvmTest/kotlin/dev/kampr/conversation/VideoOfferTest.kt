@@ -1,22 +1,37 @@
 package dev.kampr.conversation
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import dev.kampr.shared.wire.Attachment
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
-// An offer existed for `kind == "video"` and nothing in the tree has ever written that kind. Had a
-// node begun to, the reader would have been shown "Show video" over a route that serves no video
-// type inline and a client with no player — the present-and-failing affordance the house rule
-// forbids, waiting for its producer to arrive.
-//
-// So video takes the download every unknown kind takes. The type is still *named* in the card's
-// detail line, because saying what a thing is costs nothing and promises nothing.
+private object NoVoices : Voices {
+    override fun canPlay(mime: String?) = false
+    override fun stream(url: String, mime: String?): Voice = error("nothing here plays")
+}
+
+private class FilmsOf(private val types: Set<String>) : Films {
+    override fun canPlay(mime: String?) = videoType(mime) in types
+
+    @Composable
+    override fun Screen(url: String, name: String, onFailed: () -> Unit, modifier: Modifier) = Unit
+}
+
+// A film is something to look at, so it opens the viewer — and only where this device has a player
+// for its type, or "Show video" is a present-and-failing affordance over a download.
 class VideoOfferTest {
     @Test
-    fun aVideoIsOfferedAsADownloadRatherThanAsSomethingThisClientCanPlay() {
-        val clip = Attachment(id = "a1", kind = "video", mime = "video/mp4", name = "demo.mp4")
-        assertEquals(AttachmentOffer.File, offerFor(clip))
-        assertEquals("Download file", offerFor(clip).label)
+    fun aFilmIsOfferedToWatchOnlyWhereTheDeviceCanPlayIt() {
+        for (clip in listOf(
+            Attachment(id = "a1", kind = "video", mime = "video/mp4", name = "demo.mp4"),
+            Attachment(id = "a2", kind = "file", mime = "video/mp4", name = "demo.mp4"),
+        )) {
+            assertEquals(AttachmentOffer.Video, offerFor(clip))
+            assertEquals(AttachmentOffer.Video, offerOn(clip, NoVoices, FilmsOf(setOf("video/mp4"))))
+            assertEquals(AttachmentOffer.File, offerOn(clip, NoVoices, FilmsOf(emptySet())))
+            assertEquals("Download file", offerOn(clip, NoVoices, FilmsOf(emptySet())).label)
+        }
     }
 
     @Test

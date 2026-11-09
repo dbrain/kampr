@@ -26,11 +26,12 @@ use crate::zipped::{ARCHIVE, ZIP};
 /// bundle. Anything not on this list is bytes to download, never a document to render — and SVG
 /// is deliberately absent, because it is a scriptable document wearing an image's name.
 ///
-/// The audio types are here on the same argument that keeps SVG off. A container on this list is
-/// read by a media decoder and by nothing else: it cannot name an origin, cannot carry script, and
-/// is not a shape a sniffing browser ever promotes to HTML. `audio/ogg` and `audio/mp4` are the two
-/// that could have named a video track, and neither one is reached from a recorded string alone —
-/// [`sniff`] proves the codec out of the bytes before either is minted here.
+/// The audio and video types are here on the same argument that keeps SVG off. A container on
+/// this list is read by a media decoder and by nothing else: it cannot name an origin, cannot carry
+/// script, and is not a shape a sniffing browser ever promotes to HTML. None is reached from the
+/// container's family alone — [`sniff`] mints a type only off an Ogg codec name, an ISO major brand
+/// or an EBML DocType that says which one it is. `video/quicktime` reaching a browser that cannot
+/// play it is a download, because the client asks the device's decoder before it plays anything.
 const RENDERABLE: &[&str] = &[
     "image/png",
     "image/jpeg",
@@ -45,6 +46,9 @@ const RENDERABLE: &[&str] = &[
     "audio/ogg",
     "audio/flac",
     "audio/aiff",
+    "video/mp4",
+    "video/webm",
+    "video/quicktime",
 ];
 
 const OPAQUE: &str = "application/octet-stream";
@@ -250,7 +254,7 @@ pub fn serve_paste(file: &FileRef, pastes: &Path) -> Response {
 fn respond(found: Result<Fetched, JournalError>) -> Response {
     match found {
         Ok(found) => {
-            let prefix = found.data[..found.data.len().min(OGG_CODEC_WINDOW)].to_vec();
+            let prefix = found.data[..found.data.len().min(CODEC_WINDOW)].to_vec();
             response(Served::whole(found), &prefix, Vec::new())
         }
         Err(e) => {
@@ -359,10 +363,11 @@ fn rendered_as(claim: &Claim<'_>, prefix: &[u8]) -> Option<&'static str> {
     }
 }
 
-/// How far into an Ogg stream the codec's own identification packet is looked for. The page header
-/// is 27 bytes plus a segment table, so the first packet starts around byte 28 and the name is
-/// inside it; 64 bytes covers that without letting a `vorbis` somewhere in a payload decide.
-const OGG_CODEC_WINDOW: usize = 64;
+/// How far into an Ogg or EBML stream the codec's or DocType's name is looked for. An Ogg page
+/// header is 27 bytes plus a segment table, so the first packet starts around byte 28 and the name
+/// is inside it; an EBML header names its DocType within its first few elements. 64 bytes covers
+/// both without letting a `vorbis` or `webm` somewhere in a payload decide.
+const CODEC_WINDOW: usize = 64;
 
 pub(crate) fn sniff(data: &[u8]) -> Option<&'static str> {
     let at = |from: usize, magic: &[u8]| {
@@ -379,9 +384,6 @@ pub(crate) fn sniff(data: &[u8]) -> Option<&'static str> {
     }
     if at(0, b"RIFF") && at(8, b"WEBP") {
         return Some("image/webp");
-    }
-    if at(4, b"ftypavif") {
-        return Some("image/avif");
     }
     if at(0, b"BM") {
         return Some("image/bmp");
@@ -401,19 +403,36 @@ pub(crate) fn sniff(data: &[u8]) -> Option<&'static str> {
     if at(0, b"ID3") || (data.len() >= 2 && data[0] == 0xFF && data[1] & 0xE6 == 0xE2) {
         return Some("audio/mpeg");
     }
-    // Ogg and the ISO base media format are the two containers on the list that can hold video, so
-    // neither is minted from the container alone: the codec's own name has to be in the bytes.
+    // Ogg, ISO BMFF and EBML are families, not formats: each holds audio, video and things no
+    // player takes, so the container alone mints nothing and the name of what is inside decides.
     if at(0, b"OggS") {
-        let window = &data[..data.len().min(OGG_CODEC_WINDOW)];
+        let window = &data[..data.len().min(CODEC_WINDOW)];
         if window.windows(6).any(|w| w == b"vorbis") || window.windows(8).any(|w| w == b"OpusHead") {
             return Some("audio/ogg");
         }
         return None;
     }
-    if at(4, b"ftypM4A") {
-        return Some("audio/mp4");
+    if at(4, b"ftyp") {
+        return iso_brand(data.get(8..12)?);
+    }
+    if at(0, b"\x1a\x45\xdf\xa3") {
+        let window = &data[..data.len().min(CODEC_WINDOW)];
+        return window.windows(4).any(|w| w == b"webm").then_some("video/webm");
     }
     None
+}
+
+/// HEIC pictures, camera raws and 3GPP are ISO BMFF too, so this is an allowlist of the major
+/// brands a browser plays rather than anything that opens with `ftyp`.
+fn iso_brand(brand: &[u8]) -> Option<&'static str> {
+    match brand {
+        b"M4A " => Some("audio/mp4"),
+        b"avif" => Some("image/avif"),
+        b"qt  " => Some("video/quicktime"),
+        b"isom" | b"iso2" | b"iso4" | b"iso5" | b"iso6" | b"mp41" | b"mp42" | b"avc1" | b"dash" | b"M4V "
+        | b"M4VP" | b"MSNV" | b"f4v " => Some("video/mp4"),
+        _ => None,
+    }
 }
 
 /// The bytes behind an id on a pane this node does not own, pulled off the peer that does.
@@ -661,18 +680,54 @@ mod tests {
         assert!(disposition(IMAGE, Some("text/html"), &wav()).starts_with("attachment;"));
     }
 
-    // An Ogg page can carry Theora as easily as Vorbis, and the ISO container is worse — `ftyp`
-    // alone is an mp4 video. Neither is minted from the container.
+    // An Ogg page can carry Theora as easily as Vorbis, and no browser plays Theora any more.
     #[test]
-    fn a_container_that_could_hold_video_is_not_audio_until_the_codec_says_so() {
+    fn an_ogg_stream_is_not_audio_until_the_codec_says_so() {
         let mut theora = b"OggS\x00\x02".to_vec();
         theora.extend_from_slice(&[0u8; 23]);
         theora.extend_from_slice(b"\x80theora");
         assert_eq!(served(FILE, None, &theora), OPAQUE);
+    }
 
-        let mut mp4 = b"\x00\x00\x00\x20ftypmp42".to_vec();
-        mp4.extend_from_slice(&[0u8; 16]);
-        assert_eq!(served(FILE, None, &mp4), OPAQUE);
+    fn iso(brand: &[u8; 4]) -> Vec<u8> {
+        let mut bytes = b"\x00\x00\x00\x20ftyp".to_vec();
+        bytes.extend_from_slice(brand);
+        bytes.extend_from_slice(&[0u8; 24]);
+        bytes
+    }
+
+    fn ebml(doctype: &[u8]) -> Vec<u8> {
+        let mut bytes = b"\x1a\x45\xdf\xa3\x9f\x42\x86\x81\x01\x42\x82\x84".to_vec();
+        bytes.extend_from_slice(doctype);
+        bytes.extend_from_slice(&[0u8; 24]);
+        bytes
+    }
+
+    // HEIC pictures and camera raws are ISO BMFF too, so `ftyp` alone says nothing: only a major
+    // brand a browser plays as video is minted.
+    #[test]
+    fn video_is_recognised_by_its_brand_and_nothing_else_in_its_family_is() {
+        let mut cases: Vec<(String, Vec<u8>, &str)> = [
+            b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"dash", b"M4V ",
+            b"M4VP", b"MSNV", b"f4v ",
+        ]
+        .into_iter()
+        .map(|b| (String::from_utf8_lossy(b).into_owned(), iso(b), "video/mp4"))
+        .collect();
+        cases.extend([
+            ("qt".into(), iso(b"qt  "), "video/quicktime"),
+            ("M4A".into(), iso(b"M4A "), "audio/mp4"),
+            ("avif".into(), iso(b"avif"), "image/avif"),
+            ("webm".into(), ebml(b"webm"), "video/webm"),
+            ("matroska".into(), ebml(b"matroska"), OPAQUE),
+            ("heic".into(), iso(b"heic"), OPAQUE),
+            ("mif1".into(), iso(b"mif1"), OPAQUE),
+            ("crx".into(), iso(b"crx "), OPAQUE),
+            ("3gp4".into(), iso(b"3gp4"), OPAQUE),
+        ]);
+        for (name, body, want) in cases {
+            assert_eq!(served(FILE, None, &body), want, "{name}");
+        }
     }
 
     // The bytes only ever get a vote where the record had nothing to say. A record that named a

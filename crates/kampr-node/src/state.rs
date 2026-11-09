@@ -66,6 +66,7 @@ pub struct Node {
     /// Mesh handshakes in flight. Held only across the handshake — an accepted link releases its
     /// permit before it starts serving, or a handful of peers would close the door behind them.
     pub handshakes: Arc<Semaphore>,
+    pub stream_tickets: crate::stream_tickets::StreamTickets,
     journals: watch::Sender<Arc<Journals>>,
     caps: crate::caps::Caps,
     herd: watch::Sender<Arc<HerdModel>>,
@@ -148,6 +149,7 @@ impl Node {
             auth,
             push,
             toaster: crate::toast::Toaster::default(),
+            stream_tickets: crate::stream_tickets::StreamTickets::default(),
             journals,
             caps: crate::caps::Caps::default(),
             herd,

@@ -240,6 +240,8 @@ internal class AppPaneIo(private val state: AppState) : PaneIo {
 
     override suspend fun download(paneId: String, id: String, name: String) = state.attachments<String?>(null) { download(paneId, id) { mime -> openDownload(name, mime) } }
 
+    override suspend fun streamUrl(paneId: String, id: String) = state.attachments<String?>(null) { streamUrl(paneId, id) }
+
     override suspend fun upload(paneId: String, dir: String, name: String, source: UploadSource, progress: (Long) -> Unit) = state.attachments<UploadResult>(UploadResult.Failed(UNCONNECTED)) { upload(paneId, dir, name, source, progress) }
 }
 

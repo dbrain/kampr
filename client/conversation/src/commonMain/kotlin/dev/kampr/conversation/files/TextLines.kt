@@ -18,20 +18,15 @@ internal fun completeUpTo(bytes: ByteArray, size: Int = bytes.size): Int {
     return size
 }
 
-fun looksLikeText(bytes: ByteArray): Boolean {
-    if (bytes.any { it == 0.toByte() }) return false
-    val cut = completeUpTo(bytes)
-    return runCatching { bytes.decodeToString(0, cut, throwOnInvalidSequence = true) }.isSuccess
-}
-
 // A file arriving in slices, kept as the lines it has so far. A line is only a line once its
 // newline has arrived: the text after the last one is held back until the next slice or the end.
 // A `\r` before the newline is kept, so the text copied is the text that was there.
-class TextLines {
+class TextLines(val encoding: TextEncoding = TextEncoding.Utf8) {
     private val done = ArrayList<String>()
     private var tail = ""
     private var carry = ByteArray(0)
     private var trailing = false
+    private var started = false
 
     var bytes = 0L
         private set
@@ -45,9 +40,9 @@ class TextLines {
     fun append(slice: ByteArray) {
         bytes += slice.size
         val joined = if (carry.isEmpty()) slice else carry + slice
-        val cut = completeUpTo(joined)
+        val cut = encoding.wholeUpTo(joined)
         carry = joined.copyOfRange(cut, joined.size)
-        val parts = (tail + joined.decodeToString(0, cut)).split('\n')
+        val parts = (tail + decoded(joined, cut)).split('\n')
         for (i in 0 until parts.lastIndex) add(parts[i])
         tail = parts.last()
     }
@@ -55,7 +50,7 @@ class TextLines {
     fun end() {
         if (ended) return
         ended = true
-        if (carry.isNotEmpty()) tail += carry.decodeToString()
+        if (carry.isNotEmpty()) tail += decoded(carry, carry.size)
         carry = ByteArray(0)
         trailing = tail.isEmpty() && done.isNotEmpty()
         if (tail.isNotEmpty()) add(tail)
@@ -63,6 +58,10 @@ class TextLines {
     }
 
     fun text(): String = done.joinToString("\n", postfix = if (trailing) "\n" else "")
+
+    private fun decoded(bytes: ByteArray, to: Int): String = encoding.decode(bytes, to, first = !started).also {
+        if (it.isNotEmpty()) started = true
+    }
 
     private fun add(line: String) {
         done += line

@@ -16,8 +16,12 @@ const val COPY_MOST = 64L * 1024 * 1024
 
 // A text file read a slice at a time as the reader scrolls towards its end. Each slice starts where
 // the bytes so far end, not where the last request asked to end: a node may answer short.
-class TextStream(first: AttachmentSlice.Ok, private val next: suspend (start: Long, endInclusive: Long) -> AttachmentSlice) {
-    val lines = TextLines()
+class TextStream(
+    first: AttachmentSlice.Ok,
+    encoding: TextEncoding = TextEncoding.Utf8,
+    private val next: suspend (start: Long, endInclusive: Long) -> AttachmentSlice,
+) {
+    val lines = TextLines(encoding)
     val total: Long? = first.total
     private val gate = Mutex()
 
@@ -55,7 +59,7 @@ class TextStream(first: AttachmentSlice.Ok, private val next: suspend (start: Lo
     }
 
     companion object {
-        fun whole(bytes: ByteArray, mime: String?) = TextStream(AttachmentSlice.Ok(bytes, mime, bytes.size.toLong())) { _, _ ->
+        fun whole(bytes: ByteArray, mime: String?) = TextStream(AttachmentSlice.Ok(bytes, mime, bytes.size.toLong()), textEncoding(bytes) ?: TextEncoding.Utf8) { _, _ ->
             AttachmentSlice.Failed("Nothing more to read.")
         }
     }

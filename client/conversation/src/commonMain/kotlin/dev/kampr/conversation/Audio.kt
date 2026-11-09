@@ -10,17 +10,26 @@ fun audioType(mime: String?): String? = mime
     ?.lowercase()
     ?.takeIf { it.startsWith("audio/") }
 
-// A sound the device has taken, and which can be started and stopped.
+// A recording the device is playing from the node, which can be started, stopped and moved through.
 //
-// `playing` is polled rather than pushed. Completion is a listener on one target, a promise on
-// another and a line event on the third, and the only thing the card does with the answer is put
-// the button back — so a question asked four times a second while a sound is running costs less
-// than three shapes of callback.
+// Everything about it is polled rather than pushed. Completion, failure and position are a
+// listener on one target, a promise or event on another and a line event on the third, and all the
+// player does with them is redraw a button and a clock — so a question asked a few times a second
+// costs less than three shapes of callback.
 interface Voice {
     fun play()
     fun pause()
+    fun seek(ms: Long)
     fun release()
     val playing: Boolean
+
+    // The decoder gave up on what the node sent. Asked as well as [playing] because a device can
+    // claim a type and still be handed bytes behind it that it cannot read.
+    val failed: Boolean
+    val positionMs: Long
+
+    // Null until the stream has said how long it is, and for a stream that never will.
+    val durationMs: Long?
 }
 
 // What this device can do with a recording.
@@ -36,9 +45,10 @@ interface Voices {
     // be absent rather than present-and-failing, and this is what decides.
     fun canPlay(mime: String?): Boolean
 
-    // Null where the device took the bytes and could not make a sound of them. [canPlay] cannot
-    // rule that out: it answers for a type, and what is behind a type is whatever was on the disk.
-    fun open(bytes: ByteArray, mime: String?): Voice?
+    // Played from a URL that needs no header, because no media element can send one: the node's
+    // stream ticket. It returns at once and loads on its own thread, so composing a player never
+    // waits on the network.
+    fun stream(url: String, mime: String?): Voice
 }
 
 expect val deviceVoices: Voices

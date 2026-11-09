@@ -22,8 +22,6 @@ import kotlin.math.round
 
 private const val IMAGE = "image"
 
-// Kept for `detailOf`, which shortens `video/mp4` to `mp4` in a label. There is no video *offer* —
-// see `offerFor`. Naming a type is not the same as promising to open it.
 private const val VIDEO = "video"
 private const val AUDIO = "audio"
 private const val TEXT = "text"
@@ -34,19 +32,17 @@ private const val TEXT = "text"
 enum class AttachmentOffer(val label: String) {
     Image("Show image"),
     Audio("Play audio"),
+    Video("Show video"),
     Text("Show file"),
     File("Download file"),
 }
 
-// **There is deliberately no video offer.** One existed, reachable only from `kind == "video"`,
-// which nothing in the tree has ever written — and had a node begun to, the reader would have been
-// shown "Show video" over a route that serves no video type inline and a client with no player, so
-// it was a present-and-failing affordance waiting for its producer. Video falls through to the
-// download every unknown kind gets, which is the truth until something can actually play one.
 fun offerFor(att: Attachment): AttachmentOffer = when {
     att.kind == IMAGE -> AttachmentOffer.Image
 
     att.kind == AUDIO || att.mime?.startsWith("$AUDIO/") == true -> AttachmentOffer.Audio
+
+    att.kind == VIDEO || att.mime?.startsWith("$VIDEO/") == true -> AttachmentOffer.Video
 
     // A file whose bytes are words is read here rather than handed to the device's downloads
     // folder, which on a phone is a file the reader then has to go and find an app for.
@@ -58,15 +54,15 @@ fun offerFor(att: Attachment): AttachmentOffer = when {
 // What *this* device will do with it. [offerFor] says what the attachment is, and that is the
 // half a test can pin down; whether there is a decoder behind the word "play" is the other half,
 // and a reader told to press play who gets a file in their downloads folder was lied to. Only
-// audio can lose its offer this way — every other kind reaches the same download in the end.
+// audio and video can lose their offer this way — every other kind reaches the same download in
+// the end.
 //
 // `named` is the path the target was built from, for a client-minted id that carries no `mime`.
-fun offerOn(att: Attachment, voices: Voices, named: String? = null): AttachmentOffer {
-    val offer = offerFor(att)
-    if (offer != AttachmentOffer.Audio) return offer
-    val type = audioType(att.mime) ?: soundType(named ?: att.name)
-    return if (voices.canPlay(type)) offer else AttachmentOffer.File
-}
+fun offerOn(att: Attachment, voices: Voices, films: Films, named: String? = null): AttachmentOffer = when (val offer = offerFor(att)) {
+    AttachmentOffer.Audio -> offer.takeIf { voices.canPlay(audioType(att.mime) ?: soundType(named ?: att.name)) }
+    AttachmentOffer.Video -> offer.takeIf { films.canPlay(att.mime) }
+    else -> offer
+} ?: AttachmentOffer.File
 
 sealed interface AttachmentState {
     data object Idle : AttachmentState
@@ -81,13 +77,11 @@ sealed interface AttachmentState {
         override fun hashCode(): Int = image.hashCode()
     }
 
-    // The bytes and nothing made of them. A [Voice] is a decoder and, on two of the three targets,
-    // a hardware line: it is opened by the card that draws the button and released when that card
-    // leaves the composition, so nothing this store evicts can leave one running.
-    data class Sound(val bytes: ByteArray, val mime: String?) : AttachmentState {
-        override fun equals(other: Any?): Boolean = this === other
-        override fun hashCode(): Int = bytes.size
-    }
+    // Where the recording can be streamed from, and nothing made of it. A [Voice] is a decoder
+    // and, on two of the three targets, a hardware line: it is opened by the card that draws the
+    // button and released when that card leaves the composition, so nothing this store holds can
+    // leave one running.
+    data class Sound(val url: String, val mime: String?) : AttachmentState
     data class Saved(val where: String) : AttachmentState
     data class Failed(val reason: String) : AttachmentState
 }
@@ -97,6 +91,7 @@ fun headlineOf(att: Attachment): String = att.name?.takeIf { it.isNotBlank() }
     ?: when (offerFor(att)) {
         AttachmentOffer.Image -> "Image"
         AttachmentOffer.Audio -> "Audio"
+        AttachmentOffer.Video -> "Video"
         AttachmentOffer.Text -> "File"
         AttachmentOffer.File -> "File"
     }
@@ -143,6 +138,7 @@ private const val THUMBNAILS_AT_ONCE = 2
 class AttachmentStore(
     val pane: String,
     private val voices: Voices = deviceVoices,
+    private val films: Films = deviceFilms,
     private val heldBytes: HeldBytes? = null,
     private val mostImagesHeld: Int = MOST_IMAGES_HELD,
     private val mostPixelBytesHeld: Long = MOST_PIXEL_BYTES_HELD,
@@ -199,20 +195,39 @@ class AttachmentStore(
     // Off the main thread, like the fetch that put the bytes there: `saveToDevice` opens a
     // MediaStore row and writes the whole file, and doing that under a click handler is a frame
     // budget spent on a syscall.
-    suspend fun save(att: Attachment) {
-        val (bytes, mime) = when (val held = states[att.id]) {
-            is AttachmentState.Shown -> held.bytes to held.mime
-            is AttachmentState.Sound -> held.bytes to held.mime
+    //
+    // A recording was never held, so it streams from the node to the downloads instead.
+    suspend fun save(io: PaneIo, att: Attachment) {
+        val where = when (val held = states[att.id]) {
+            is AttachmentState.Shown -> withContext(Dispatchers.Default) {
+                saveToDevice(attachmentFileName(att.name, held.mime, att.id), held.mime, held.bytes)
+            }
+
+            is AttachmentState.Sound -> io.download(pane, att.id, attachmentFileName(att.name, held.mime, att.id))
+
             else -> return
-        }
-        val name = attachmentFileName(att.name, mime, att.id)
-        val where = withContext(Dispatchers.Default) { saveToDevice(name, mime, bytes) } ?: return
+        } ?: return
         savedTo[att.id] = where
+    }
+
+    // A ticket the node no longer holds — it restarted, or twelve hours went by — is replaced by
+    // a new one, and the bar playing it stays where it is.
+    suspend fun restream(io: PaneIo, att: Attachment) {
+        states[att.id] = io.streamUrl(pane, att.id)
+            ?.let { AttachmentState.Sound(it, audioType(att.mime) ?: soundType(att.name)) }
+            ?: AttachmentState.Failed("The node could not stream ${headlineOf(att)}.")
     }
 
     suspend fun open(io: PaneIo, att: Attachment) {
         if (state(att.id) == AttachmentState.Fetching) return
         states[att.id] = AttachmentState.Fetching
+        // A recording plays from the node rather than being fetched whole: an hour of audio is
+        // hundreds of megabytes, and the player only ever needs the part it is at. One this device
+        // cannot decode is the download below, like any other file.
+        if (offerOn(att, voices, films) == AttachmentOffer.Audio) {
+            restream(io, att)
+            return
+        }
         val landed = when (val got = io.attachment(pane, att.id)) {
             is AttachmentBytes.Failed -> AttachmentState.Failed(got.reason)
 
@@ -223,7 +238,6 @@ class AttachmentStore(
         }
         when (landed) {
             is AttachmentState.Shown -> hold(att.id, landed, landed.image.width.toLong() * landed.image.height * 4)
-            is AttachmentState.Sound -> hold(att.id, landed, landed.bytes.size.toLong())
             else -> states[att.id] = landed
         }
     }
@@ -240,12 +254,6 @@ class AttachmentStore(
             if (offer == AttachmentOffer.Image && att.mime != null) {
                 return AttachmentState.Failed("Those bytes are not a picture this device can read.")
             }
-        }
-        // Asked again with the type the node derived from the bytes, rather than trusted from the
-        // guess an extension made before the fetch: a `.wav` that is really an MP3 is a device
-        // that cannot play it, and the honest end of that is the download below.
-        if (offer == AttachmentOffer.Audio && voices.canPlay(mime)) {
-            return AttachmentState.Sound(got.bytes, mime)
         }
         val where = saveToDevice(attachmentFileName(att.name, mime, att.id), mime, got.bytes)
             ?: return AttachmentState.Failed("This device would not take the file.")
@@ -268,6 +276,7 @@ class AttachmentStore(
 @Composable
 fun rememberAttachmentStore(pane: String): AttachmentStore {
     val voices = LocalVoices.current
+    val films = LocalFilms.current
     val held = LocalHeldBytes.current
-    return remember(pane, voices, held) { AttachmentStore(pane, voices, heldBytes = held) }
+    return remember(pane, voices, films, held) { AttachmentStore(pane, voices, films, heldBytes = held) }
 }

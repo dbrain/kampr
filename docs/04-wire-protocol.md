@@ -632,14 +632,25 @@ about which part is the pane anchors every check below on the wrong pane.
 - **A `200` always has a body.** An attachment with no bytes in it is a `404`; there is no such
   thing here as an empty success.
 - **The recorded media type decides what the node shows, never what the node *is*.** It is a string
-  an agent wrote into a file, so it is served back only from a list of image types the node is
-  willing to render inline; anything else — `text/html`, `image/svg+xml` — becomes
-  `application/octet-stream` with an `attachment` disposition. SVG is deliberately not on that list:
-  it is a scriptable document wearing an image's name.
+  an agent wrote into a file, so it is served back only from a list of types the node is willing to
+  render inline; anything else — `text/html`, `image/svg+xml` — becomes `application/octet-stream`
+  with an `attachment` disposition. The list is `image/png`, `image/jpeg`, `image/gif`,
+  `image/webp`, `image/avif`, `image/bmp`, `image/x-icon`, `audio/wav`, `audio/mpeg`, `audio/mp4`,
+  `audio/ogg`, `audio/flac`, `audio/aiff`, `video/mp4`, `video/webm` and `video/quicktime`. A media
+  container is read by a media decoder and nothing else: it names no origin, carries no script and
+  is never promoted to HTML. SVG is deliberately not on that list: it is a scriptable document
+  wearing an image's name. A client asks the device's own decoder before it plays a type, so
+  `video/quicktime` on a browser that cannot play it is a download.
 - **When the record names no media type at all, `Content-Type` is answered from the bytes.** A paste
-  may carry none (#248), and `Content-Type` is what a client names a saved file from. The sniff can
-  only ever produce a type off the same list, so it widens what is shown without widening what is
-  trusted — and a media type the record *did* name is never second-guessed.
+  may carry none (#248), a file on disk has only its extension, and `Content-Type` is what a client
+  names a saved file from. The sniff can only ever produce a type off the same list, so it widens
+  what is shown without widening what is trusted — and a media type the record *did* name is never
+  second-guessed. Ogg, ISO BMFF and EBML are families, so none is typed from its container alone:
+  Ogg needs a Vorbis or Opus codec name (Theora is never typed), ISO BMFF needs a major brand on an
+  allowlist (`M4A ` → `audio/mp4`, `avif` → `image/avif`, `qt  ` → `video/quicktime`, and `isom`,
+  `iso2`, `iso4`, `iso5`, `iso6`, `mp41`, `mp42`, `avc1`, `dash`, `M4V `, `M4VP`, `MSNV`, `f4v ` →
+  `video/mp4`; HEIC, camera raws and 3GPP are none of these), and EBML needs the DocType `webm`
+  (`matroska` is not typed).
 - **The ceiling is 8 MiB decoded**, read off the record's base64 *before* anything is allocated, so a
   record claiming a gigabyte costs a comparison. It is between three and four times the largest
   attachment ever measured (#247).
@@ -840,6 +851,44 @@ rev that names nothing, an id that does not decode — is the one `404`. Past th
   `name/` entries, so an empty one survives. **No symlink is followed** — not out of the directory
   and not within it. Fifos, sockets, devices and anything this user cannot open are left out.
   A path that is not a directory is the one `404`.
+
+#### `POST /api/attachment/{pane}/{id}` and `GET /api/stream/{ticket}` — a stream ticket
+
+An `<audio>` or `<video>` element, and Android's `MediaPlayer`, fetch a URL and cannot send an
+`Authorization` header. Without a way round that a client has to download a whole recording into
+memory before a second of it plays. A stream ticket is that way round: a URL that stands in for one
+device's token and one locator.
+
+```
+POST /api/attachment/01JNODE/w3:p2/<id>        Authorization: Bearer …
+200  Cache-Control: no-store
+     { "ticket": "q3L…43 characters of base64url…" }
+401  { "error": "no device token" }                 // or not authorised, as every /api/* route
+403  { "error": "this device is read-only" }        // a path form, from a read-only device
+404  { "error": "no such attachment" }              // a locator that is not exactly three segments
+
+GET /api/stream/<ticket>                         // no Authorization header
+```
+
+- **The `POST` takes the same locator the `GET` does** and is gated as the `GET` is, from the
+  locator's shape alone: a malformed one is the `404`, and a path form from a read-only device is
+  the same audited `403`. **It reads nothing.** Whether the file exists is answered by the stream
+  request, so a ticket for a path that is not there is minted and then serves the one `404`. It is a
+  non-`GET`, so it passes the same-origin gate.
+- **`GET /api/stream/{ticket}` answers exactly what `GET /api/attachment/{locator}` would** for the
+  device that minted it — the same headers, the same `Range` → `206` on a `file` form, the same
+  mesh relay for a peer's pane, the same `404`. Both routes run one implementation.
+- **The device's token is authenticated again on every request**, so a device revoked or expired
+  mid-playback is refused (`401`) on the player's next range request. An unknown or expired ticket
+  is the `404` `no such attachment`, indistinguishable from a missing file.
+- A ticket is 256 bits from the system CSPRNG, base64url with no prefix (it is not a token and is
+  never accepted as one). It lives **12 hours** from minting — a recording can be hours long and its
+  player asks again on every seek — and only in memory: a node restart forgets every ticket, and the
+  client mints another. At most 512 are live; past that the expired go first, then the oldest.
+  Minting the same locator twice returns two tickets, both valid.
+- **Media goes out uncompressed** on both routes, like anything that answers ranges: an `audio/*` or
+  `video/*` body is already compressed, and a player reads its duration and seeks from the
+  `Content-Length` a compressed response drops. The page's CSP carries `media-src 'self'`.
 
 #### `POST /api/upload/{node}/{local}?dir=<dir>&name=<name>` — a file into a directory
 

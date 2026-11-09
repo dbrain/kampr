@@ -47,6 +47,7 @@ const CSP: &str = "default-src 'self'; \
      script-src 'self' 'wasm-unsafe-eval'; \
      style-src 'self' 'sha256-2DtT88WYuzB8DiHdoLqEYkONEwxf9gqsOdTY44QuLA4='; \
      img-src 'self' data: blob:; \
+     media-src 'self'; \
      font-src 'self' data: https://fonts.gstatic.com; \
      connect-src 'self' https://fonts.gstatic.com; \
      worker-src 'self' blob:; \
@@ -111,7 +112,8 @@ pub fn router(node: Arc<Node>) -> Router {
         .route("/api/mesh/invite", post(create_mesh_invite))
         .route("/api/mesh/{id}/revoke", post(revoke_mesh_node))
         .route("/api/warm", get(warm))
-        .route("/api/attachment/{*locator}", get(attachment))
+        .route("/api/attachment/{*locator}", get(attachment).post(mint_stream))
+        .route("/api/stream/{ticket}", get(stream))
         // A raw `Body` is never held to axum's 2 MB `DefaultBodyLimit` — that limit lives in the
         // buffering extractors — so an upload streams to disk at whatever size it is.
         .route("/api/upload/{*locator}", post(crate::upload_route::upload))
@@ -144,10 +146,10 @@ pub fn router(node: Arc<Node>) -> Router {
         .with_state(node)
 }
 
-/// A file that answers ranges, and a zip, go out as the bytes they are. Compressing either would
-/// make a `Content-Range` count bytes of a body the client never sees, drop the `Content-Length` a
-/// download's progress is drawn from, and spend the node's CPU deflating what is usually already
-/// compressed.
+/// A file that answers ranges, a zip and media go out as the bytes they are. Compressing any of
+/// them would make a `Content-Range` count bytes of a body the client never sees, drop the
+/// `Content-Length` a download's progress and a player's duration and seeking are drawn from, and
+/// spend the node's CPU deflating what is usually already compressed.
 fn not_a_download(
     _: StatusCode,
     _: axum::http::Version,
@@ -156,7 +158,11 @@ fn not_a_download(
 ) -> bool {
     !headers.contains_key(axum::http::header::ACCEPT_RANGES)
         && !headers.contains_key(axum::http::header::CONTENT_RANGE)
-        && headers.get(CONTENT_TYPE).is_none_or(|t| t != crate::zipped::ZIP)
+        && headers.get(CONTENT_TYPE).is_none_or(|t| {
+            t != crate::zipped::ZIP
+                && !t.as_bytes().starts_with(b"audio/")
+                && !t.as_bytes().starts_with(b"video/")
+        })
 }
 
 pub async fn serve(node: Arc<Node>) -> Result<()> {
@@ -409,7 +415,8 @@ fn subprotocol_token(headers: &HeaderMap) -> Option<String> {
 ///
 /// `GET` outside `/ws` is deliberately exempt, and that is only safe because **no credential this
 /// node accepts is ambient**: a bearer header and a WebSocket subprotocol both have to be set by
-/// the caller, and a cross-origin page cannot set either. Reintroducing a cookie credential would
+/// the caller, and a cross-origin page cannot set either. A stream ticket rides in a `GET`'s path,
+/// but a browser never attaches it by itself and it is minted only by a gated `POST`. Reintroducing a cookie credential would
 /// turn every un-gated `GET` into a CSRF read, so it would have to gate them too.
 fn same_origin(node: &Node, headers: &HeaderMap, method: &Method, uri: &Uri) -> bool {
     let guarded = uri.path() == "/ws" || !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
@@ -672,19 +679,105 @@ async fn attachment(
     Path(locator): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    let missing = || refuse(StatusCode::NOT_FOUND, "no such attachment");
+    serve_attachment(node, auth, &locator, &headers).await
+}
+
+/// `POST /api/attachment/{pane}/{id}` — a stream ticket for what the `GET` would serve.
+///
+/// A media element cannot send an `Authorization` header, so it is handed a URL that stands for
+/// this device's token and this one locator. The gates the `GET` decides from the locator's shape
+/// are decided here too, so a read-only device is not handed a ticket for a path it would be
+/// refused; nothing on disk is looked at until the ticket is used.
+async fn mint_stream(
+    State(node): State<Arc<Node>>,
+    auth: Authenticated,
+    Path(locator): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(parsed) = parse_locator(&locator) else {
+        return no_such_attachment();
+    };
+    if parsed.source.as_ref().is_some_and(|s| s.is_path_form())
+        && let Some(response) = auth.refused(&node, "api.attachment.path")
+    {
+        return response;
+    }
+    let Some(token) = bearer(&headers) else {
+        return refuse(StatusCode::UNAUTHORIZED, "no device token");
+    };
+    match node.stream_tickets.mint(&token, &locator) {
+        Ok(ticket) => private_json(json!({ "ticket": ticket })),
+        Err(e) => {
+            tracing::error!(error = %e, "minting a stream ticket");
+            refuse(StatusCode::INTERNAL_SERVER_ERROR, "no ticket could be minted")
+        }
+    }
+}
+
+/// `GET /api/stream/{ticket}` — what `GET /api/attachment/{locator}` serves, with the ticket in
+/// place of the header. The token behind it is authenticated again on every request, so revoking
+/// or expiring the device stops a player between two ranges.
+async fn stream(
+    State(node): State<Arc<Node>>,
+    Peer(peer): Peer,
+    Path(ticket): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(grant) = node.stream_tickets.redeem(&ticket) else {
+        return no_such_attachment();
+    };
+    let device = match node.auth.authenticate(&grant.token, &peer).await {
+        Ok(device) => device,
+        Err(e) => return auth_rejection(e),
+    };
+    serve_attachment(node, Authenticated { device, peer }, &grant.locator, &headers).await
+}
+
+fn no_such_attachment() -> Response {
+    refuse(StatusCode::NOT_FOUND, "no such attachment")
+}
+
+struct ParsedLocator<'a> {
+    node_id: &'a str,
+    pane: String,
+    id: &'a str,
+    source: Option<kampr_journal::Source>,
+}
+
+fn parse_locator(locator: &str) -> Option<ParsedLocator<'_>> {
     let mut parts = locator.split('/');
     let (Some(node_id), Some(local), Some(id), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
-        return missing();
+        return None;
     };
     if node_id.is_empty() || local.is_empty() || id.is_empty() {
-        return missing();
+        return None;
     }
-    let pane = format!("{node_id}/{local}");
+    Some(ParsedLocator {
+        node_id,
+        pane: format!("{node_id}/{local}"),
+        id,
+        source: kampr_journal::Source::decode(id).ok(),
+    })
+}
+
+async fn serve_attachment(
+    node: Arc<Node>,
+    auth: Authenticated,
+    locator: &str,
+    headers: &HeaderMap,
+) -> Response {
+    let Some(ParsedLocator {
+        node_id,
+        pane,
+        id,
+        source,
+    }) = parse_locator(locator)
+    else {
+        return no_such_attachment();
+    };
     let id = id.to_string();
-    let source = kampr_journal::Source::decode(&id).ok();
     // Every path form reads a file this node can see, so every one is gated as typing is, and
     // decided here rather than after the mesh hop — a hub must refuse them on its own device row.
     if let Some(source) = source.as_ref().filter(|s| s.is_path_form()) {
@@ -730,7 +823,7 @@ async fn attachment(
     .await;
     match served {
         Ok(Some(response)) => response,
-        Ok(None) => missing(),
+        Ok(None) => no_such_attachment(),
         Err(_) => refuse(
             StatusCode::INTERNAL_SERVER_ERROR,
             "the attachment could not be read",

@@ -1,6 +1,7 @@
 //! A hub serving a peer's files end to end: a real hub node's HTTP route, a real `Peers` link, and
 //! a real peer node's session on the far end of it — everything but the socket between them.
 
+use crate::stream_tickets;
 use crate::streaming::{self, Client, MIB};
 use crate::upload::{self, listing};
 use kampr_auth::{MeshRole, Role};
@@ -244,4 +245,21 @@ async fn a_peer_drops_a_relayed_upload_that_stops_moving_though_the_hub_still_ho
     }
     assert!(listing(&root).is_empty(), "{:?}", listing(&root));
     drop(held);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ticket_minted_on_the_hub_streams_a_peers_file_by_range() {
+    let herd = Herd::start(Role::Full).await;
+    let dir = tempfile::tempdir().expect("a dir");
+    let (path, bytes) = streaming::a_big_file(dir.path(), MIB);
+    let locator = format!("{}/_/{}", herd.peer_id(), streaming::file(&path).encode());
+    let ticket = stream_tickets::ticket(&herd.c.h.origin, &herd.c.full, &locator).await;
+
+    let span = stream_tickets::stream(&herd.c.h.origin, &ticket, &[("Range", "bytes=1000-1999")]).await;
+    assert_eq!(span.status, 206, "{}", span.text());
+    assert_eq!(
+        span.header("content-range"),
+        Some(format!("bytes 1000-1999/{}", bytes.len()).as_str())
+    );
+    assert!(span.body == bytes[1000..2000]);
 }

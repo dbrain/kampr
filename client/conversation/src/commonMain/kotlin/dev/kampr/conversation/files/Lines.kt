@@ -42,7 +42,7 @@ import dev.kampr.shared.ui.glyphFallback
 
 private const val CHUNK_LINES = 100
 private const val CHUNKS_KEPT = 48
-private const val READ_AHEAD = 200
+internal const val READ_AHEAD = 200
 
 // One line shaped as one text node is fine until the line is a minified bundle: shaping two
 // million characters is a frame nobody gets back. The rest of such a line is still in Copy.
@@ -139,7 +139,7 @@ private fun Line(number: Int, text: AnnotatedString, gutter: Dp, style: TextStyl
 }
 
 @Composable
-private fun End(stream: TextStream) {
+internal fun End(stream: TextStream) {
     val tokens = Kampr.tokens
     if (stream.complete) return
     val failed = stream.failed

@@ -39,6 +39,9 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        wasmJsMain.dependencies {
+            implementation(libs.kotlinx.browser)
+        }
         jvmTest.dependencies {
             implementation(compose.desktop.currentOs)
             implementation(libs.compose.ui.test)

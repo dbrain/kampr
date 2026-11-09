@@ -18,6 +18,7 @@ mod native;
 mod pasted;
 mod push;
 mod raw;
+mod stream_tickets;
 mod streaming;
 mod transfer;
 mod update;

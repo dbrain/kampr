@@ -101,7 +101,7 @@ fun MarkdownTable(table: MdBlock.Table, query: String, modifier: Modifier = Modi
 }
 
 @Composable
-private fun TableRow(
+internal fun TableRow(
     cells: List<AnnotatedString>,
     widths: List<Float>,
     aligns: List<Align>,
@@ -142,7 +142,7 @@ private fun Modifier.ruleBottom(color: Color): Modifier = drawBehind {
 // back into mush, so the overflow goes to the table's own scroller and the page stays put. Never
 // scaled *up* either — a column is as wide as the widest thing in it, and a table grown to fill
 // the pane is the defect this pairs with.
-private fun columnWidths(
+internal fun columnWidths(
     head: List<AnnotatedString>,
     body: List<List<AnnotatedString>>,
     headStyle: TextStyle,

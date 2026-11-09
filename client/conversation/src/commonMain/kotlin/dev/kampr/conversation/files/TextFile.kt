@@ -36,7 +36,17 @@ private sealed interface Changes {
     data class Got(val patches: List<Patch>) : Changes
 }
 
-private fun isMarkdown(name: String) = name.substringAfterLast('.', "").lowercase() in setOf("md", "markdown")
+private fun extension(name: String) = name.substringAfterLast('.', "").lowercase()
+
+private fun isMarkdown(name: String) = extension(name) in setOf("md", "markdown")
+
+private fun isJson(name: String) = extension(name) in setOf("json", "jsonc")
+
+// A first line this long is a document written for a machine; laid out by hand, JSON's first line
+// is a bracket. No whole line yet means the first one is longer than the slice read.
+private const val MINIFIED_LINE = 200
+
+private fun minified(stream: TextStream) = stream.lines.lines.firstOrNull()?.let { it.length > MINIFIED_LINE } ?: (stream.lines.bytes > 0)
 
 @Composable
 fun TextFile(anchor: String, name: String, path: String?, stream: TextStream, modifier: Modifier = Modifier) {
@@ -82,15 +92,30 @@ private fun Note(words: String, tint: Color) {
     KText(words, Kampr.tokens.type.caption, tint, Modifier.fillMaxWidth().padding(16.dp).announce(words), maxLines = 4)
 }
 
+// A file with a reading other than its source lines — markdown laid out, a spreadsheet as a table —
+// opens on that reading, and the source is a press away.
 @Composable
 private fun Contents(name: String, stream: TextStream, modifier: Modifier) {
     val markdown = isMarkdown(name)
-    var rendered by remember(name) { mutableStateOf(markdown) }
+    val delimiter = remember(name, stream) { csvDelimiter(name, stream.lines.lines.firstOrNull().orEmpty()) }
+    val json = isJson(name)
+    val reading = when {
+        markdown -> "Rendered"
+        delimiter != null -> "Table"
+        json -> "Formatted"
+        else -> null
+    }
+    var rendered by remember(name) { mutableStateOf(if (json) minified(stream) else reading != null) }
     Column(modifier.fillMaxWidth()) {
-        if (markdown) {
+        // Said because it was judged from the bytes rather than declared by them, and a reader
+        // looking at mojibake needs to know which guess produced it.
+        stream.lines.encoding.label?.let { label ->
+            KText("Read as $label", Kampr.tokens.type.micro, Kampr.tokens.color.mute, Modifier.padding(horizontal = 12.dp).padding(bottom = 6.dp))
+        }
+        if (reading != null) {
             DisableSelection {
                 Segmented(
-                    listOf("Rendered", "Source"),
+                    listOf(reading, "Source"),
                     if (rendered) 0 else 1,
                     { rendered = it == 0 },
                     Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp),
@@ -99,10 +124,11 @@ private fun Contents(name: String, stream: TextStream, modifier: Modifier) {
                 )
             }
         }
-        if (rendered) {
-            Rendered(stream, Modifier.weight(1f))
-        } else {
-            NumberedLines(stream, langOf(name), Modifier.weight(1f))
+        when {
+            !rendered -> NumberedLines(stream, langOf(name), Modifier.weight(1f))
+            delimiter != null -> CsvTable(stream, delimiter, Modifier.weight(1f))
+            json -> Formatted(stream, Modifier.weight(1f))
+            else -> Rendered(stream, Modifier.weight(1f))
         }
     }
 }
@@ -111,9 +137,7 @@ private fun Contents(name: String, stream: TextStream, modifier: Modifier) {
 // away rather than read behind the reader's back.
 @Composable
 private fun Rendered(stream: TextStream, modifier: Modifier) {
-    val tokens = Kampr.tokens
     val safe = LocalSafeArea.current
-    val scope = rememberCoroutineScope()
     val text = remember(stream.version) { stream.lines.text() }
     SelectionContainer(modifier) {
         Column(
@@ -124,20 +148,37 @@ private fun Rendered(stream: TextStream, modifier: Modifier) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Markdown(text, "")
-            if (!stream.complete) {
-                DisableSelection {
-                    QuietAction(
-                        if (stream.loading) "Reading…" else "Read on",
-                        {
-                            stream.failed = null
-                            scope.launch { stream.more() }
-                        },
-                        Modifier.fillMaxWidth(),
-                        label = "Read more of the file",
-                    )
-                }
-                stream.failed?.let { KText(it, tokens.type.micro, tokens.color.blocked) }
-            }
+            ReadOn(stream)
         }
     }
+}
+
+// Formatting needs the whole document, so like markdown it is laid out from what has been read
+// and the rest is a press away.
+@Composable
+private fun Formatted(stream: TextStream, modifier: Modifier) {
+    val formatted = remember(stream.version) { TextStream.whole(formatJson(stream.lines.text()).encodeToByteArray(), "application/json") }
+    Column(modifier.fillMaxWidth()) {
+        NumberedLines(formatted, "json", Modifier.weight(1f))
+        Column(Modifier.padding(horizontal = 12.dp)) { ReadOn(stream) }
+    }
+}
+
+@Composable
+private fun ReadOn(stream: TextStream) {
+    val tokens = Kampr.tokens
+    val scope = rememberCoroutineScope()
+    if (stream.complete) return
+    DisableSelection {
+        QuietAction(
+            if (stream.loading) "Reading…" else "Read on",
+            {
+                stream.failed = null
+                scope.launch { stream.more() }
+            },
+            Modifier.fillMaxWidth(),
+            label = "Read more of the file",
+        )
+    }
+    stream.failed?.let { KText(it, tokens.type.micro, tokens.color.blocked) }
 }

@@ -23,6 +23,7 @@ private class NodeWithOneAttachment {
         private set
 
     val requests = CopyOnWriteArrayList<String>()
+    val methods = CopyOnWriteArrayList<String>()
     val bearers = CopyOnWriteArrayList<String>()
     private var server: ServerSocket? = null
 
@@ -51,12 +52,20 @@ private class NodeWithOneAttachment {
             header.append(byte.toChar())
         }
         val lines = header.lines()
+        val method = lines.firstOrNull()?.split(' ')?.getOrNull(0).orEmpty()
         val path = lines.firstOrNull()?.split(' ')?.getOrNull(1).orEmpty()
         requests += path
+        methods += method
         lines.firstOrNull { line -> line.startsWith("Authorization:", ignoreCase = true) }
             ?.substringAfter(':')?.trim()?.let(bearers::add)
         val out = it.getOutputStream()
-        if (path.endsWith("/att-7f3")) {
+        if (method == "POST" && path.endsWith("/att-7f3")) {
+            val ticket = """{"ticket":"tkt_s3cr3t"}""".toByteArray()
+            out.write("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${ticket.size}\r\nConnection: close\r\n\r\n".toByteArray())
+            out.write(ticket)
+        } else if (method == "POST") {
+            out.write("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+        } else if (path.endsWith("/att-7f3")) {
             out.write(
                 (
                     "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${PIXELS.size}\r\n" +
@@ -116,5 +125,21 @@ class AttachmentRouteTest {
         }
         assertTrue(got is AttachmentBytes.Failed)
         assertContains(got.reason, "Could not reach the node")
+    }
+
+    // A media element cannot carry the bearer, so the device's token goes on the request that mints
+    // the ticket and never into the URL the player is handed.
+    @Test
+    fun aStreamIsMintedWithTheDeviceTokenAndPlayedFromATicketThatCarriesNone() = withNode { node, api ->
+        val url = runBlocking { api.streamUrl("01JNODE/w3:p2", "att-7f3") }
+        assertEquals("POST", node.methods.single())
+        assertEquals("/api/attachment/01JNODE/w3:p2/att-7f3", node.requests.single())
+        assertEquals("Bearer kmp_live", node.bearers.single())
+        assertEquals("http://127.0.0.1:${node.port}/api/stream/tkt_s3cr3t", url)
+    }
+
+    @Test
+    fun aStreamTheNodeWillNotMintIsNoUrl() = withNode { _, api ->
+        assertEquals(null, runBlocking { api.streamUrl("01JNODE/w3:p2", "att-gone") })
     }
 }

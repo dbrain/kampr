@@ -44,7 +44,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
     val headline = headlineOf(att)
     // What this device will do with it, not only what it is: a recording no decoder here can read
     // is a download, said in the word "download" rather than in a play button that saves a file.
-    val offer = offerOn(att, LocalVoices.current)
+    val offer = offerOn(att, LocalVoices.current, LocalFilms.current)
 
     if (state is AttachmentState.Shown) {
         // A thumbnail and its name, not the picture at full width. A screenshot of a 292-column
@@ -94,6 +94,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                     when (offer) {
                         AttachmentOffer.Image -> ConversationIcons.image
                         AttachmentOffer.Audio -> ConversationIcons.sound
+                        AttachmentOffer.Video -> ConversationIcons.file
                         AttachmentOffer.Text -> ConversationIcons.file
                         AttachmentOffer.File -> ConversationIcons.download
                     },
@@ -147,7 +148,7 @@ fun AttachmentCard(att: Attachment, attachments: AttachmentStore, modifier: Modi
                     QuietAction(
                         offer.label,
                         {
-                            if (offer == AttachmentOffer.Text) show() else scope.launch { attachments.open(io, att) }
+                            if (offer == AttachmentOffer.Text || offer == AttachmentOffer.Video) show() else scope.launch { attachments.open(io, att) }
                         },
                         Modifier.fillMaxWidth(),
                         label = "${offer.label}, $headline",

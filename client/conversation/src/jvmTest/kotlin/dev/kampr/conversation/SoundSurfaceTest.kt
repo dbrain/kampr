@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
@@ -13,6 +14,7 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
 import dev.kampr.shared.model.KamprStore
@@ -43,53 +45,25 @@ private fun said(text: String, role: String = "assistant") = """{"t":"convo","pa
 
 private val SPOKEN = said("rendered it to $CLIP \\u2014 my notes are in $NOTES")
 
-// A decoder this test drives, in place of the device's own. The desktop's is deliberately not used
-// here: opening a JDK audio line starts AWT inside the test JVM and deadlocks the Compose harness,
-// which is the whole reason [LocalVoices] exists — see the comment on `Audio.jvm.kt`.
-private class Decoder(
-    private val types: Set<String> = setOf("audio/wav"),
-    private val deaf: Boolean = false,
-) : Voices {
-    var latest: Sounding? = null
+private const val VOICE_NOTE = "att-voice"
 
-    override fun canPlay(mime: String?): Boolean = audioType(mime) in types
+private val ATTACHED = """{"t":"convo","pane":"$PANE_ID","cursor":"s1","more":false,"turns":[
+        {"id":"s1","role":"user","blocks":[{"b":"md","text":"[audio]","att":{"id":"$VOICE_NOTE","kind":"audio","mime":"audio/wav","name":"memo.wav"}}]}]}"""
 
-    override fun open(bytes: ByteArray, mime: String?): Voice? = if (deaf) null else Sounding().also { latest = it }
-}
-
-private class Sounding : Voice {
-    override var playing = false
-        private set
-
-    fun ended() {
-        playing = false
-    }
-
-    override fun play() {
-        playing = true
-    }
-
-    override fun pause() {
-        playing = false
-    }
-
-    override fun release() {
-        playing = false
-    }
-}
+private const val TICKET = "https://node.test/api/stream/tkt_clip"
 
 private class SoundNode(
     private val type: String? = "audio/wav",
     override val readOnly: Boolean = false,
 ) : PaneIo {
     val asked = mutableListOf<String>()
+    val streamed = mutableListOf<String>()
+    val downloaded = mutableListOf<Pair<String, String>>()
 
     override fun send(msg: ClientMsg) = Unit
 
     override fun prefs(paneId: String): PanePrefs = PanePrefs()
 
-    // The route answers a media type off its own fixed list, read out of the bytes: a `.wav` with
-    // no recorded type comes back as `audio/wav`, and nothing the transcript said decided that.
     override suspend fun attachment(paneId: String, id: String): AttachmentBytes {
         asked += id
         return if (id == fileAttachmentId(CLIP)) {
@@ -97,6 +71,16 @@ private class SoundNode(
         } else {
             AttachmentBytes.Failed("no such attachment")
         }
+    }
+
+    override suspend fun streamUrl(paneId: String, id: String): String? {
+        streamed += id
+        return TICKET.takeIf { id == fileAttachmentId(CLIP) || id == VOICE_NOTE }
+    }
+
+    override suspend fun download(paneId: String, id: String, name: String): String {
+        downloaded += id to name
+        return "Downloads/$name"
     }
 }
 
@@ -133,47 +117,38 @@ class SoundSurfaceTest {
         )
     }
 
-    // One authorised fetch at the id the route reads, and what comes back becomes a player in
-    // place rather than a viewer over the pane: a sound has nothing to look at, and the reader
-    // goes on reading the transcript under it while it runs.
+    // A recording is played from where it lies rather than fetched into memory first: one press
+    // mints a stream at the id the route reads, the player is handed that URL and starts, and not a
+    // byte of the file crosses into this client on the way.
     @Test
-    fun pressing_it_fetches_once_at_the_id_the_route_reads_and_becomes_a_player() = runComposeUiTest {
+    fun one_press_streams_it_from_the_id_the_route_reads_and_plays() = runComposeUiTest {
         val io = SoundNode()
-        setContent { Screen(paneOf(SPOKEN), io, Decoder()) }
+        val decoder = Decoder()
+        setContent { Screen(paneOf(SPOKEN), io, decoder) }
         onNodeWithContentDescription("Play clip.wav").performClick()
-        waitForIdle()
+        waitUntilAtLeastOneExists(hasContentDescription("Pause clip.wav"), 5_000)
 
-        assertEquals(listOf(fileAttachmentId(CLIP)), io.asked)
+        assertEquals(listOf(fileAttachmentId(CLIP)), io.streamed)
+        assertEquals(TICKET, decoder.latest?.url)
+        assertTrue(decoder.latest?.playing == true, "the press reached no player")
+        assertTrue(io.asked.isEmpty(), "the recording was fetched whole instead of streamed")
         onNodeWithContentDescription("Save clip.wav").assertExists()
-        assertTrue(
-            onAllNodesWithText("saved to", substring = true).fetchSemanticsNodes().isEmpty(),
-            "the bytes went straight to the downloads folder instead of to a player",
-        )
-        assertTrue(
-            onAllNodesWithContentDescription("Read clip.wav").fetchSemanticsNodes().isEmpty(),
-            "a recording was offered as a document to read",
-        )
     }
 
-    // The press the operator asked for, end to end through a real composed transcript: the button
-    // reaches the decoder, and the glyph on it says which way the next press goes.
     @Test
-    fun the_second_press_starts_the_sound_and_turns_the_button_into_a_pause() = runComposeUiTest {
+    fun the_button_pauses_and_plays_the_same_sound() = runComposeUiTest {
         val decoder = Decoder()
         setContent { Screen(paneOf(SPOKEN), SoundNode(), decoder) }
         onNodeWithContentDescription("Play clip.wav").performClick()
-        // The first press loads the clip, and the button is only a glyph until its player is back.
-        waitUntilAtLeastOneExists(hasContentDescription("Play clip.wav"), 5_000)
-        onNodeWithContentDescription("Play clip.wav").performClick()
-        waitForIdle()
-
-        onNodeWithContentDescription("Pause clip.wav").assertExists()
-        assertTrue(decoder.latest?.playing == true, "the button was pressed and nothing was played")
+        waitUntilAtLeastOneExists(hasContentDescription("Pause clip.wav"), 5_000)
 
         onNodeWithContentDescription("Pause clip.wav").performClick()
         waitForIdle()
         assertFalse(decoder.latest?.playing == true, "pausing left the sound running")
-        onNodeWithContentDescription("Play clip.wav").assertExists()
+        onNodeWithContentDescription("Play clip.wav").performClick()
+        waitForIdle()
+        assertTrue(decoder.latest?.playing == true, "playing again did nothing")
+        onNodeWithContentDescription("Pause clip.wav").assertExists()
     }
 
     // A sound that runs to its end is not paused by anybody, and the button has to come back on
@@ -183,9 +158,6 @@ class SoundSurfaceTest {
         val decoder = Decoder()
         setContent { Screen(paneOf(SPOKEN), SoundNode(), decoder) }
         onNodeWithContentDescription("Play clip.wav").performClick()
-        // The first press loads the clip, and the button is only a glyph until its player is back.
-        waitUntilAtLeastOneExists(hasContentDescription("Play clip.wav"), 5_000)
-        onNodeWithContentDescription("Play clip.wav").performClick()
         waitUntilAtLeastOneExists(hasContentDescription("Pause clip.wav"), 5_000)
 
         decoder.latest?.ended()
@@ -194,15 +166,90 @@ class SoundSurfaceTest {
         }
     }
 
-    // A type this device claims and bytes it then cannot read. The reader is told, and is still
+    // A type this device claims and a stream it then cannot read. The reader is told, and is still
     // given the file — which is the floor the operator asked for.
     @Test
-    fun bytes_a_decoder_will_not_take_say_so_and_leave_the_file_on_offer() = runComposeUiTest {
+    fun a_stream_the_decoder_will_not_take_says_so_and_leaves_the_file_on_offer() = runComposeUiTest {
         setContent { Screen(paneOf(SPOKEN), SoundNode(), Decoder(deaf = true)) }
         onNodeWithContentDescription("Play clip.wav").performClick()
-        // The decoder answers off the test clock, so idle is not the same as refused.
-        waitUntilAtLeastOneExists(hasText("would not play it", substring = true), 5_000)
+        waitUntilAtLeastOneExists(hasText("would not play", substring = true), 5_000)
         onNodeWithContentDescription("Save clip.wav").assertExists()
+    }
+
+    // Nothing of the recording is held, so keeping it streams from the node to the downloads.
+    @Test
+    fun saving_a_streamed_recording_downloads_it_from_the_node() = runComposeUiTest {
+        val io = SoundNode()
+        setContent { Screen(paneOf(SPOKEN), io, Decoder()) }
+        onNodeWithContentDescription("Play clip.wav").performClick()
+        waitUntilAtLeastOneExists(hasContentDescription("Save clip.wav"), 5_000)
+        onNodeWithContentDescription("Save clip.wav").performClick()
+        waitUntilAtLeastOneExists(hasText("saved to Downloads/clip.wav", substring = true), 5_000)
+        assertEquals(listOf(fileAttachmentId(CLIP) to "clip.wav"), io.downloaded)
+    }
+
+    @Test
+    fun a_node_that_will_not_stream_it_says_so_where_the_button_was() = runComposeUiTest {
+        val io = object : PaneIo by SoundNode() {
+            override suspend fun streamUrl(paneId: String, id: String): String? = null
+        }
+        setContent { Screen(paneOf(SPOKEN), io, Decoder()) }
+        onNodeWithContentDescription("Play clip.wav").performClick()
+        waitUntilAtLeastOneExists(hasText("could not stream", substring = true), 5_000)
+    }
+
+    // An hour-long recording is the case streaming exists for, and an hour with no way into the
+    // middle of it is a recording nobody can use.
+    @Test
+    fun a_long_recording_shows_where_it_is_and_can_be_moved_through() = runComposeUiTest {
+        val decoder = Decoder(lasts = 45 * 60_000L)
+        setContent { Screen(paneOf(SPOKEN), SoundNode(), decoder) }
+        onNodeWithContentDescription("Play clip.wav").performClick()
+        waitUntilAtLeastOneExists(hasText("0:00 / 45:00"), 5_000)
+
+        onNodeWithContentDescription("Position in clip.wav").performSemanticsAction(SemanticsActions.SetProgress) { it(0.5f) }
+        waitUntilAtLeastOneExists(hasText("22:30 / 45:00"), 5_000)
+        assertEquals(45 * 30_000L, decoder.latest?.positionMs)
+    }
+
+    // The other way to the same player: a recording a transcript carries as an attachment.
+    @Test
+    fun a_recording_attached_to_a_turn_streams_too() = runComposeUiTest {
+        val io = SoundNode()
+        val decoder = Decoder()
+        setContent { Screen(paneOf(ATTACHED), io, decoder) }
+        onNodeWithContentDescription("Play audio, memo.wav").performClick()
+        waitUntilAtLeastOneExists(hasContentDescription("Pause memo.wav"), 5_000)
+
+        assertEquals(listOf(VOICE_NOTE), io.streamed)
+        assertEquals(TICKET, decoder.latest?.url)
+        assertTrue(io.asked.isEmpty(), "the attachment was fetched whole instead of streamed")
+    }
+
+    // A ticket dies with the node that minted it. The bar asks for another and plays on from
+    // where the recording stopped.
+    @Test
+    fun a_recording_whose_stream_dropped_plays_on_from_where_it_was_on_a_new_ticket() = runComposeUiTest {
+        var mints = 0
+        val io = object : PaneIo by SoundNode() {
+            override suspend fun streamUrl(paneId: String, id: String): String = "$TICKET?n=${mints++}"
+        }
+        val decoder = Decoder(lasts = 10 * 60_000L)
+        setContent { Screen(paneOf(ATTACHED), io, decoder) }
+        onNodeWithContentDescription("Play audio, memo.wav").performClick()
+        waitUntilAtLeastOneExists(hasContentDescription("Pause memo.wav"), 5_000)
+        val first = requireNotNull(decoder.latest)
+        first.seek(90_000L)
+        first.dropped()
+
+        waitUntilAtLeastOneExists(hasContentDescription("Try again, memo.wav"), 5_000)
+        onNodeWithContentDescription("Try again, memo.wav").performClick()
+        waitUntilAtLeastOneExists(hasContentDescription("Pause memo.wav"), 5_000)
+
+        val second = requireNotNull(decoder.latest)
+        assertEquals("$TICKET?n=1", second.url)
+        assertEquals(90_000L, second.positionMs)
+        assertTrue(second.playing, "the new stream was not played on")
     }
 
     // A device with no decoder for the type must not wear the word "play" at all — the row is the

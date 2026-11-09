@@ -22,6 +22,7 @@ CSP = (
     # Compose Multiplatform injects one :host stylesheet into its shadow root at runtime.
     "style-src 'self' 'sha256-2DtT88WYuzB8DiHdoLqEYkONEwxf9gqsOdTY44QuLA4='; "
     "img-src 'self' data: blob:; "
+    "media-src 'self'; "
     "font-src 'self'; "
     "connect-src 'self' ws: wss:; "
     "worker-src 'self' blob:; "

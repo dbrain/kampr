@@ -1,8 +1,10 @@
 package dev.kampr.conversation
 
-import java.io.ByteArrayInputStream
+import java.io.BufferedInputStream
+import java.net.URI
 import javax.sound.sampled.AudioSystem
 import javax.sound.sampled.Clip
+import kotlin.concurrent.thread
 
 // What `javax.sound.sampled` reads without a service provider on the classpath, and it is three
 // container formats and no compressed one: there is no MP3, AAC, FLAC or Vorbis decoder in the
@@ -28,29 +30,64 @@ private val PLAYABLE = setOf(
 actual val deviceVoices: Voices = object : Voices {
     override fun canPlay(mime: String?): Boolean = audioType(mime) in PLAYABLE
 
-    // A mixer is hardware. A desktop with none — a headless build machine, a container — refuses
-    // the line rather than the file, and that is a device that cannot play, said at the only
-    // moment it can be found out.
-    override fun open(bytes: ByteArray, mime: String?): Voice? = runCatching {
-        val clip = AudioSystem.getClip()
-        clip.open(AudioSystem.getAudioInputStream(ByteArrayInputStream(bytes)))
-        JvmVoice(clip)
-    }.getOrNull()
+    override fun stream(url: String, mime: String?): Voice = JvmVoice(url)
 }
 
-private class JvmVoice(private val clip: Clip) : Voice {
+// A `Clip` holds the whole recording, so the desktop reads all of it before the first sound; it is
+// read on a thread of its own so that composing the player never waits on it. A mixer is hardware,
+// and a desktop with none — a headless build machine, a container — refuses the line rather than
+// the file, which is a device that cannot play, said at the only moment it can be found out.
+private class JvmVoice(url: String) : Voice {
+    @Volatile private var clip: Clip? = null
+
+    @Volatile private var wanted = false
+
+    @Volatile private var released = false
+
+    @Volatile override var failed = false
+        private set
+
+    init {
+        thread(isDaemon = true, name = "kampr-voice") {
+            runCatching {
+                val opened = AudioSystem.getClip()
+                opened.open(AudioSystem.getAudioInputStream(BufferedInputStream(URI(url).toURL().openStream())))
+                opened
+            }.onSuccess { opened ->
+                if (released) {
+                    opened.close()
+                } else {
+                    clip = opened
+                    if (wanted) opened.start()
+                }
+            }.onFailure { failed = true }
+        }
+    }
+
     override fun play() {
-        if (clip.framePosition >= clip.frameLength) clip.framePosition = 0
-        clip.start()
+        wanted = true
+        val c = clip ?: return
+        if (c.framePosition >= c.frameLength) c.framePosition = 0
+        c.start()
     }
 
     override fun pause() {
-        clip.stop()
+        wanted = false
+        clip?.stop()
+    }
+
+    override fun seek(ms: Long) {
+        clip?.microsecondPosition = ms * 1000
     }
 
     override fun release() {
-        runCatching { clip.close() }
+        released = true
+        runCatching { clip?.close() }
     }
 
-    override val playing: Boolean get() = clip.isRunning
+    override val playing: Boolean get() = clip?.isRunning ?: (wanted && !failed)
+
+    override val positionMs: Long get() = (clip?.microsecondPosition ?: 0L) / 1000
+
+    override val durationMs: Long? get() = clip?.microsecondLength?.takeIf { it > 0 }?.div(1000)
 }

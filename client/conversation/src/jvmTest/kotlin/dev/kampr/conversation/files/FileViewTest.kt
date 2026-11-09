@@ -15,16 +15,25 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.pinch
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.test.waitUntilAtLeastOneExists
+import dev.kampr.conversation.AttachmentCard
+import dev.kampr.conversation.AttachmentStore
+import dev.kampr.conversation.Decoder
 import dev.kampr.conversation.HeldClipboard
+import dev.kampr.conversation.Projector
 import dev.kampr.conversation.pngBytes
 import dev.kampr.shared.model.Lookup
 import dev.kampr.shared.net.AttachmentBytes
+import dev.kampr.shared.net.AttachmentSlice
 import dev.kampr.shared.net.diffAttachmentId
 import dev.kampr.shared.net.fileAttachmentId
 import dev.kampr.shared.net.findAttachmentId
 import dev.kampr.shared.net.lsAttachmentId
+import dev.kampr.shared.net.sliceOfWhole
 import dev.kampr.shared.ui.FilesPlace
+import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.filePlace
+import dev.kampr.shared.ui.recordPlace
+import dev.kampr.shared.wire.Attachment
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -33,6 +42,10 @@ import kotlin.test.assertTrue
 private const val PANE = "01JNODE/w3:p2"
 private const val NOTES = "/home/u/demo/notes.kt"
 private const val SHOT = "/home/u/demo/shot.png"
+private const val CLIP = "/home/u/demo/clip.wav"
+private const val FILM = "/home/u/demo/film.mp4"
+private const val SHEET = "/home/u/demo/people.csv"
+private const val KIT = "/home/u/demo/kit.jar"
 private const val BODY = "fun main() {\n    println(\"the fourth hop drops it\")\n}"
 private const val PATCH = """diff --git a/notes.kt b/notes.kt
 index 1111111..2222222 100644
@@ -213,5 +226,195 @@ class FileViewTest {
         onNodeWithContentDescription(VIEWER).performTouchInput { doubleClick(center) }
         waitForIdle()
         assertEquals("fitted", zoomState())
+    }
+
+    // A recording is played from the node, not read into memory first: the viewer looks at the
+    // first slice to learn what the file is, and then hands the player a stream of it.
+    @Test
+    fun aRecordingOpensAsAPlayerThatStreamsFromTheNode() = runComposeUiTest {
+        val decoder = Decoder()
+        val node = FileNode(mapOf(fileAttachmentId(CLIP) to AttachmentBytes.Ok(ByteArray(64) { it.toByte() }, "audio/wav")))
+        setContent { Stage(node, Stack(filePlace(PANE, CLIP)), voices = decoder) }
+        waitUntilAtLeastOneExists(hasContentDescription("Play clip.wav"), 5_000)
+        onNodeWithContentDescription("Play clip.wav").performClick()
+        waitUntilAtLeastOneExists(hasContentDescription("Pause clip.wav"), 5_000)
+
+        assertEquals(streamOf(fileAttachmentId(CLIP)), decoder.latest?.url)
+        assertTrue(decoder.latest?.playing == true, "the press reached no player")
+        onNodeWithContentDescription("Download clip.wav to this device").assertExists()
+    }
+
+    // The case streaming exists for: an hour of audio is hundreds of megabytes, and none of it past
+    // the first slice is ever asked for by the viewer.
+    @Test
+    fun aLongRecordingIsNeverReadToItsEnd() = runComposeUiTest {
+        val ranges = mutableListOf<Long>()
+        val node = object : PaneIo by FileNode(emptyMap()) {
+            override suspend fun range(paneId: String, id: String, start: Long, endInclusive: Long): AttachmentSlice {
+                ranges += start
+                return AttachmentSlice.Ok(ByteArray(64) { it.toByte() }, "audio/wav", 600_000_000L)
+            }
+        }
+        setContent { Stage(node, Stack(filePlace(PANE, CLIP))) }
+        waitUntilAtLeastOneExists(hasContentDescription("Play clip.wav"), 5_000)
+        assertEquals(listOf(0L), ranges, "the viewer read past the first slice of a recording it streams")
+    }
+
+    @Test
+    fun aRecordingThisDeviceCannotPlayIsOfferedAsADownload() = runComposeUiTest {
+        val node = FileNode(mapOf(fileAttachmentId(CLIP) to AttachmentBytes.Ok(ByteArray(64) { it.toByte() }, "audio/flac")))
+        setContent { Stage(node, Stack(filePlace(PANE, CLIP))) }
+        waitUntilAtLeastOneExists(hasContentDescription("Download clip.wav to this device"), 5_000)
+        waitUntilAtLeastOneExists(hasText("cannot show", substring = true), 5_000)
+    }
+
+    // What Windows tools write by default: UTF-16 with a byte-order mark, every other byte a NUL. It
+    // used to be offered as bytes this device cannot show.
+    @Test
+    fun textInAnEncodingOtherThanUtf8IsReadAndSaysWhichItWasReadAs() = runComposeUiTest {
+        val table = listOf(
+            Triple("/home/u/demo/log.txt", byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + "build succeeded\r\n0 warnings\r\n".toByteArray(Charsets.UTF_16LE), "UTF-16"),
+            Triple("/home/u/demo/old.txt", "“café” – naïve\n".toByteArray(charset("windows-1252")), "Windows-1252"),
+        )
+        val node = FileNode(table.associate { (path, bytes, _) -> fileAttachmentId(path) to AttachmentBytes.Ok(bytes, "application/octet-stream") })
+        val nav = Stack(filePlace(PANE, table[0].first))
+        setContent { Stage(node, nav) }
+        waitUntilAtLeastOneExists(hasText("build succeeded", substring = true), 5_000)
+        waitUntilAtLeastOneExists(hasText("UTF-16", substring = true), 5_000)
+
+        nav.replace(filePlace(PANE, table[1].first))
+        waitUntilAtLeastOneExists(hasText("“café” – naïve", substring = true), 5_000)
+        waitUntilAtLeastOneExists(hasText("Windows-1252", substring = true), 5_000)
+    }
+
+    // A film is streamed like a recording: the first slice says what it is, and the screen is
+    // pointed at a stream of the rest rather than handed hundreds of megabytes.
+    @Test
+    fun aFilmOpensOnAScreenThatStreamsFromTheNodeAndIsNeverReadToItsEnd() = runComposeUiTest {
+        val ranges = mutableListOf<Long>()
+        val node = object : PaneIo by FileNode(emptyMap()) {
+            override suspend fun range(paneId: String, id: String, start: Long, endInclusive: Long): AttachmentSlice {
+                ranges += start
+                return AttachmentSlice.Ok(ByteArray(64) { it.toByte() }, "video/mp4", 900_000_000L)
+            }
+            override suspend fun streamUrl(paneId: String, id: String): String = streamOf(id)
+        }
+        val projector = Projector()
+        setContent { Stage(node, Stack(filePlace(PANE, FILM)), films = projector) }
+        waitUntilAtLeastOneExists(hasContentDescription("Playing film.mp4"), 5_000)
+
+        assertEquals(streamOf(fileAttachmentId(FILM)), projector.shown)
+        assertEquals(listOf(0L), ranges, "the viewer read past the first slice of a film it streams")
+        onNodeWithContentDescription("Download film.mp4 to this device").assertExists()
+    }
+
+    @Test
+    fun aFilmThisDeviceCannotPlayIsOfferedAsADownload() = runComposeUiTest {
+        val node = FileNode(mapOf(fileAttachmentId(FILM) to AttachmentBytes.Ok(ByteArray(64) { it.toByte() }, "video/quicktime")))
+        setContent { Stage(node, Stack(filePlace(PANE, FILM))) }
+        waitUntilAtLeastOneExists(hasText("cannot show", substring = true), 5_000)
+    }
+
+    // The transcript's way to the same screen: an attachment whose type is a film opens the viewer.
+    @Test
+    fun aFilmAttachedToATurnOpensOnTheScreenToo() = runComposeUiTest {
+        val att = Attachment(id = "att-film", kind = "file", mime = "video/mp4", name = "demo.mp4")
+        val node = FileNode(mapOf("att-film" to AttachmentBytes.Ok(ByteArray(64) { it.toByte() }, "video/mp4")))
+        val projector = Projector()
+        setContent { Stage(node, Stack(recordPlace(PANE, att)), films = projector) }
+        waitUntilAtLeastOneExists(hasContentDescription("Playing demo.mp4"), 5_000)
+        assertEquals(streamOf("att-film"), projector.shown)
+    }
+
+    @Test
+    fun pressingAFilmsCardInATranscriptOpensItOnTheScreen() = runComposeUiTest {
+        val att = Attachment(id = "att-film", kind = "file", mime = "video/mp4", name = "demo.mp4")
+        val node = FileNode(mapOf("att-film" to AttachmentBytes.Ok(ByteArray(64) { it.toByte() }, "video/mp4")))
+        val projector = Projector()
+        setContent {
+            Stage(node, Stack(), films = projector) { AttachmentCard(att, AttachmentStore(PANE, Decoder(), projector)) }
+        }
+        onNodeWithContentDescription("Show video, demo.mp4").performClick()
+        waitUntilAtLeastOneExists(hasContentDescription("Playing demo.mp4"), 5_000)
+        assertEquals(streamOf("att-film"), projector.shown)
+    }
+
+    // Each cell is its own text, so a quoted comma and a doubled quote arrive as the values a
+    // spreadsheet would show; and the source is a press away, as markdown's is.
+    @Test
+    fun aCsvIsShownAsATableOfItsCellsAndItsSourceIsAPressAway() = runComposeUiTest {
+        val csv = "name;city;note\n\"Smith; J\";Perth;\"said \"\"hi\"\"\"\nLee;Hobart;*not italic*\n"
+        val node = FileNode(mapOf(fileAttachmentId(SHEET) to text(csv)))
+        setContent { Stage(node, Stack(filePlace(PANE, SHEET))) }
+        waitUntilAtLeastOneExists(hasText("Smith; J"), 5_000)
+        onNodeWithText("city").assertExists()
+        onNodeWithText("said \"hi\"").assertExists()
+        onNodeWithText("*not italic*").assertExists()
+
+        onNodeWithContentDescription("Source", substring = true).performClick()
+        waitUntilAtLeastOneExists(hasText("\"Smith; J\";Perth;\"said \"\"hi\"\"\"", substring = true), 5_000)
+    }
+
+    // A jar, an apk or a docx is a zip by its bytes whatever its name, and nothing in the node's
+    // answer says so: a file on disk is served with no type.
+    @Test
+    fun anArchiveIsListedByWhatItHoldsAndStillDownloads() = runComposeUiTest {
+        val kit = zipOf {
+            folder("src/")
+            file("src/main.kt", BODY.encodeToByteArray())
+            file("README.md", "# kit".encodeToByteArray())
+        }
+        open(mapOf(fileAttachmentId(KIT) to AttachmentBytes.Ok(kit, "application/octet-stream")), filePlace(PANE, KIT))
+        waitUntilAtLeastOneExists(hasText("src/main.kt"), 5_000)
+        onNodeWithText("README.md").assertExists()
+        onNodeWithText("src/").assertExists()
+        onNodeWithText("2 files", substring = true).assertExists()
+        onNodeWithContentDescription("Download kit.jar to this device").assertExists()
+    }
+
+    @Test
+    fun anArchiveAttachedToATurnIsListedFromTheBytesInHand() = runComposeUiTest {
+        val att = Attachment(id = "att-zip", kind = "file", name = "kit.zip")
+        val kit = zipOf { file("inside.txt", byteArrayOf(1)) }
+        open(mapOf("att-zip" to AttachmentBytes.Ok(kit, "application/zip")), recordPlace(PANE, att))
+        waitUntilAtLeastOneExists(hasText("inside.txt"), 5_000)
+    }
+
+    // The directory sits at the end of the archive, past the first slice: it is read from there,
+    // and the megabytes of the entries before it never are.
+    @Test
+    fun aBigArchiveIsListedFromItsTailAlone() = runComposeUiTest {
+        val kit = zipOf {
+            file("blob.bin", ByteArray(3 * SLICE_BYTES.toInt()) { (it * 31).toByte() }, stored = true)
+            file("last.txt", byteArrayOf(1))
+        }
+        val reads = mutableListOf<LongRange>()
+        val node = object : PaneIo by FileNode(emptyMap()) {
+            override suspend fun range(paneId: String, id: String, start: Long, endInclusive: Long): AttachmentSlice {
+                reads += start..endInclusive
+                return sliceOfWhole(kit, null, start, endInclusive)
+            }
+        }
+        setContent { Stage(node, Stack(filePlace(PANE, KIT))) }
+        waitUntilAtLeastOneExists(hasText("last.txt"), 5_000)
+        onNodeWithText("blob.bin").assertExists()
+        assertTrue(reads.drop(1).all { it.first > SLICE_BYTES }, "read in the middle of the archive: $reads")
+        assertTrue(reads.drop(1).sumOf { it.last - it.first + 1 } < 70_000, "read too much of the tail: $reads")
+    }
+
+    @Test
+    fun anArchiveTooLongToListWholeSaysHowMuchIsShown() = runComposeUiTest {
+        val kit = zipOf { repeat(ZIP_ENTRY_CAP + 1) { file("f$it", ByteArray(0), stored = true) } }
+        open(mapOf(fileAttachmentId(KIT) to AttachmentBytes.Ok(kit, "application/octet-stream")), filePlace(PANE, KIT))
+        waitUntilAtLeastOneExists(hasText("f0"), 10_000)
+        onNodeWithText("Showing the first 50,000 of 50,001 entries", substring = true).assertExists()
+    }
+
+    @Test
+    fun aDamagedArchiveIsOfferedAsADownloadSayingWhy() = runComposeUiTest {
+        val kit = zipOf { file("a.txt", byteArrayOf(1)) }.let { it.copyOf(it.size - 10) }
+        open(mapOf(fileAttachmentId(KIT) to AttachmentBytes.Ok(kit, "application/octet-stream")), filePlace(PANE, KIT))
+        waitUntilAtLeastOneExists(hasText("could not be listed", substring = true), 5_000)
+        onNodeWithContentDescription("Download kit.jar to this device").assertExists()
     }
 }

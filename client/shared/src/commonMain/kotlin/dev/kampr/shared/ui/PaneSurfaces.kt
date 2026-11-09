@@ -123,6 +123,9 @@ interface PaneIo {
     // Streamed from the node to the device's downloads; where it landed, or null if either refused.
     suspend fun download(paneId: String, id: String, name: String): String? = null
 
+    // A URL a media player can be pointed at, or null if the node would not stream it.
+    suspend fun streamUrl(paneId: String, id: String): String? = null
+
     suspend fun upload(paneId: String, dir: String, name: String, source: UploadSource, progress: (Long) -> Unit): UploadResult = UploadResult.Failed("This device has no node to send it to.")
 }
 

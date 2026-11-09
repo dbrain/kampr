@@ -37,6 +37,7 @@ pub mod served;
 pub mod session;
 pub mod sessions;
 pub mod state;
+pub mod stream_tickets;
 pub mod structure;
 pub mod toast;
 pub mod update;

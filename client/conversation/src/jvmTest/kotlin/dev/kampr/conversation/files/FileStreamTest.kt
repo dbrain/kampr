@@ -9,6 +9,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -148,5 +149,21 @@ class FileStreamTest {
         waitUntilAtLeastOneExists(hasContentDescription("Saved to Downloads/big.log"), 5_000)
         assertEquals("big.log", node.downloaded)
         assertEquals(0, node.wholes)
+    }
+
+    // A spreadsheet export is the shape a table is for, and the reason it streams: a long CSV is
+    // read a slice at a time as the reader scrolls, exactly as its source lines are.
+    @Test
+    fun aLongCsvIsATableReadToItsLastRowInSlices() = runComposeUiTest {
+        val rows = 20_000
+        val csv = ("id,name,note\n" + (1..rows).joinToString("\n", postfix = "\n") { "$it,row $it,\"a, b\"" }).encodeToByteArray()
+        val node = RangedNode(csv, path = "/home/u/demo/big.csv")
+        setContent { Stage(node, Stack(filePlace(PANE, "/home/u/demo/big.csv"))) }
+        waitUntilAtLeastOneExists(hasText("row 1"), 5_000)
+        onNodeWithText("name").assertExists()
+        scrollToTheEnd("row $rows")
+        assertEquals(0, node.wholes, "the table asked for the whole file")
+        assertTrue(node.ranges.size > 3, "only ${node.ranges.size} slices were asked for")
+        onAllNodesWithText("a, b").onFirst().assertExists()
     }
 }

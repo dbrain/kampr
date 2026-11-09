@@ -117,7 +117,7 @@ fun FileAffordance(path: String, attachments: AttachmentStore, modifier: Modifie
         return
     }
 
-    val audible = offerOn(att, LocalVoices.current, path) == AttachmentOffer.Audio
+    val audible = offerOn(att, LocalVoices.current, LocalFilms.current, path) == AttachmentOffer.Audio
     val verb = if (audible) "Play" else "Open"
     val act: () -> Unit = if (audible) {
         { scope.launch { attachments.open(io, att) } }

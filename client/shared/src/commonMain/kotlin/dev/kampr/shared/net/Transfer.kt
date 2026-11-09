@@ -88,7 +88,7 @@ internal fun refusal(status: Int, description: String = ""): Pair<String, Boolea
 @Serializable
 private class Written(val path: String, val bytes: Long)
 
-private val lenient = Json { ignoreUnknownKeys = true }
+internal val lenient = Json { ignoreUnknownKeys = true }
 
 fun uploadResultOf(status: Int, body: String): UploadResult = when (status) {
     200, 201 -> runCatching { lenient.decodeFromString<Written>(body) }.getOrNull()
