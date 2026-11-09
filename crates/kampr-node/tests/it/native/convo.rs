@@ -8,6 +8,11 @@ use tokio::time::Instant;
 const FIRST: &str = "11111111-1111-4111-8111-111111111111";
 const SECOND: &str = "22222222-2222-4222-8222-222222222222";
 
+/// The node looks at a harness's directories at most this often (`RETRY_EVERY` in `convo.rs`),
+/// and a write to any file in them counts as a change, so a measurement that starts inside it
+/// measures what is left of it rather than the wake.
+const LOOK_FLOOR: Duration = Duration::from_millis(2_100);
+
 /// A `claude` that writes a transcript under the project directory its working directory names,
 /// with or without the marker 2.1.239 publishes, and then sits at its box with the tty echoing.
 fn claude_at_its_box(dir: &Path) -> PathBuf {
@@ -118,7 +123,11 @@ impl Claude {
 
     /// Settles past the pump's own floor, so what is measured next is the wake and not the pace.
     async fn quiet(&mut self) {
-        let until = Instant::now() + Duration::from_millis(150);
+        self.settle(Duration::from_millis(150)).await;
+    }
+
+    async fn settle(&mut self, quiet: Duration) {
+        let until = Instant::now() + quiet;
         while let left = until.saturating_duration_since(Instant::now())
             && !left.is_zero()
         {
@@ -154,7 +163,11 @@ async fn a_line_written_to_the_transcript_reaches_the_client_at_once() {
 #[tokio::test]
 async fn a_new_transcript_in_the_panes_directory_replaces_the_conversation_at_once() {
     let mut c = Claude::start(false).await;
-    c.quiet().await;
+    // The old transcript's last write before the `/clear`, from a known moment rather than from
+    // however long the start took, which on a fast runner left the new file inside the floor.
+    c.append(FIRST, &c.record(FIRST, &format!("{FIRST}-3"), "BEFORE CLEAR", 0));
+    c.arrives("BEFORE CLEAR", Instant::now()).await;
+    c.settle(LOOK_FLOOR).await;
     let line = c.record(SECOND, &format!("{SECOND}-1"), "AFTER CLEAR", 2);
     let written = Instant::now();
     c.append(SECOND, &line);
