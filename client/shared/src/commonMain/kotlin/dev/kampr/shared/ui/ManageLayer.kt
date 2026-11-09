@@ -55,6 +55,12 @@ interface ManageIo {
 
     // A container's detail sheet (docs/19).
     fun openContainer(nodeId: String, containerId: String) = Unit
+
+    // The + beside a running container: a shell in it, opened the way the host's + opens a session.
+    fun containerShell(nodeId: String, containerId: String) = Unit
+
+    // The whole New sheet, aimed at one machine.
+    fun newOn(nodeId: String) = Unit
 }
 
 private object NoManage : ManageIo {
@@ -94,6 +100,14 @@ class AppManage(private val state: AppState) : ManageIo {
     override fun openContainer(nodeId: String, containerId: String) {
         state.openContainer(nodeId, containerId)
     }
+
+    override fun containerShell(nodeId: String, containerId: String) {
+        state.containerShell(nodeId, containerId)
+    }
+
+    override fun newOn(nodeId: String) {
+        state.openSheet(Sheet.New(nodeId, null))
+    }
 }
 
 @Composable
@@ -128,15 +142,6 @@ fun QuickSessionAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = 
         modifier,
         chip = 22.dp,
     ) { manage.quickSession(node.id) }
-}
-
-@Composable
-fun NodeFilesAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = Modifier) {
-    val manage = LocalManage.current
-    if (!manage.browses || !node.isReachable) return
-    GlyphAction(KamprIcons.folder, "Browse files on ${node.name}", Kampr.tokens.color.dim, target, modifier, chip = 22.dp) {
-        manage.browse(node)
-    }
 }
 
 @Composable
@@ -258,8 +263,11 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
         }
 
         is Sheet.Container -> {
+            val container = herd.nodes.firstOrNull { it.id == sheet.nodeId }?.containers?.firstOrNull { it.id == sheet.containerId }
+            // Removed, or its machine gone: the poll would only be refused from here on.
+            LaunchedEffect(container == null) { if (container == null) state.closeSheet() }
             val node = herd.nodes.firstOrNull { it.id == sheet.nodeId } ?: return
-            val container = node.containers.firstOrNull { it.id == sheet.containerId } ?: return
+            container ?: return
             DockerSheet(
                 breakpoint = breakpoint,
                 node = node,

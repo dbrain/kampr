@@ -97,6 +97,10 @@ data class DockerStats(
     @SerialName("cpu_pct") val cpuPct: Double? = null,
     @SerialName("mem_used") val memUsed: Long? = null,
     @SerialName("mem_limit") val memLimit: Long? = null,
+    @SerialName("net_rx") val netRx: Long? = null,
+    @SerialName("net_tx") val netTx: Long? = null,
+    @SerialName("blk_read") val blkRead: Long? = null,
+    @SerialName("blk_write") val blkWrite: Long? = null,
     val pids: Int? = null,
 )
 

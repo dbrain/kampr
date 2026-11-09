@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
+import dev.kampr.shared.model.Area
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Fold
 import dev.kampr.shared.model.Folds
@@ -132,23 +133,27 @@ fun HerdRail(
     }
 }
 
-// The folds are the sidebar's, read here and never set: a rail has no room for a header to press.
+// The folds and the picked list are the sidebar's, read here and never set: a rail has no room for
+// the switch.
 @Composable
 private fun RailGroup(group: NodeGroup, ctx: HerdRowsCtx) {
     val node = group.node.id
     val pane: @Composable (PaneInfo) -> Unit = { RailPane(it, ctx.now, it.id == ctx.activePaneId) { ctx.onOpenPane(it.id) } }
     RailNodeMark(group.node)
-    for ((index, section) in group.sections.withIndex()) {
-        // No room for a name: a gap between workspaces, so two of them do not read as one.
-        if (index > 0 && section.heading != null) Box(Modifier.height(6.dp).named("Workspace ${section.heading}"))
-        for (p in section.panes) pane(p)
-    }
-    if (ctx.folds.open(node, Fold.Muffit)) for (p in group.background) pane(p)
-    val listed = group.listedContainers(ctx.folds.open(node, Fold.Containers), ctx.folds.open(node, Fold.Stopped), ctx.now)
-    for (container in listed) {
-        RailContainer(node, container, ctx.now)
-        for (p in group.shellsOf(container)) pane(p)
-        group.childOf(container)?.let { RailGroup(it, ctx) }
+    when (ctx.folds.area(group)) {
+        Area.Terminals -> for ((index, section) in group.sections.withIndex()) {
+            // No room for a name: a gap between workspaces, so two of them do not read as one.
+            if (index > 0 && section.heading != null) Box(Modifier.height(6.dp).named("Workspace ${section.heading}"))
+            for (p in section.panes) pane(p)
+        }
+
+        Area.Muffit -> for (p in group.background) pane(p)
+
+        Area.Containers -> for (container in group.listedContainers(ctx.folds.open(node, Fold.Stopped), ctx.now)) {
+            RailContainer(node, container, ctx.now)
+            for (p in group.shellsOf(container)) pane(p)
+            group.childOf(container)?.let { RailGroup(it, ctx) }
+        }
     }
     for (child in group.strayChildren) RailGroup(child, ctx)
 }

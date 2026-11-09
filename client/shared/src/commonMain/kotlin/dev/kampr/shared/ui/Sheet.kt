@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -34,6 +35,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
@@ -101,6 +103,10 @@ fun BottomSheet(
     breakpoint: Breakpoint,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
+    // A sheet whose body changes under it (tabs, a poll) holds one height rather than resizing
+    // with every answer; the rest fit their content.
+    height: Dp? = null,
+    wideWidth: Dp = SHEET_WIDE_WIDTH,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val tokens = Kampr.tokens
@@ -109,7 +115,11 @@ fun BottomSheet(
         BoxWithConstraints(
             Modifier.align(if (breakpoint == Breakpoint.Portrait) Alignment.BottomCenter else Alignment.Center),
         ) {
-            val wanted = if (breakpoint == Breakpoint.Portrait) SHEET_MAX_WIDTH else SHEET_WIDE_WIDTH
+            val wanted = when (breakpoint) {
+                Breakpoint.Portrait -> SHEET_MAX_WIDTH
+                Breakpoint.Landscape -> SHEET_WIDE_WIDTH
+                Breakpoint.Desktop -> wideWidth
+            }
             val width = if (maxWidth < wanted) maxWidth else wanted
             // The sheet is the bottom of the window, which is where the gesture handle is drawn,
             // so it stops above it rather than putting its last button underneath it.
@@ -129,7 +139,7 @@ fun BottomSheet(
                             bottom = safe.bottom,
                         )
                         .width(width)
-                        .heightIn(max = tall)
+                        .let { if (height == null) it.heightIn(max = tall) else it.height(if (height < tall) height else tall) }
                         .background(tokens.color.bar, shape)
                         .modal(onDismiss)
                         .edge(tokens.chrome, shape),
@@ -269,6 +279,7 @@ fun Chip(
     onClick: () -> Unit,
     quiet: Boolean = false,
     label: String? = null,
+    danger: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.sm)
@@ -286,6 +297,7 @@ fun Chip(
                 tokens.type.pill,
                 when {
                     selected -> tokens.color.onAccent
+                    danger -> tokens.color.blocked
                     quiet -> tokens.color.dim
                     else -> tokens.color.text
                 },

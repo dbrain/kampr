@@ -2,6 +2,7 @@ mod act;
 mod chrome;
 mod copy;
 mod docker;
+mod host;
 mod tiles;
 
 pub use chrome::{Chips, Layout, Placed};
@@ -227,6 +228,7 @@ pub struct App {
     keybinds: bool,
     help_top: usize,
     detail: Option<crate::docker::Detail>,
+    host: Option<crate::host::HostMenu>,
     opening: Option<String>,
     quit: bool,
 }
@@ -291,6 +293,7 @@ impl App {
             keybinds: false,
             help_top: 0,
             detail: None,
+            host: None,
             opening: None,
             quit: false,
         }
@@ -417,7 +420,8 @@ impl App {
     }
 
     /// Every pane a click could open: the ones last visited first, the way tmux's last-session is
-    /// one key, then the triage order so the rest of an empty query is the queue.
+    /// one key, then the triage order so the rest of an empty query is the queue; then every
+    /// container, whose pick opens its panel.
     pub(super) fn switch_items(&self) -> Vec<crate::switcher::Item> {
         let recent = self.recent();
         let state = self.client.state();
@@ -435,11 +439,11 @@ impl App {
         );
         let mut seen = HashSet::new();
         panes.retain(|p| seen.insert(p.id.as_str()));
-        panes
+        let mut items: Vec<crate::switcher::Item> = panes
             .into_iter()
             .filter(|p| herd.node(&p.node_id).is_none_or(|n| n.is_serving()))
             .map(|p| crate::switcher::Item {
-                pane: p.id.clone(),
+                to: crate::switcher::Pick::Pane(p.id.clone()),
                 name: sidebar::row_name(p, false),
                 place: {
                     let node = herd.node(&p.node_id).map(|n| n.name.as_str()).unwrap_or("");
@@ -448,9 +452,34 @@ impl App {
                         None => node.to_string(),
                     }
                 },
-                status: p.agent_status,
+                mark: crate::switcher::Mark::Agent(p.agent_status),
             })
-            .collect()
+            .collect();
+        for node in herd.nodes.iter().filter(|n| n.is_serving()) {
+            for c in &node.containers {
+                let compose: Vec<&str> = [c.project.as_deref(), c.service.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                let mut place = vec![c.image.clone()];
+                if !compose.is_empty() {
+                    place.push(compose.join("/"));
+                }
+                place.push(node.name.clone());
+                items.push(crate::switcher::Item {
+                    to: crate::switcher::Pick::Container {
+                        node: node.id.clone(),
+                        id: c.id.clone(),
+                    },
+                    name: c.name.clone(),
+                    place: place.join(" · "),
+                    mark: crate::switcher::Mark::Container {
+                        running: c.state == "running",
+                    },
+                });
+            }
+        }
+        items
     }
 
     pub(super) fn open_pairing(&mut self) {
@@ -659,10 +688,9 @@ impl App {
             }
             Click::Tab(tab) => self.open_tab(&tab),
             Click::Order => self.flip_order(),
-            Click::Go(pane) => {
+            Click::Go(to) => {
                 self.switcher.close();
-                self.focus(pane);
-                self.open(Screen::Panes);
+                self.go_to(to);
             }
             Click::Dismiss => self.switcher.close(),
             Click::Pair => self.open_pairing(),

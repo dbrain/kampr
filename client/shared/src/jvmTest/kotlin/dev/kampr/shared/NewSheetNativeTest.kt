@@ -140,7 +140,7 @@ class NewSheetNativeTest {
     }
 
     @Test
-    fun aMachineTooOldToKeepSessionsSaysSoRatherThanOfferingOne() = runComposeUiTest {
+    fun aMachineTooOldToKeepSessionsOpensOnHerdrAndItsKamprSideSaysWhy() = runComposeUiTest {
         setContent {
             CompositionLocalProvider(LocalTokens provides phoneTokens()) {
                 Box(Modifier.size(420.dp, 1200.dp)) {
@@ -159,6 +159,8 @@ class NewSheetNativeTest {
                 }
             }
         }
+        onNodeWithContentDescription("Kampr options").performClick()
+        waitForIdle()
         onNodeWithContentDescription("needs Kampr 0.1.119 on comingclean", substring = true).assertExists()
         onNodeWithContentDescription("Kampr session,", substring = true).assertHasNoClickAction()
     }

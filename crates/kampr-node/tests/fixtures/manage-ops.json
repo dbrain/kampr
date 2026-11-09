@@ -246,6 +246,18 @@
     "node": "01JNODE",
     "id": "f49c60fac115"
   },
+  "docker.kill": {
+    "t": "manage",
+    "op": "docker.kill",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
+  "docker.remove": {
+    "t": "manage",
+    "op": "docker.remove",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
   "docker.adopt": {
     "t": "manage",
     "op": "docker.adopt",

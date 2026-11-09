@@ -194,7 +194,7 @@ private fun MosaicBar(mosaic: MosaicState, herd: Herd, onHerd: () -> Unit, onAdd
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         KText("Kampr", tokens.type.screenTitle, tokens.color.text)
-        Segmented(listOf("Herd", "Mosaic"), 1, { if (it == 0) onHerd() }, Modifier.width(168.dp))
+        Segmented(listOf("Kampr", "Mosaic"), 1, { if (it == 0) onHerd() }, Modifier.width(168.dp))
         KText(
             listOf(
                 count(mosaic.panes.size, "pane"),

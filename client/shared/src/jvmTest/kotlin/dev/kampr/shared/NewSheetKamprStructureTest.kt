@@ -7,6 +7,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -127,6 +128,9 @@ class NewSheetKamprStructureTest {
         val sent = mutableListOf<ManageOp>()
         sheet(sent = sent)
         waitForIdle()
+        assertEquals(0, onAllNodesWithContentDescription("Workspace, a herdr workspace", substring = true).fetchSemanticsNodes().size)
+        press("Herdr options")
+        assertEquals(0, onAllNodesWithContentDescription("Kampr workspace,", substring = true).fetchSemanticsNodes().size)
         press("Workspace, a herdr workspace")
         onNodeWithContentDescription("Create workspace").performClick()
         waitForIdle()

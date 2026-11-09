@@ -26,6 +26,7 @@ const TAG = 'kampr.blocked';
 
 // The only two URLs this worker caches or serves. Anything else goes straight to the network.
 const WARM = ['/api/node', '/api/warm'];
+const CLOCK = 'x-kampr-clock';
 
 // The one page it does hold: what an installed icon opens when the node is asleep. The bundle
 // itself is still never cached here — it is served `immutable` and the browser's own cache is the
@@ -208,7 +209,9 @@ async function warm(note) {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
   if (event.request.method !== 'GET' || url.origin !== self.location.origin) return;
-  if (WARM.includes(url.pathname)) {
+  // The page reads the node's clock off this response's Date header, and a cached copy's is as
+  // old as the cache: every age on the page came out short by that much.
+  if (WARM.includes(url.pathname) && !event.request.headers.has(CLOCK)) {
     event.respondWith(warmFirst(event.request));
     return;
   }

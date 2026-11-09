@@ -87,7 +87,7 @@ class SafeAreaTest {
         // Against the window rather than a number: a fixed height taller than the test window is
         // how this assertion passed while the defect was on screen.
         val screen = onRoot().getUnclippedBoundsInRoot()
-        for (tab in listOf("Herd tab", "Settings tab")) {
+        for (tab in listOf("Kampr tab", "Fleet tab", "Settings tab")) {
             val bounds = onNodeWithContentDescription(tab).getUnclippedBoundsInRoot()
             assertTrue(
                 bounds.bottom <= screen.bottom - BARS.bottom,
@@ -112,7 +112,7 @@ class SafeAreaTest {
                     }
                 }
                 val screen = onRoot().getUnclippedBoundsInRoot()
-                val title = onNodeWithText("Herd").getUnclippedBoundsInRoot()
+                val title = onNodeWithText("Kampr").getUnclippedBoundsInRoot()
                 assertTrue(
                     title.left >= bars.left && title.right <= screen.right - bars.right,
                     "$bars: the herd header spans ${title.left}..${title.right} of ${screen.right}",
@@ -193,7 +193,7 @@ class SafeAreaTest {
         }
         val screen = onRoot().getUnclippedBoundsInRoot()
         val floor = screen.bottom - KEYBOARD.ime
-        for (label in listOf("Herd tab", "Settings tab")) {
+        for (label in listOf("Kampr tab", "Fleet tab", "Settings tab")) {
             val bounds = onNodeWithContentDescription(label).getUnclippedBoundsInRoot()
             assertTrue(
                 bounds.bottom <= floor,

@@ -70,7 +70,7 @@ that is already there:
 |---|---|---|
 | `docker.detail` | `node`, `id` | `detail`: the entry above plus `command`, `created`, `restart_policy`, `limits {memory, nano_cpus}`, `env[]`, `labels{}`, `mounts[{src,dst,mode}]`, `networks[]`, `health_log[{start,end,exit_code,output}]`, `logs[{at,stream,line}]` (last 200), `stats {cpu_pct, mem_used, mem_limit, net_rx, net_tx, blk_read, blk_write, pids}` (running only), `events[{at, action, exit_code?, signal?, health?}]` (journal, last 100) |
 | `docker.shell` | `node`, `id` | `id`: a native pane into the container, labelled with its name; `shell`: `bash`, `sh` or `debug` (see **Shell**) |
-| `docker.start` / `docker.stop` / `docker.restart` | `node`, `id` | — |
+| `docker.start` / `docker.stop` / `docker.restart` / `docker.kill` / `docker.remove` | `node`, `id` | — |
 | `docker.adopt` / `docker.release` | `node`, `id` | adopt: `node` = the child's node id once its herd is listed |
 
 `docker.detail` is read-only and polled every 3 s while a detail sheet is open, so it is not written
@@ -209,28 +209,55 @@ its disk instead of forwarded. Both get a two-hop test and a fix.
 
 ## Client
 
-- Per host, under its terminals (which stay plain rows): **Background · muffit** and **Containers · docker**,
-  both collapsible, the state remembered per device in prefs keyed by `(node id, section)`. Muffit
-  starts expanded, containers collapsed. One header composable serves both.
+- Per host, a small icon switch beside its name picks which list is under it: **terminals**, **containers**
+  (Docker's whale, with the running count) or **muffit** (the daggit's face, with its session count), each
+  count capped at `9+`. Only the lists a host has are offered, and a host with only terminals has no
+  switch. The pick is remembered per device and per node (prefs `herd.folds`); terminals is the default,
+  and a pick whose list has gone falls back to it.
 - Containers group under their compose project when they have one (a caption, not a level). Shown
   by default: running, restarting, paused, unhealthy, or crashed within 24 h; the rest sit behind one
   **+N stopped** row that toggles them (also remembered).
 - A row: state dot, name, then uptime, or `exited 137 · OOM 3m ago`; badges `↻4` (restarts) and
-  `unhealthy`. Shells into it (`PaneEntry.container`) list under it.
-- Tapping a container opens its sheet: state, crash timeline, health output, live CPU and memory
-  against the limit, last log lines, env, mounts and ports; **Shell in**, **Restart**, **Stop**/**Start**,
-  **Adopt** / **Release**.
+  `unhealthy`; and, while it runs, a **+** that shells into it the way a host's **+** opens a session.
+  Shells into it (`PaneEntry.container`) list under it.
+- Tapping a container, or finding it in search (name, image, project, service or host), opens its sheet.
+  The sheet holds one height whatever it shows. Its title carries the state as coloured chips (state,
+  health, `OOM`, `↻N`); under it **Shell in**, **Restart**, **Stop**/**Start**, **Kill** (while it is
+  alive), **Remove** (once it is not) and **Adopt**/**Release**, none of which asks first; then tabs:
+  **Overview** (status, command, restart policy, ports, networks, compose, last crash, the crash
+  timeline and health output), **Logs** (unwrapped, scrolled both ways, following the tail), **Stats**
+  (CPU and memory against the limit as meters, processes, network and disk), **Env** and **Mounts**.
+  A spinner stands in until the first `docker.detail` answers. A removed container's sheet closes.
 - An adopted container's node (`parent` set) is drawn under its container row instead of as a top-level
   host, with its own terminals and sections. Nesting indents by 8 dp with a hairline guide, never more,
   so titles keep their width. An old client shows it as an ordinary top-level host.
 
 ### Terminal client
 
-`kampr` (the TUI) draws the same sections in its sidebar, with the same filter, captions and nesting;
-folds are saved in `tui.toml`. In the sidebar navigator (`prefix w`): `enter` on a section header or
-**+N stopped** folds it (a left click too), `enter` on a container opens its detail panel (refreshed
-every 3 s), and `s` shell in, `r` restart, `x` stop/start, `a` adopt/release — also inside the panel,
-with `j`/`k`, PgUp/PgDn and `esc`/`q`. The herd triage screen still lists panes flat.
+`kampr` (the TUI) mirrors this in its sidebar. A host's heading carries the same switch, drawn as
+`›_ │ ▣ 2 │ ◉ 1` (terminals, containers with the running count, muffit with its session count, each
+capped at `9+`), the list showing in reverse video, and only when the host has more than terminals.
+This machine's name is in the accent colour, and the heading carries no latency. The pick, and
+**+N stopped**, are saved per node in `tui.toml` (`[hosts.<node>]`); an older file's section folds
+are ignored. A running container's row ends in a **+** that shells into it.
+
+In the sidebar navigator (`prefix w`), the host heading is a stop: `[`/`]` step the list of the host
+the cursor is under (a click on a tab does the same), and `.` or `m` (or `enter`, or a click on the
+host) opens its menu: reach and ping, and **New…**, which is `prefix shift+n`'s menu. `enter` on
+**+N stopped** shows or hides the stopped ones. On a container row `enter` opens its panel, and `s`
+shells in, `r` restarts, `x` stops or starts and `a` adopts or releases. `prefix g` finds containers
+by name, image, compose project, service or host, and picking one opens its panel.
+
+The panel is a fixed-size box, refreshed every 3 s, with a spinner until the first `docker.detail`
+answers. Its title carries the state, health, `OOM` and `↻N` as coloured badges; under it the action
+bar lists only what applies: `s` shell, `r` restart, `x` stop/start, `K` kill while alive, `D` remove
+once not, `a` adopt/release, none confirmed. Then tabs **Info**, **Logs**, **Stats**, **Env** and
+**Mounts**: `1`–`5`, `h`/`l` or `tab`, and `←`/`→` everywhere but **Logs**, where they pan sideways
+because log lines are not wrapped. `j`/`k` and PgUp/PgDn scroll; **Logs** follows the tail until
+scrolled up, and `G`/`end` follows it again (`g`/`home` goes to the top). **Stats** draws CPU and
+memory as bars against the limit (amber past 70%, red past 90%), then processes, network and disk.
+`esc`/`q` closes it, and so does the container leaving the herd. The herd triage screen still lists
+panes flat.
 
 ## What older builds do
 

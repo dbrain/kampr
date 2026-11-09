@@ -16,6 +16,8 @@ enum class DockerAction(val wire: String) {
     Start("start"),
     Stop("stop"),
     Restart("restart"),
+    Kill("kill"),
+    Remove("remove"),
     Adopt("adopt"),
     Release("release"),
 }

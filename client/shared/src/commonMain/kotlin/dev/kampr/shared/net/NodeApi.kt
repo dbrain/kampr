@@ -33,6 +33,9 @@ data class NodeStatus(
     val security: NodeOrigin = NodeOrigin(),
 )
 
+// The web client's service worker answers `/api/node` from its cache unless this is on the request.
+const val CLOCK_HEADER = "X-Kampr-Clock"
+
 class NodeApi(private val client: HttpClient, private val endpoint: Endpoint) {
     private val json = Json {
         ignoreUnknownKeys = true
@@ -52,7 +55,10 @@ class NodeApi(private val client: HttpClient, private val endpoint: Endpoint) {
     // is worth having: everything time-shaped in this client compares one clock against the other.
     suspend fun clockOffsetMillis(): Double? = runCatching {
         val sent = wallClockMillis()
-        val response = client.get("${endpoint.httpBase}/api/node") { auth() }
+        val response = client.get("${endpoint.httpBase}/api/node") {
+            auth()
+            header(CLOCK_HEADER, "1")
+        }
         val here = (wallClockMillis() + sent) / 2.0
         parseHttpDateMillis(response.headers["Date"])?.minus(here)
     }.getOrNull()

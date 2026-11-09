@@ -21,7 +21,10 @@ import dev.kampr.shared.theme.typography
 import dev.kampr.shared.ui.BottomNav
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.SafeArea
+import dev.kampr.shared.ui.Screen
 import dev.kampr.shared.ui.Tab
+import dev.kampr.shared.ui.screenFor
+import dev.kampr.shared.ui.tabFor
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -57,12 +60,19 @@ class NavLabelsTest {
                     "$gone is still on the bar",
                 )
             }
-            for (kept in listOf("Herd tab", "Settings tab")) {
+            for (kept in listOf("Kampr tab", "Fleet tab", "Settings tab")) {
                 assertTrue(
                     onAllNodesWithContentDescription(kept).fetchSemanticsNodes().isNotEmpty(),
                     "$kept is not on the bar",
                 )
             }
         }
+    }
+
+    @Test
+    fun theFleetBoardIsATabOfItsOwnSoAPhoneCanLeaveIt() {
+        assertEquals(Tab.Fleet, tabFor(Screen.Fleet))
+        assertEquals(Screen.Fleet, screenFor(Tab.Fleet))
+        assertEquals(Tab.Herd, tabFor(Screen.Mosaic))
     }
 }

@@ -1,8 +1,8 @@
-use super::{Fold, Folds, Row, host, push_pane, spread};
+use super::{Area, Hosts, Row, Tab, host, push_pane, spread};
 use crate::theme::Theme;
 use kampr_client::NodeGroup;
 use kampr_core::wire::{ContainerEntry, NodeEntry, PaneEntry};
-use ratatui::style::Style;
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -10,7 +10,7 @@ const DAY: i64 = 86_400;
 const ALIVE: [&str; 3] = ["running", "restarting", "paused"];
 
 pub(super) struct Look<'a, Q> {
-    pub folds: &'a Folds,
+    pub hosts: &'a Hosts,
     pub now: i64,
     pub questions: &'a Q,
 }
@@ -105,27 +105,44 @@ fn wanted(container: &ContainerEntry, now: i64) -> bool {
         || container.last_crash.as_ref().is_some_and(|c| c.at >= now - DAY)
 }
 
+pub(super) fn shellable(container: &ContainerEntry) -> bool {
+    container.state == "running"
+}
+
+/// The lists a host can show, terminals first; none at all when terminals are the only one.
+pub(super) fn tabs(branch: &Branch<'_>) -> Vec<Tab> {
+    let node = branch.group.node;
+    let panes = &branch.group.panes;
+    let mut tabs = vec![Tab {
+        area: Area::Terminals,
+        count: panes.iter().filter(|p| terminal(node, p)).count(),
+    }];
+    if !node.containers.is_empty() || node.docker == Some(false) {
+        tabs.push(Tab {
+            area: Area::Containers,
+            count: node.containers.iter().filter(|c| shellable(c)).count(),
+        });
+    }
+    let background = panes.iter().filter(|p| muffit(p)).count();
+    if background > 0 {
+        tabs.push(Tab {
+            area: Area::Muffit,
+            count: background,
+        });
+    }
+    match tabs.len() {
+        1 => Vec::new(),
+        _ => tabs,
+    }
+}
+
 pub(super) fn background<Q: Fn(&str) -> Option<String>>(
     rows: &mut Vec<Row>,
     branch: &Branch<'_>,
     look: &Look<'_, Q>,
 ) {
-    let node = &branch.group.node.id;
-    let panes: Vec<&PaneEntry> = branch.group.panes.iter().copied().filter(|p| muffit(p)).collect();
-    if panes.is_empty() {
-        return;
-    }
-    let open = look.folds.open(node, Fold::Muffit);
-    rows.push(Row::Fold {
-        node: node.clone(),
-        fold: Fold::Muffit,
-        open,
-        count: panes.len(),
-    });
-    if open {
-        for pane in panes {
-            push_pane(rows, pane, None, false, look.questions);
-        }
+    for pane in branch.group.panes.iter().copied().filter(|p| muffit(p)) {
+        push_pane(rows, pane, None, false, look.questions);
     }
 }
 
@@ -135,28 +152,17 @@ pub(super) fn containers<Q: Fn(&str) -> Option<String>>(
     look: &Look<'_, Q>,
 ) {
     let node = branch.group.node;
-    if node.containers.is_empty() && node.docker != Some(false) {
-        return;
-    }
-    let open = look.folds.open(&node.id, Fold::Containers);
-    let stopped_open = look.folds.open(&node.id, Fold::Stopped);
-    rows.push(Row::Fold {
-        node: node.id.clone(),
-        fold: Fold::Containers,
-        open,
-        count: node.containers.len(),
-    });
-    if open && node.docker == Some(false) {
+    let stopped_open = look.hosts.stopped(&node.id);
+    if node.docker == Some(false) {
         rows.push(Row::Note("docker is not answering here".into()));
     }
     let (shown, stopped): (Vec<&ContainerEntry>, Vec<&ContainerEntry>) = node
         .containers
         .iter()
         .partition(|c| wanted(c, look.now) || pinned(branch, c));
-    let listed: Vec<&ContainerEntry> = match (open, stopped_open) {
-        (false, _) => shown.into_iter().filter(|c| pinned(branch, c)).collect(),
-        (true, true) => shown.into_iter().chain(stopped.iter().copied()).collect(),
-        (true, false) => shown,
+    let listed: Vec<&ContainerEntry> = match stopped_open {
+        true => shown.into_iter().chain(stopped.iter().copied()).collect(),
+        false => shown,
     };
     for (project, members) in by_project(listed) {
         if let Some(project) = project {
@@ -178,10 +184,9 @@ pub(super) fn containers<Q: Fn(&str) -> Option<String>>(
             rows.extend(under.into_iter().map(|r| Row::Nested(Box::new(r))));
         }
     }
-    if open && !stopped.is_empty() {
-        rows.push(Row::Fold {
+    if !stopped.is_empty() {
+        rows.push(Row::Stopped {
             node: node.id.clone(),
-            fold: Fold::Stopped,
             open: stopped_open,
             count: stopped.len(),
         });
@@ -266,8 +271,7 @@ fn elapsed(seconds: i64) -> Option<String> {
     }
 }
 
-pub(super) fn fold_line<'a>(
-    fold: Fold,
+pub(super) fn stopped_line<'a>(
     open: bool,
     count: usize,
     t: &Theme,
@@ -275,20 +279,11 @@ pub(super) fn fold_line<'a>(
     lifted: Style,
     width: u16,
 ) -> Line<'a> {
-    let (text, right) = match (fold, open) {
-        (Fold::Stopped, true) => (format!("    hide {count} stopped"), None),
-        (Fold::Stopped, false) => (format!("    +{count} stopped"), None),
-        (_, open) => {
-            let title = match fold {
-                Fold::Muffit => "background · muffit",
-                _ => "containers · docker",
-            };
-            let mark = if open { "▾" } else { "▸" };
-            let right = (!open).then(|| (format!("{count} "), base.fg(t.mute)));
-            (format!("  {mark} {title}"), right)
-        }
+    let text = match open {
+        true => format!("    hide {count} stopped"),
+        false => format!("    +{count} stopped"),
     };
-    Line::from(spread((text, lifted.fg(t.dim)), right, width, base)).style(base)
+    Line::from(spread((text, lifted.fg(t.dim)), None, width, base)).style(base)
 }
 
 pub(super) fn container_line<'a>(
@@ -323,11 +318,18 @@ pub(super) fn container_line<'a>(
         Span::styled("  ", base),
         Span::styled(format!("{glyph} "), base.fg(colour)),
     ];
+    let plus = shellable(entry);
     spans.extend(spread(
         (entry.name.clone(), lifted),
         right,
-        width.saturating_sub(4),
+        width.saturating_sub(if plus { 7 } else { 4 }),
         base,
     ));
+    if plus {
+        spans.push(Span::styled(
+            " + ",
+            base.fg(t.accent).add_modifier(Modifier::BOLD),
+        ));
+    }
     Line::from(spans).style(base)
 }

@@ -2132,7 +2132,7 @@ crash is a `die` with a non-zero exit that nobody asked for: one beside a `kill`
 ```jsonc
 { "t":"manage", "op":"docker.detail",  "node":"01J…", "id":"kobbler-postgres-test-1" }
 { "t":"manage", "op":"docker.shell",   "node":"01J…", "id":"f49c60fac115…" }
-{ "t":"manage", "op":"docker.start",   "node":"01J…", "id":"…" }   // and docker.stop, docker.restart
+{ "t":"manage", "op":"docker.start",   "node":"01J…", "id":"…" }   // and docker.stop, docker.restart, docker.kill, docker.remove
 { "t":"manage", "op":"docker.adopt",   "node":"01J…", "id":"…" }   // and docker.release
 ```
 
@@ -2157,6 +2157,9 @@ crash is a `die` with a non-zero exit that nobody asked for: one beside a `kill`
   take a while.
 - **`docker.start`**, **`docker.stop`** and **`docker.restart`** ack once the daemon has; the
   herd follows from the daemon's own events. A stop gives the container ten seconds.
+- **`docker.kill`** sends SIGKILL at once, for a container a stop would wait on; **`docker.remove`**
+  deletes the container, forcing it if it is running, and the herd drops it on the daemon's
+  `destroy`. Neither asks first: whoever can send them can already run `docker` on that machine.
 - **`docker.adopt`** copies a static `kampr` that runs there (the configured one, the host's own,
   or this version's published release, fetched and verified) into the container and runs a node there
   over `docker exec`, and acks with `node`: the child's node id, `<host id>-c-<12 hex of the

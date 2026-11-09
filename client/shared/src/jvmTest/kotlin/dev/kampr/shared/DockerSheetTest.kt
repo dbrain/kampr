@@ -141,6 +141,7 @@ class DockerSheetTest {
         container: ContainerInfo,
         sent: MutableList<ManageOp>,
         refusal: () -> String? = { null },
+        detail: String? = DETAIL,
     ): @androidx.compose.runtime.Composable () -> Unit = {
         CompositionLocalProvider(LocalTokens provides phoneTokens()) {
             Box(Modifier.fillMaxSize()) {
@@ -148,7 +149,7 @@ class DockerSheetTest {
                     breakpoint = Breakpoint.Portrait,
                     node = NODE,
                     container = container,
-                    detail = dockerDetailOf(Wire.json.parseToJsonElement(DETAIL) as JsonObject),
+                    detail = detail?.let { dockerDetailOf(Wire.json.parseToJsonElement(it) as JsonObject) },
                     refusal = refusal(),
                     now = NOW_SEC * 1000.0,
                     onManage = { sent += it },
@@ -159,20 +160,31 @@ class DockerSheetTest {
     }
 
     @Test
-    fun theSheetSaysWhyAndWhatItIsUsing() = runComposeUiTest {
+    fun eachTabSaysItsPartOfWhyAndWhatItIsUsing() = runComposeUiTest {
         setContent(sheet(RUNNING, mutableListOf()))
-        for (text in listOf(
-            "pg_isready: no response",
-            "FATAL: the database system is starting up",
-            "POSTGRES_DB=kobbler",
-            "/srv/pg → /var/lib/postgresql",
-            "5432→5432/tcp",
-            "12.5%",
-            "42 MB of 1.0 GB",
+        fun shows(text: String) = assertTrue(onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty(), "missing: $text")
+        for ((tab, texts) in listOf(
+            "Info tab" to listOf("pg_isready: no response", "5432→5432/tcp", "die 137"),
+            "Logs tab" to listOf("FATAL: the database system is starting up"),
+            "Env tab" to listOf("POSTGRES_DB=kobbler"),
+            "Mounts tab" to listOf("/srv/pg → /var/lib/postgresql"),
+            "Stats tab" to listOf("12.5%", "42 MB of 1.0 GB"),
         )) {
-            assertTrue(onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty(), "missing: $text")
+            onNodeWithContentDescription(tab).performClick()
+            waitForIdle()
+            texts.forEach(::shows)
         }
-        assertTrue(onAllNodesWithText("die 137", substring = true).fetchSemanticsNodes().isNotEmpty(), "crash timeline")
+        assertEquals(0, onAllNodesWithText("POSTGRES_DB=kobbler", substring = true).fetchSemanticsNodes().size, "one tab at a time")
+    }
+
+    @Test
+    fun theStateIsAChipBesideTheNameAndTheWaitIsASpinner() = runComposeUiTest {
+        setContent(sheet(RUNNING.copy(health = "unhealthy", restarts = 3), mutableListOf(), detail = null))
+        for (chip in listOf("running", "unhealthy", "↻3")) {
+            assertEquals(1, onAllNodesWithText(chip).fetchSemanticsNodes().size, chip)
+        }
+        assertEquals(1, onAllNodesWithContentDescription("Asking the node").fetchSemanticsNodes().size)
+        assertEquals(0, onAllNodesWithText("Asking the node…").fetchSemanticsNodes().size)
     }
 
     @Test
@@ -189,31 +201,35 @@ class DockerSheetTest {
         for ((label, action) in listOf(
             "Restart" to DockerAction.Restart,
             "Stop" to DockerAction.Stop,
+            "Kill" to DockerAction.Kill,
             "Adopt" to DockerAction.Adopt,
             "Shell in" to DockerAction.Shell,
         )) {
             onNodeWithContentDescription(label).performClick()
             assertEquals(op(action), sent.last(), label)
         }
-        assertEquals(0, onAllNodesWithContentDescription("Start").fetchSemanticsNodes().size)
-        assertEquals(0, onAllNodesWithContentDescription("Release").fetchSemanticsNodes().size)
+        for (absent in listOf("Start", "Release", "Remove")) {
+            assertEquals(0, onAllNodesWithContentDescription(absent).fetchSemanticsNodes().size, absent)
+        }
     }
 
     @Test
-    fun aStoppedAdoptedContainerOffersStartAndRelease() = runComposeUiTest {
+    fun aStoppedAdoptedContainerOffersStartReleaseAndRemove() = runComposeUiTest {
         val sent = mutableListOf<ManageOp>()
         setContent(sheet(RUNNING.copy(state = "exited", exitCode = 1, child = "01JHOST-c-$CID"), sent))
         onNodeWithContentDescription("Start").performClick()
         onNodeWithContentDescription("Release").performClick()
-        assertEquals(listOf<ManageOp>(op(DockerAction.Start), op(DockerAction.Release)), sent)
-        assertEquals(0, onAllNodesWithContentDescription("Stop").fetchSemanticsNodes().size)
-        assertEquals(0, onAllNodesWithContentDescription("Shell in").fetchSemanticsNodes().size)
+        onNodeWithContentDescription("Remove").performClick()
+        assertEquals(listOf<ManageOp>(op(DockerAction.Start), op(DockerAction.Release), op(DockerAction.Remove)), sent)
+        for (absent in listOf("Stop", "Shell in", "Kill")) {
+            assertEquals(0, onAllNodesWithContentDescription(absent).fetchSemanticsNodes().size, absent)
+        }
     }
 
     @Test
     fun aRefusalIsSaidInTheSheet() = runComposeUiTest {
         var refusal by mutableStateOf<String?>(null)
-        setContent(sheet(RUNNING, mutableListOf()) { refusal })
+        setContent(sheet(RUNNING, mutableListOf(), refusal = { refusal }))
         refusal = "no such container"
         waitForIdle()
         assertNotNull(onAllNodesWithText("no such container").fetchSemanticsNodes().firstOrNull())

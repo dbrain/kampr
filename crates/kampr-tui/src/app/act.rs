@@ -40,6 +40,10 @@ impl App {
             self.docker_key(key);
             return;
         }
+        if self.host.is_some() && !self.manage.active() {
+            self.host_key(key);
+            return;
+        }
         if let Some(invite) = self.invite.as_mut() {
             match invite.key(key) {
                 crate::invite::Done::Closed => self.invite = None,
@@ -53,9 +57,8 @@ impl App {
         }
         if self.switcher.active() {
             let items = self.switch_items();
-            if let crate::switcher::Went::To(pane) = self.switcher.key(key, &items) {
-                self.focus(pane);
-                self.open(Screen::Panes);
+            if let crate::switcher::Went::To(to) = self.switcher.key(key, &items) {
+                self.go_to(to);
             }
             return;
         }
@@ -508,7 +511,7 @@ impl App {
         self.declined = Some((claim, tries));
     }
 
-    fn act(&mut self, action: Action) {
+    pub(super) fn act(&mut self, action: Action) {
         use Action::*;
         match action {
             Detach => self.quit = true,
@@ -592,6 +595,8 @@ impl App {
             Shorter => self.resize(Axis::Down, false),
             Arrange => self.arrange(),
             Docker(op) => self.docker_on_pick(op),
+            CycleArea(by) => self.cycle_area(by),
+            HostMenu => self.host_on_pick(),
             OpenLaunched => self.open_launched(),
             TakeDeskLine => self.take_desk_line(),
             ToggleView => self.toggle_view(),
@@ -1034,7 +1039,7 @@ impl App {
             &state.herd,
             self.prefs.order,
             self.hub_row(),
-            &self.prefs.folds,
+            &self.prefs.hosts,
             super::unix_now(),
             |pane| self.convo.pending(pane).and_then(|p| p.question.clone()),
         )

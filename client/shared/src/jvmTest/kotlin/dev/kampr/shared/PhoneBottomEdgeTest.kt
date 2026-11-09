@@ -28,7 +28,7 @@ import kotlin.test.assertTrue
 
 private const val BODY = "Screen body"
 private val PANE = Screen.Pane("01JNODE/w1:p1", PaneView.Terminal)
-private val TABS = listOf("Herd tab", "Settings tab")
+private val TABS = listOf("Kampr tab", "Fleet tab", "Settings tab")
 
 private val TRAVEL = listOf(0.dp, 6.dp, 16.dp, 30.dp, 46.dp, 60.dp, 90.dp, 140.dp, 220.dp, 300.dp)
 

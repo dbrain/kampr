@@ -58,7 +58,7 @@ pub struct Layout {
     pub order: Option<Rect>,
     pub pair: Option<Rect>,
     /// The `prefix g` box while it is up, and the row each of its panes is on.
-    pub switcher: Option<(Rect, Vec<(Rect, String)>)>,
+    pub switcher: Option<(Rect, Vec<(Rect, crate::switcher::Pick)>)>,
     pub tabs: Vec<(String, Rect)>,
     pub panes: Vec<Placed>,
     /// The herd view's pane rows — the triage screen a desk cannot draw.
@@ -140,6 +140,7 @@ impl App {
                     sidebar::Row::Pair(_) => layout.pair = Some(rect),
                     _ => {}
                 }
+                layout.hits.extend(row.spots(rect));
                 if let Some(hit) = row.hit() {
                     layout.hits.push((hit, rect));
                 }
@@ -169,13 +170,12 @@ impl App {
             Screen::Fleet => self.draw_fleet(frame, panes, &mut layout),
         }
         self.draw_borrowed(frame, self.copy_dodge(borrowed, panes));
-        self.draw_docker(
-            Rect {
-                height: panes.height.saturating_sub(1),
-                ..panes
-            },
-            frame.buffer_mut(),
-        );
+        let modal = Rect {
+            height: panes.height.saturating_sub(1),
+            ..panes
+        };
+        self.draw_docker(modal, frame.buffer_mut());
+        self.draw_host(modal, frame.buffer_mut());
         if self.keybinds {
             self.draw_keybinds(frame, area);
         }

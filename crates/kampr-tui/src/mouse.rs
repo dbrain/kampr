@@ -33,7 +33,7 @@ pub enum Click {
     /// The sidebar's offer to pair with this machine's hub.
     Pair,
     /// A row of the `prefix g` box.
-    Go(String),
+    Go(crate::switcher::Pick),
     /// A press outside the `prefix g` box, which closes it and does nothing else.
     Dismiss,
     OpenHerd,
@@ -170,7 +170,7 @@ impl Mouse {
         self.grip = None;
         if let Some((popup, rows)) = &layout.switcher {
             return match rows.iter().find(|(rect, _)| inside(*rect, at)) {
-                Some((_, pane)) => Click::Go(pane.clone()),
+                Some((_, to)) => Click::Go(to.clone()),
                 None if inside(*popup, at) => Click::None,
                 None => Click::Dismiss,
             };

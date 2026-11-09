@@ -9,6 +9,7 @@
 # produce an unsigned APK without the keystore, which stays on the operator's machine.
 set -euo pipefail
 cd "$(dirname "$0")/../client"
+node --test webApp/sw.test.mjs
 # The QR is decoded by an independent decoder rather than asserted against the bitmap that
 # produced it. Without zbar the test skips, and this makes that skip a failure.
 export KAMPR_QR_DECODE=1

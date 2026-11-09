@@ -102,7 +102,9 @@ fun NewSheet(
     // opened it, and so whether the op names herdr.
     var viaHerdr by remember { mutableStateOf(false) }
     var workspaceCommand by remember { mutableStateOf(TextFieldValue()) }
-    var pick by remember(node.id) { mutableStateOf(if (node.native == true || !node.herdrOn) Pick.Native else Pick.Workspace) }
+    // Kampr's side first wherever the machine keeps sessions; herdr's only where that is all it has.
+    var herdrSide by remember(node.id) { mutableStateOf(node.herdrOn && node.native != true) }
+    var pick by remember(node.id) { mutableStateOf(if (herdrSide) Pick.Workspace else Pick.Native) }
     var direction by remember { mutableStateOf(SplitDirection.Right) }
     var ratio by remember { mutableStateOf(0.5) }
     var kind by remember { mutableStateOf<String?>(null) }
@@ -351,6 +353,12 @@ fun NewSheet(
             when (step) {
                 Step.Menu -> Menu(
                     breakpoint = breakpoint,
+                    herdrSide = herdrSide,
+                    onSide = { herdr ->
+                        herdrSide = herdr
+                        pick = if (herdr) Pick.Workspace else Pick.Native
+                    },
+                    nodes = nodes,
                     node = node,
                     pane = pane,
                     peers = peers,
@@ -609,6 +617,9 @@ private fun Note(text: String) {
 @Composable
 private fun Menu(
     breakpoint: Breakpoint,
+    herdrSide: Boolean,
+    onSide: (Boolean) -> Unit,
+    nodes: List<NodeInfo>,
     node: NodeInfo,
     pane: PaneInfo?,
     peers: List<NodeInfo>,
@@ -647,22 +658,37 @@ private fun Menu(
         onKeepFlags, onKind, onMoreKinds, node.name, agentPanes, agentTarget, agentPane, onAgentPane,
     )
     val extras = Extras(pane, pick, direction, ratio, sessions, { onStep(it, true) }, onPick, onDirection, onRatio)
-    val kampr = KamprPick(node, peers, pick, muffit, kamprKinds, kind, kamprPane, kamprLaunch, onStep, onPick, onKamprKind)
-    if (breakpoint == Breakpoint.Portrait || !node.herdrOn) {
-        Column {
-            KamprCards(compact, kampr)
-            if (node.herdrOn) HerdrCards(compact, extras, agent)
-        }
-    } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-            Column(Modifier.weight(1f)) {
-                KamprCards(compact, kampr)
-            }
-            Column(Modifier.weight(1f)) {
-                HerdrCards(compact, extras, agent)
-            }
+    val kampr = KamprPick(node, pick, muffit, kamprKinds, kind, kamprPane, kamprLaunch, onStep, onPick, onKamprKind)
+    val tokens = Kampr.tokens
+    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+        // First, because it governs everything under it: everything this sheet makes is made on
+        // one machine, and the herd's own New button has to aim somewhere before you have a pane
+        // to aim it from. Buried at the bottom it read as "it always uses the first server".
+        SheetCard(
+            icon = KamprIcons.nodes,
+            iconTint = tokens.color.dim,
+            title = node.name,
+            subtitle = if (peers.isEmpty()) {
+                "the only machine in this herd"
+            } else {
+                "made here — tap for the other ${peers.size}"
+            },
+            compact = true,
+            onClick = { onStep(Step.Node, false) },
+            label = "Change machine, currently ${node.name}",
+        )
+        if (node.herdrOn) {
+            Segmented(
+                listOf("Kampr", "Herdr"),
+                if (herdrSide) 1 else 0,
+                { onSide(it == 1) },
+                Modifier.fillMaxWidth(),
+                what = "options",
+            )
         }
     }
+    Box(Modifier.height(9.dp))
+    if (herdrSide && node.herdrOn) HerdrCards(compact, extras, agent) else KamprCards(compact, kampr)
 }
 
 // Eleven parameters about one card, threaded through two layouts, was the alternative.
@@ -688,7 +714,6 @@ private class AgentPick(
 // What the Kampr half of the menu reads and writes, for the same reason `Extras` exists.
 private class KamprPick(
     val node: NodeInfo,
-    val peers: List<NodeInfo>,
     val pick: Pick,
     val muffit: Boolean,
     val kinds: List<String>,
@@ -704,29 +729,12 @@ private class KamprPick(
 private fun KamprCards(compact: Boolean, kampr: KamprPick) {
     val tokens = Kampr.tokens
     val node = kampr.node
-    val peers = kampr.peers
     val pick = kampr.pick
     val muffit = kampr.muffit
     val onStep: (Step) -> Unit = { kampr.onStep(it, false) }
     val onPick = kampr.onPick
     val native = node.native == true
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
-        // First, because it governs every card under it: everything this sheet makes is made on
-        // one machine, and the herd's own New button has to aim somewhere before you have a pane
-        // to aim it from. Buried at the bottom it read as "it always uses the first server".
-        SheetCard(
-            icon = KamprIcons.nodes,
-            iconTint = tokens.color.dim,
-            title = node.name,
-            subtitle = if (peers.isEmpty()) {
-                "the only machine in this herd"
-            } else {
-                "made here — tap for the other ${peers.size}"
-            },
-            compact = true,
-            onClick = { onStep(Step.Node) },
-            label = "Change machine, currently ${node.name}",
-        )
         SheetCard(
             icon = KamprIcons.workspace,
             iconTint = tokens.color.accent,
@@ -749,29 +757,10 @@ private fun KamprCards(compact: Boolean, kampr: KamprPick) {
                 null
             },
         )
-        if (kampr.kinds.isNotEmpty()) {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                kampr.kinds.forEach { k ->
-                    Chip(k, k == kampr.kind && pick == Pick.KamprAgent, { kampr.onKind(k) }, label = "Start $k as a Kampr session")
-                }
-            }
-            kampr.launch?.let { line ->
-                KText(
-                    listOfNotNull(line, kampr.pane?.let { "beside ${paneTitle(it)}" }).joinToString(" · "),
-                    tokens.type.meta,
-                    tokens.color.dim,
-                    Modifier.named("Starts $line"),
-                    maxLines = 2,
-                )
-            }
-        }
         if (muffit) {
             SheetCard(
-                icon = null,
-                iconTint = null,
+                icon = KamprIcons.muffit,
+                iconTint = tokens.color.dim,
                 title = "Muffit session",
                 subtitle = "an agent that is a conversation, not a terminal",
                 compact = compact,
@@ -803,6 +792,35 @@ private fun KamprCards(compact: Boolean, kampr: KamprPick) {
             onClick = if (native) ({ onStep(Step.Worktree) }) else null,
         )
     }
+    if (kampr.kinds.isNotEmpty()) {
+        SheetSection("start an agent", compact)
+        Box(Modifier.padding(horizontal = 16.dp)) {
+            Surface(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.padding(horizontal = 15.dp, vertical = 13.dp),
+                    verticalArrangement = Arrangement.spacedBy(11.dp),
+                ) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        kampr.kinds.forEach { k ->
+                            Chip(k, k == kampr.kind && pick == Pick.KamprAgent, { kampr.onKind(k) }, label = "Start $k as a Kampr session")
+                        }
+                    }
+                    kampr.launch?.let { line ->
+                        KText(
+                            listOfNotNull(line, kampr.pane?.let { "beside ${paneTitle(it)}" }).joinToString(" · "),
+                            tokens.type.meta,
+                            tokens.color.dim,
+                            Modifier.named("Starts $line"),
+                            maxLines = 2,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 // What the herdr half of the menu reads and writes, gathered so it can be handed whole to whichever
@@ -824,7 +842,6 @@ private fun HerdrCards(compact: Boolean, extras: Extras, agent: AgentPick) {
     val tokens = Kampr.tokens
     val pane = extras.pane
     val pick = extras.pick
-    SheetSection("with herdr", compact)
     Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
         SheetCard(
             icon = KamprIcons.workspace,

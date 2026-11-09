@@ -454,8 +454,9 @@ the moment a dial to it lands; if the hub turns the device away, the pair row co
 A hub on an https domain never expires a device, as a browser's never does; only a node reached by
 bare IP puts one on `auth.token_days`.
 
-`prefix g` jumps to any pane on any node by a few letters of its title, workspace or machine; with
-nothing typed it lists the panes last visited first, and `1`–`9` (or `alt+1`–`9` once something is
+`prefix g` jumps to any pane on any node by a few letters of its title, workspace or machine, and
+opens a container's panel by its name, image, compose project or service ([docs/19](./docs/19-docker.md));
+with nothing typed it lists the panes last visited first, and `1`–`9` (or `alt+1`–`9` once something is
 typed) or a click opens one. `kampr` reopens on the pane it was last showing, and remembers the
 sidebar's order, in `tui.toml` beside `client.toml`. The sidebar's header switches between `grouped`
 (node, workspace, pane) and `priority` (blocked first), by click or `o` in the navigator. The wheel

@@ -42,6 +42,11 @@ import dev.kampr.shared.theme.Kampr
 val TOUCH: Dp = 44.dp
 val LANDSCAPE_TOUCH: Dp = 36.dp
 
+// The desk's sidebar is driven by a pointer, and its rows are what loses the width a 36 dp control
+// costs. Compose still widens a small target's hit area on a touch screen where nothing else
+// claims the press.
+val POINTER_TOUCH: Dp = 28.dp
+
 private val FOCUS_RING = 2.dp
 
 // A keyboard user gets nothing from a control that is reachable but invisible when reached, and

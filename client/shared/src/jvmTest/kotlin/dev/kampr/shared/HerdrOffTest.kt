@@ -115,16 +115,16 @@ class HerdrOffTest {
         assertEquals(listOf<ManageOp>(ManageOp.NativeCreate(KAMPR_ONLY.id, cwd = FROM.cwd)), sent)
     }
 
-    // Herdr on is the extra: the sheet still leads with a Kampr session, and its own primary button
-    // starts one.
+    // Herdr on is the extra: the sheet opens on Kampr's side, herdr's is one tab over, and the
+    // primary button starts a Kampr session.
     @Test
     fun theSheetLeadsWithAKamprSessionEvenWhereHerdrIsOn() = runComposeUiTest {
         val sent = mutableListOf<ManageOp>()
         sheet(WITH_HERDR, sent = sent)
         waitForIdle()
-        val kampr = onNodeWithContentDescription("Kampr session,", substring = true).fetchSemanticsNode().boundsInRoot
-        val workspace = onNodeWithContentDescription("Workspace,", substring = true).fetchSemanticsNode().boundsInRoot
-        assertTrue(kampr.top < workspace.top, "a herdr workspace is offered above a Kampr session")
+        onNodeWithContentDescription("Kampr session,", substring = true).assertExists()
+        assertTrue(onAllNodesWithContentDescription("Workspace, a herdr workspace", substring = true).fetchSemanticsNodes().isEmpty())
+        onNodeWithContentDescription("Herdr options").assertExists()
         onNodeWithContentDescription(START).performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeCreate(WITH_HERDR.id, desk = true)), sent)

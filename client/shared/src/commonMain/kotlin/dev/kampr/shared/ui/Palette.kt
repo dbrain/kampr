@@ -7,6 +7,8 @@ import dev.kampr.shared.model.homeRelative
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.anchorPane
+import dev.kampr.shared.wire.ContainerInfo
+import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 
 sealed interface PaletteTarget {
@@ -14,6 +16,7 @@ sealed interface PaletteTarget {
     data class Go(val screen: Screen) : PaletteTarget
     data class NewOn(val nodeId: String) : PaletteTarget
     data class Files(val place: FilesPlace) : PaletteTarget
+    data class Container(val nodeId: String, val containerId: String) : PaletteTarget
 }
 
 data class PaletteField(val text: String, val weight: Int)
@@ -34,6 +37,7 @@ fun paletteItems(herd: Herd, mosaic: Boolean, canCreate: Boolean, canBrowse: Boo
     val listed = herd.groups().flatMap { it.panes }
     val fleet = herd.panes.filter { it.fleet != null }
     val panes = (listed + fleet).map { paneItem(it, names[it.nodeId] ?: it.nodeId) }
+    val containers = herd.nodes.flatMap { node -> node.containers.map { containerItem(it, node) } }
     val places = buildList {
         add(place("Fleet", "one command across the herd", Screen.Fleet, "fleet run broadcast"))
         if (mosaic) add(place("Mosaic", "several panes at once", Screen.Mosaic, "grid tile split"))
@@ -66,8 +70,22 @@ fun paletteItems(herd: Herd, mosaic: Boolean, canCreate: Boolean, canBrowse: Boo
             }
         }
     }
-    return panes + places
+    return panes + containers + places
 }
+
+private fun containerItem(container: ContainerInfo, node: NodeInfo) = PaletteItem(
+    title = container.name,
+    detail = listOfNotNull(node.name, "container", container.state, container.image).joinToString(" · "),
+    target = PaletteTarget.Container(node.id, container.id),
+    fields = listOfNotNull(
+        PaletteField(container.name, 3),
+        PaletteField(node.name, 3),
+        container.project?.let { PaletteField(it, 3) },
+        container.service?.let { PaletteField(it, 2) },
+        PaletteField(container.image, 2),
+        PaletteField("container docker ${container.state}", 1),
+    ),
+)
 
 private fun paneItem(pane: PaneInfo, node: String): PaletteItem {
     val title = paneTitle(pane)

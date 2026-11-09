@@ -21,11 +21,11 @@ import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.HerdSidebar
-import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LocalFleet
 import dev.kampr.shared.ui.LocalManage
 import dev.kampr.shared.ui.LocalMosaic
 import dev.kampr.shared.ui.ManageIo
+import dev.kampr.shared.ui.POINTER_TOUCH
 import dev.kampr.shared.ui.RAIL_WIDTH
 import dev.kampr.shared.ui.SIDEBAR_WIDTH
 import dev.kampr.shared.wire.NodeInfo
@@ -115,13 +115,26 @@ class SidebarRoomTest {
             val box = found.first().boundsInRoot
             val width = with(density) { box.width.toDp() }
             val height = with(density) { box.height.toDp() }
-            if (width < LANDSCAPE_TOUCH || height < LANDSCAPE_TOUCH) squished += "$label ${width}x$height"
+            if (width < POINTER_TOUCH || height < POINTER_TOUCH) squished += "$label ${width}x$height"
         }
         assertEquals(
             emptyList(),
             squished,
             "the sidebar header does not fit $SIDEBAR_WIDTH and these controls absorbed it: $squished",
         )
+    }
+
+    // "Each button is ages away from the next": a pointer's targets sit side by side, with the
+    // painted chips a few dp apart rather than a thumb's width.
+    @Test
+    fun theSidebarsControlsSitCloseTogether() = runComposeUiTest {
+        setContent { Sidebar() }
+        waitForIdle()
+        val boxes = HEADER_CONTROLS.drop(1).map { onNodeWithContentDescription(it, substring = true).getUnclippedBoundsInRoot() }
+        for ((left, right) in boxes.zipWithNext()) {
+            assertTrue(right.left - left.right <= 2.dp, "${right.left - left.right} between two controls")
+            assertTrue(left.right - left.left <= POINTER_TOUCH, "a control ${left.right - left.left} wide")
+        }
     }
 
     // The overflow was only invisible because the sidebar clips it. Unclipped bounds are what say

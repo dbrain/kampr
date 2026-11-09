@@ -1,9 +1,10 @@
-//! The sidebar's per-host sections, as rows: docs/19 "Client", mirrored from the Compose client's
-//! `Docker.kt`, `Folds.kt` and `Herd.kt`.
+//! The sidebar's per-host lists, as rows: docs/19 "Client", mirrored from the Compose client's
+//! `Docker.kt`, `Folds.kt` and `HerdGroup.kt`.
 
 use kampr_client::Herd;
 use kampr_core::wire::{NodeEntry, PaneEntry};
-use kampr_tui::sidebar::{self, Fold, Folds, Order, Row};
+use kampr_tui::sidebar::{self, Area, Hosts, Order, Row, Tab};
+use ratatui::style::Color;
 use serde_json::{Value, json};
 
 pub(crate) const NOW: i64 = 1_800_000_000;
@@ -45,8 +46,8 @@ fn herd(nodes: Value, panes: Value) -> Herd {
     }
 }
 
-fn drawn(herd: &Herd, folds: &Folds) -> Vec<String> {
-    sidebar::rows(herd, Order::Grouped, None, folds, NOW, |_| None)
+fn drawn(herd: &Herd, hosts: &Hosts) -> Vec<String> {
+    sidebar::rows(herd, Order::Grouped, None, hosts, NOW, |_| None)
         .iter()
         .skip(1)
         .map(text)
@@ -58,10 +59,8 @@ fn text(row: &Row) -> String {
         Row::Node { name, .. } => format!("host {name}"),
         Row::Workspace { name, .. } => format!("space {name}"),
         Row::Pane { pane, .. } => format!("pane {pane}"),
-        Row::Fold {
-            fold, open, count, ..
-        } => {
-            format!("{fold:?} {} {count}", if *open { "open" } else { "shut" })
+        Row::Stopped { open, count, .. } => {
+            format!("stopped {} {count}", if *open { "open" } else { "shut" })
         }
         Row::Project(project) => format!("project {project}"),
         Row::Container { entry, .. } => format!("container {}", entry.name),
@@ -72,7 +71,17 @@ fn text(row: &Row) -> String {
     }
 }
 
-fn painted(rows: &[Row], width: u16) -> String {
+fn tabs(herd: &Herd, hosts: &Hosts) -> (Vec<Tab>, Area) {
+    sidebar::rows(herd, Order::Grouped, None, hosts, NOW, |_| None)
+        .into_iter()
+        .find_map(|r| match r {
+            Row::Node { tabs, area, .. } => Some((tabs, area)),
+            _ => None,
+        })
+        .expect("a host row")
+}
+
+fn buffer(rows: &[Row], width: u16) -> ratatui::buffer::Buffer {
     let area = ratatui::layout::Rect::new(0, 0, width, rows.len() as u16);
     let mut buf = ratatui::buffer::Buffer::empty(area);
     ratatui::widgets::Widget::render(
@@ -86,7 +95,12 @@ fn painted(rows: &[Row], width: u16) -> String {
         area,
         &mut buf,
     );
-    (0..area.height)
+    buf
+}
+
+fn painted(rows: &[Row], width: u16) -> String {
+    let buf = buffer(rows, width);
+    (0..buf.area.height)
         .map(|y| {
             (0..width)
                 .map(|x| buf[(x, y)].symbol().to_string())
@@ -96,39 +110,77 @@ fn painted(rows: &[Row], width: u16) -> String {
         .collect()
 }
 
-fn opened(folds: &[(&str, Fold)]) -> Folds {
-    let mut set = Folds::default();
-    for (node, fold) in folds {
-        set.flip(node, *fold);
+fn showing(picks: &[(&str, Area)]) -> Hosts {
+    let mut hosts = Hosts::default();
+    for (node, area) in picks {
+        hosts.show(node, *area);
     }
-    set
+    hosts
 }
 
-#[test]
-fn a_host_lists_its_terminals_then_muffit_open_then_its_containers_folded() {
+fn front_with_everything() -> Herd {
     let mut n = host("01JA", "front");
     n["docker"] = json!(true);
-    n["containers"] = json!([container("web", "running"), container("db", "running")]);
-    let herd = herd(
+    n["containers"] = json!([
+        container("web", "running"),
+        container("db", "running"),
+        container("old", "exited")
+    ]);
+    herd(
         json!([n]),
         json!([term("01JA/w1:p1"), native("01JA/m1", "muffit", None)]),
-    );
+    )
+}
+
+#[test]
+fn a_host_lists_its_terminals_by_default_and_offers_a_switch_for_the_lists_it_has() {
+    let herd = front_with_everything();
 
     assert_eq!(
-        drawn(&herd, &Folds::default()),
-        [
-            "host front",
-            "space kampr",
-            "pane 01JA/w1:p1",
-            "Muffit open 1",
-            "pane 01JA/m1",
-            "Containers shut 2",
-        ]
+        drawn(&herd, &Hosts::default()),
+        ["host front", "space kampr", "pane 01JA/w1:p1"]
+    );
+    assert_eq!(
+        tabs(&herd, &Hosts::default()),
+        (
+            vec![
+                Tab {
+                    area: Area::Terminals,
+                    count: 1
+                },
+                Tab {
+                    area: Area::Containers,
+                    count: 2
+                },
+                Tab {
+                    area: Area::Muffit,
+                    count: 1
+                },
+            ],
+            Area::Terminals
+        ),
+        "the containers count is the running ones"
+    );
+    assert_eq!(
+        drawn(&herd, &showing(&[("01JA", Area::Muffit)])),
+        ["host front", "pane 01JA/m1"]
     );
 }
 
 #[test]
-fn open_containers_show_the_live_ones_by_project_and_hide_the_stopped_behind_one_row() {
+fn a_host_with_only_terminals_has_no_switch_and_a_pick_whose_list_went_falls_back() {
+    let herd = herd(json!([host("01JA", "front")]), json!([term("01JA/w1:p1")]));
+    let gone = showing(&[("01JA", Area::Containers)]);
+
+    assert_eq!(tabs(&herd, &gone), (vec![], Area::Terminals));
+    assert_eq!(
+        drawn(&herd, &gone),
+        ["host front", "space kampr", "pane 01JA/w1:p1"]
+    );
+}
+
+#[test]
+fn the_containers_list_shows_the_live_ones_by_project_and_hides_the_stopped_behind_one_row() {
     let mut old_crash = container("batch", "exited");
     old_crash["exit_code"] = json!(1);
     old_crash["last_crash"] = json!({ "at": NOW - 2 * 86_400, "exit_code": 1 });
@@ -156,14 +208,13 @@ fn open_containers_show_the_live_ones_by_project_and_hide_the_stopped_behind_one
         container("gone", "dead"),
         container("made", "created"),
     ]);
-    let herd = herd(json!([n]), json!([]));
+    let herd = herd(json!([n]), json!([term("01JA/w1:p1")]));
 
-    let open = opened(&[("01JA", Fold::Containers)]);
+    let mut hosts = showing(&[("01JA", Area::Containers)]);
     assert_eq!(
-        drawn(&herd, &open),
+        drawn(&herd, &hosts),
         [
             "host front",
-            "Containers open 9",
             "container cache",
             "note exited",
             "container loose",
@@ -175,20 +226,20 @@ fn open_containers_show_the_live_ones_by_project_and_hide_the_stopped_behind_one
             "note restarting",
             "container postgres",
             "note up 3h",
-            "Stopped shut 4",
+            "stopped shut 4",
         ]
     );
 
-    let all = opened(&[("01JA", Fold::Containers), ("01JA", Fold::Stopped)]);
-    let rows = drawn(&herd, &all);
+    hosts.flip_stopped("01JA");
+    let rows = drawn(&herd, &hosts);
     for name in ["batch", "done", "gone", "made"] {
         assert!(rows.contains(&format!("container {name}")), "{rows:#?}");
     }
-    assert_eq!(rows.last().map(String::as_str), Some("Stopped open 4"));
+    assert_eq!(rows.last().map(String::as_str), Some("stopped open 4"));
 }
 
 #[test]
-fn a_shell_sits_under_its_container_and_keeps_it_listed_while_folded_and_stopped() {
+fn a_shell_sits_under_its_container_in_the_containers_list_and_not_among_the_terminals() {
     let mut n = host("01JA", "front");
     n["containers"] = json!([container("web", "exited"), container("db", "running")]);
     let herd = herd(
@@ -197,12 +248,15 @@ fn a_shell_sits_under_its_container_and_keeps_it_listed_while_folded_and_stopped
     );
 
     assert_eq!(
-        drawn(&herd, &Folds::default()),
+        drawn(&herd, &Hosts::default()),
+        ["host front", "space kampr", "pane 01JA/w1:p1"]
+    );
+    assert_eq!(
+        drawn(&herd, &showing(&[("01JA", Area::Containers)])),
         [
             "host front",
-            "space kampr",
-            "pane 01JA/w1:p1",
-            "Containers shut 2",
+            "container db",
+            "note up 3h",
             "container web",
             "note exited",
             "│pane 01JA/n1",
@@ -211,7 +265,7 @@ fn a_shell_sits_under_its_container_and_keeps_it_listed_while_folded_and_stopped
 }
 
 #[test]
-fn an_adopted_node_hangs_under_its_container_and_not_at_the_top() {
+fn an_adopted_node_hangs_under_its_container_and_a_stray_shows_whichever_list_is_up() {
     let mut web = container("web", "running");
     web["child"] = json!("01JA-c-web");
     let mut n = host("01JA", "front");
@@ -228,12 +282,13 @@ fn an_adopted_node_hangs_under_its_container_and_not_at_the_top() {
     );
 
     assert_eq!(
-        drawn(&herd, &Folds::default()),
+        drawn(&herd, &Hosts::default()),
+        ["host front", "space kampr", "pane 01JA/w1:p1", "│host old-node",]
+    );
+    assert_eq!(
+        drawn(&herd, &showing(&[("01JA", Area::Containers)])),
         [
             "host front",
-            "space kampr",
-            "pane 01JA/w1:p1",
-            "Containers shut 1",
             "container web",
             "note up 3h",
             "│host web-node",
@@ -242,6 +297,42 @@ fn an_adopted_node_hangs_under_its_container_and_not_at_the_top() {
             "│host old-node",
         ]
     );
+}
+
+#[test]
+fn a_row_belongs_to_the_host_above_it_and_not_to_a_child_drawn_under_an_earlier_container() {
+    let mut adopted = container("a-web", "running");
+    adopted["child"] = json!("01JA-c-web");
+    let mut n = host("01JA", "front");
+    n["containers"] = json!([adopted, container("b-db", "running")]);
+    let mut child = host("01JA-c-web", "web-node");
+    child["parent"] = json!("01JA");
+    child["kind"] = json!("peer");
+    let herd = herd(
+        json!([n, child]),
+        json!([
+            term("01JA-c-web/w1:p1"),
+            native("01JA/n1", "native", Some("b-db"))
+        ]),
+    );
+    let rows = sidebar::rows(
+        &herd,
+        Order::Grouped,
+        None,
+        &showing(&[("01JA", Area::Containers)]),
+        NOW,
+        |_| None,
+    );
+    let at = |want: &str| {
+        rows.iter()
+            .position(|r| text(r) == want)
+            .unwrap_or_else(|| panic!("no {want}: {rows:#?}"))
+    };
+    let owner = |i: usize| sidebar::host_of(&rows, i).map(|(node, ..)| node);
+
+    assert_eq!(owner(at("│pane 01JA/n1")).as_deref(), Some("01JA"));
+    assert_eq!(owner(at("│pane 01JA-c-web/w1:p1")).as_deref(), Some("01JA-c-web"));
+    assert_eq!(owner(at("container b-db")).as_deref(), Some("01JA"));
 }
 
 #[test]
@@ -256,7 +347,7 @@ fn a_parent_loop_or_a_missing_parent_still_draws_every_node_once() {
     d["parent"] = json!("01JD");
     let herd = herd(json!([a, b, c, d]), json!([]));
 
-    let rows = drawn(&herd, &Folds::default());
+    let rows = drawn(&herd, &Hosts::default());
     for name in ["alpha", "beta", "gamma", "delta"] {
         assert_eq!(
             rows.iter()
@@ -271,58 +362,112 @@ fn a_parent_loop_or_a_missing_parent_still_draws_every_node_once() {
 }
 
 #[test]
-fn a_docker_that_does_not_answer_is_said_and_a_host_without_docker_draws_no_section() {
+fn a_docker_that_does_not_answer_is_offered_and_said_and_a_host_without_docker_has_no_switch() {
     let mut down = host("01JA", "front");
     down["docker"] = json!(false);
     let herd_down = herd(json!([down]), json!([]));
+    let picked = showing(&[("01JA", Area::Containers)]);
     assert_eq!(
-        drawn(&herd_down, &opened(&[("01JA", Fold::Containers)])),
-        [
-            "host front",
-            "Containers open 0",
-            "note docker is not answering here"
-        ]
+        tabs(&herd_down, &picked),
+        (
+            vec![
+                Tab {
+                    area: Area::Terminals,
+                    count: 0
+                },
+                Tab {
+                    area: Area::Containers,
+                    count: 0
+                },
+            ],
+            Area::Containers
+        )
+    );
+    assert_eq!(
+        drawn(&herd_down, &picked),
+        ["host front", "note docker is not answering here"]
+    );
+    assert_eq!(
+        drawn(&herd_down, &Hosts::default()),
+        ["host front", "note no terminals here"]
     );
 
     let mut idle = host("01JA", "front");
     idle["docker"] = json!(true);
-    assert_eq!(
-        drawn(&herd(json!([idle]), json!([])), &Folds::default()),
-        ["host front"]
-    );
+    let herd_idle = herd(json!([idle]), json!([]));
+    assert_eq!(tabs(&herd_idle, &picked), (vec![], Area::Terminals));
 }
 
 #[test]
-fn the_muffit_section_folds_and_says_how_many_it_holds() {
+fn the_switch_is_drawn_on_the_host_line_with_its_counts_capped_at_nine() {
+    let mut n = host("01JA", "front");
+    n["docker"] = json!(true);
+    n["containers"] = json!(
+        (0..12)
+            .map(|i| container(&format!("c{i:02}"), "running"))
+            .collect::<Vec<_>>()
+    );
     let herd = herd(
-        json!([host("01JA", "front")]),
-        json!([
-            native("01JA/m1", "muffit", None),
-            native("01JA/m2", "muffit", None)
-        ]),
+        json!([n]),
+        json!([term("01JA/w1:p1"), native("01JA/m1", "muffit", None)]),
     );
+    let rows = sidebar::rows(&herd, Order::Grouped, None, &Hosts::default(), NOW, |_| None);
+    let screen = painted(&rows, 40);
+    let line = screen.lines().find(|l| l.contains("front")).unwrap_or_default();
+    assert!(
+        line.contains("›_") && line.contains("▣ 9+") && line.contains("◉ 1"),
+        "{screen}"
+    );
+    assert!(
+        !line.contains("ms") && !line.contains("local"),
+        "no latency on the row: {line}"
+    );
+
+    let buf = buffer(&rows, 40);
+    let y = screen.lines().position(|l| l.contains("front")).unwrap() as u16;
+    let x = line.find("›_").map(|b| line[..b].chars().count()).unwrap() as u16;
+    assert!(
+        buf[(x, y)].modifier.contains(ratatui::style::Modifier::REVERSED),
+        "the list showing is in reverse video"
+    );
+    let name_x = line.find("front").map(|b| line[..b].chars().count()).unwrap() as u16;
     assert_eq!(
-        drawn(&herd, &opened(&[("01JA", Fold::Muffit)])),
-        ["host front", "Muffit shut 2"]
+        buf[(name_x, y)].fg,
+        kampr_tui::theme::PHOSPHOR.accent,
+        "this machine's name is in the accent colour"
     );
 }
 
 #[test]
-fn a_container_row_carries_its_restarts_and_health_and_the_fold_rows_are_selectable() {
+fn a_host_that_is_not_this_machine_keeps_its_name_in_the_plain_colour() {
+    let mut n = host("01JA", "far");
+    n["kind"] = json!("peer");
+    n["rtt_ms"] = json!(12.0);
+    let herd = herd(json!([n]), json!([term("01JA/w1:p1")]));
+    let rows = sidebar::rows(&herd, Order::Grouped, None, &Hosts::default(), NOW, |_| None);
+    let screen = painted(&rows, 30);
+    let y = screen.lines().position(|l| l.contains("far")).unwrap();
+    let line = screen.lines().nth(y).unwrap();
+    assert!(!line.contains("12ms"), "{line}");
+    let x = line.find("far").map(|b| line[..b].chars().count()).unwrap() as u16;
+    assert_ne!(
+        buffer(&rows, 30)[(x, y as u16)].fg,
+        kampr_tui::theme::PHOSPHOR.accent
+    );
+    assert_ne!(buffer(&rows, 30)[(x, y as u16)].fg, Color::Reset);
+}
+
+#[test]
+fn a_container_row_carries_its_restarts_health_and_a_plus_while_it_runs() {
     let mut web = container("web", "running");
     web["restarts"] = json!(4);
     web["health"] = json!("unhealthy");
     let mut n = host("01JA", "front");
-    n["containers"] = json!([web]);
+    n["containers"] = json!([web, container("idle", "exited")]);
     let herd = herd(json!([n]), json!([]));
-    let rows = sidebar::rows(
-        &herd,
-        Order::Grouped,
-        None,
-        &opened(&[("01JA", Fold::Containers)]),
-        NOW,
-        |_| None,
-    );
+    let mut hosts = showing(&[("01JA", Area::Containers)]);
+    hosts.flip_stopped("01JA");
+    let rows = sidebar::rows(&herd, Order::Grouped, None, &hosts, NOW, |_| None);
     let row = rows
         .iter()
         .find(|r| matches!(r, Row::Container { .. }))
@@ -330,13 +475,20 @@ fn a_container_row_carries_its_restarts_and_health_and_the_fold_rows_are_selecta
     assert!(row.selectable());
     assert!(
         rows.iter()
-            .any(|r| matches!(r, Row::Fold { .. }) && r.selectable())
+            .any(|r| matches!(r, Row::Stopped { .. }) && r.selectable())
+    );
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, Row::Node { .. }) && r.selectable()),
+        "a host row is a stop for the navigator: its switch and menu are keys on it"
     );
 
     let screen = painted(&rows, 30);
     let line = screen.lines().find(|l| l.contains("web")).unwrap_or_default();
     assert!(line.contains("↻4") && line.contains("unhealthy"), "{screen}");
-    assert!(screen.contains("▾ containers · docker"), "{screen}");
+    assert!(line.trim_end().ends_with('+'), "{screen}");
+    let idle = screen.lines().find(|l| l.contains("idle")).unwrap_or_default();
+    assert!(!idle.contains('+'), "{screen}");
 }
 
 #[test]
@@ -348,12 +500,11 @@ fn a_failing_adoption_is_listed_whatever_its_state_and_says_so() {
     let mut n = host("01JA", "front");
     n["containers"] = json!([stuck, gone]);
     let herd = herd(json!([n]), json!([]));
-    let open = opened(&[("01JA", Fold::Containers)]);
+    let open = showing(&[("01JA", Area::Containers)]);
     assert_eq!(
         drawn(&herd, &open),
         [
             "host front",
-            "Containers open 2",
             "container gone",
             "note gone",
             "container stuck",

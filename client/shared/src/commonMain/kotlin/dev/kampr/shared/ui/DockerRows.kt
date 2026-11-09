@@ -26,36 +26,21 @@ import dev.kampr.shared.wire.ContainerInfo
 
 fun nowSeconds(nowMillis: Double): Long = (nowMillis / 1000).toLong()
 
-// What the rows under a folded header still show: a container with a shell or a node in it, so
-// what hangs off it is never hidden by a fold.
-fun NodeGroup.listedContainers(open: Boolean, stoppedOpen: Boolean, nowMillis: Double): List<ContainerInfo> {
+fun NodeGroup.listedContainers(stoppedOpen: Boolean, nowMillis: Double): List<ContainerInfo> {
     val shelf = shelf(nowSeconds(nowMillis))
-    return when {
-        !open -> shelf.shown.filter { shellsOf(it).isNotEmpty() || childOf(it) != null }
-        stoppedOpen -> shelf.shown + shelf.stopped
-        else -> shelf.shown
-    }
+    return if (stoppedOpen) shelf.shown + shelf.stopped else shelf.shown
 }
 
 @Composable
 fun ContainerSection(group: NodeGroup, ctx: HerdRowsCtx) {
     val node = group.node
-    if (node.containers.isEmpty() && node.docker != false) return
     val tokens = Kampr.tokens
     val look = ctx.look
-    val open = ctx.folds.open(node.id, Fold.Containers)
     val stoppedOpen = ctx.folds.open(node.id, Fold.Stopped)
-    FoldHeading(
-        "Containers · docker",
-        open,
-        { ctx.onFold(node.id, Fold.Containers, !open) },
-        Modifier.padding(start = look.inset, top = look.headingTop, bottom = look.headingBottom),
-        detail = if (open) null else node.containers.size.toString(),
-    )
-    if (open && node.docker == false) {
+    if (node.docker == false) {
         KText("docker is not answering here", tokens.type.captionSmall, tokens.color.mute, Modifier.padding(start = look.inset))
     }
-    for (project in group.listedContainers(open, stoppedOpen, ctx.now).byProject()) {
+    for (project in group.listedContainers(stoppedOpen, ctx.now).byProject()) {
         project.project?.let { ProjectCaption(it, ctx) }
         for (container in project.containers) {
             ContainerRow(node.id, container, ctx)
@@ -70,7 +55,7 @@ fun ContainerSection(group: NodeGroup, ctx: HerdRowsCtx) {
         }
     }
     val stopped = group.shelf(nowSeconds(ctx.now)).stopped.size
-    if (open && stopped > 0) StoppedRow(stopped, stoppedOpen, ctx) { ctx.onFold(node.id, Fold.Stopped, !stoppedOpen) }
+    if (stopped > 0) StoppedRow(stopped, stoppedOpen, ctx) { ctx.onFold(node.id, Fold.Stopped, !stoppedOpen) }
 }
 
 @Composable
@@ -129,7 +114,7 @@ fun ContainerRow(nodeId: String, container: ContainerInfo, ctx: HerdRowsCtx) {
             .fillMaxWidth()
             .touchable(if (ctx.look.rows) LANDSCAPE_TOUCH else TOUCH)
             .let { if (manage.enabled) it.action(spoken, { manage.openContainer(nodeId, container.id) }, shape) else it.named(spoken) }
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(start = 10.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
@@ -141,5 +126,10 @@ fun ContainerRow(nodeId: String, container: ContainerInfo, ctx: HerdRowsCtx) {
         if (container.restarts > 0) KText("↻${container.restarts}", tokens.type.micro, tokens.color.working)
         if (container.health == "unhealthy") KText("unhealthy", tokens.type.micro, tokens.color.blocked)
         if (container.adoptError != null) KText(ADOPTION_FAILING, tokens.type.micro, tokens.color.blocked)
+        if (manage.enabled && container.state == "running") {
+            GlyphAction(KamprIcons.plus, "Shell into ${container.name}", tokens.color.accent, ctx.look.control, chip = 22.dp) {
+                manage.containerShell(nodeId, container.id)
+            }
+        }
     }
 }

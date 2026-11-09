@@ -116,6 +116,8 @@ class DockerWireTest {
             DockerAction.Start to "docker.start",
             DockerAction.Stop to "docker.stop",
             DockerAction.Restart to "docker.restart",
+            DockerAction.Kill to "docker.kill",
+            DockerAction.Remove to "docker.remove",
             DockerAction.Adopt to "docker.adopt",
             DockerAction.Release to "docker.release",
         )

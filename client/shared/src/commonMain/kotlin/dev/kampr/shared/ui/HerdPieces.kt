@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.NodeGroup
 import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.nativeSpoken
 import dev.kampr.shared.model.othersWatching
@@ -177,26 +178,6 @@ fun WorkspaceHeading(name: String, modifier: Modifier = Modifier) {
     KText(name, tokens.type.captionSmall, tokens.color.mute, modifier.asHeading().announce("Workspace $name"), maxLines = 1)
 }
 
-// A host's section that folds: its muffit sessions, its containers. What is under it is the
-// operator's to hide, so the heading is a control and says which way it is.
-@Composable
-fun FoldHeading(title: String, open: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier, detail: String? = null) {
-    val tokens = Kampr.tokens
-    Row(
-        modifier
-            .fillMaxWidth()
-            .touchable(LANDSCAPE_TOUCH)
-            .action(title, onToggle, state = if (open) "expanded" else "collapsed")
-            .asHeading(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        IconGlyph(if (open) KamprIcons.chevronDown else KamprIcons.chevronRight, 10.dp, tokens.color.mute)
-        DisableSelection { KText(title, tokens.type.captionSmall, tokens.color.mute, maxLines = 1) }
-        if (detail != null) KText(detail, tokens.type.micro, tokens.color.mute, maxLines = 1)
-    }
-}
-
 @Composable
 fun HerdEmpty(connection: ConnectionStatus, compact: Boolean, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
@@ -342,26 +323,15 @@ val LocalKeystrokeMs = compositionLocalOf<Map<String, Double>> { emptyMap() }
 // pane that visibly halted).
 fun nodeLatency(node: NodeInfo, keystrokes: Map<String, Double>, ping: Double?): String = keystrokes[node.id]?.let { "key ${formatLatency(it)}" } ?: "ping ${formatLatency(ping)}"
 
-// Drawn as a glyph beside the figure, the words being what is spoken: "local · key 41 ms" was a
-// third of a 260 dp sidebar row.
+// The machine's name says which one this device is talking through by its colour, and everything
+// else about it (how it is reached, what a keystroke costs, its files) is behind the overflow: a
+// 260 dp sidebar row is the name's.
 @Composable
-private fun NodeReachMarks(node: NodeInfo, keystrokes: Map<String, Double>, ping: Double?) {
+fun NodeHeader(group: NodeGroup, ctx: HerdRowsCtx, padding: PaddingValues) {
     val tokens = Kampr.tokens
-    val key = keystrokes[node.id]
-    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
-        if (node.kind == "local") IconGlyph(KamprIcons.machine, 12.dp, tokens.color.mute, Modifier.padding(end = 4.dp))
-        IconGlyph(if (key != null) KamprIcons.keyboard else KamprIcons.pulse, 12.dp, tokens.color.mute)
-        KText(formatLatency(key ?: ping), tokens.type.meta, tokens.color.mute)
-    }
-}
-
-@Composable
-fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
-    val tokens = Kampr.tokens
+    val node = group.node
     val reach = nodeReach(node)
-    val keystrokes = LocalKeystrokeMs.current
-    val ping = node.rttMs ?: measuredRtt
-    val latency = nodeLatency(node, keystrokes, ping)
+    val latency = nodeLatency(node, LocalKeystrokeMs.current, node.rttMs ?: ctx.localRtt)
     Row(
         Modifier
             .fillMaxWidth()
@@ -373,14 +343,16 @@ fun NodeHeader(node: NodeInfo, measuredRtt: Double?, padding: PaddingValues) {
         // `weight(fill = false)` rather than a plain child: this row is 260 dp wide inside the
         // sidebar, and `GlyphAction`'s `Modifier.size` coerces to the constraint it is handed — so
         // a long machine name does not clip, it takes the + down to 0 x 0 and nothing looks wrong.
-        LabelText(node.name, tokens.type.sectionLabel, tokens.color.text, Modifier.weight(1f, fill = false))
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            NodeReachMarks(node, keystrokes, ping)
-            NodeFilesAction(node, LANDSCAPE_TOUCH)
-            QuickSessionAction(node, LANDSCAPE_TOUCH)
+        LabelText(
+            node.name,
+            tokens.type.sectionLabel,
+            if (node.kind == "local") tokens.color.accent else tokens.color.text,
+            Modifier.weight(1f, fill = false),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AreaTabs(group, ctx)
+            QuickSessionAction(node, ctx.look.control)
+            NodeOverflow(group, ctx)
         }
     }
 }
@@ -466,9 +438,9 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
         }
         WatchersTag(othersWatching(pane))
         KText(relativeTime(pane.updatedAt, now), tokens.type.micro, tokens.color.mute)
-        // The landscape floor rather than the full 44: the sidebar is 296 dp wide and every dp
-        // this takes comes off the pane's own name.
-        PaneMenuAction(pane.id, LANDSCAPE_TOUCH)
+        // A pointer's target: the sidebar is 296 dp wide and every dp this takes comes off the
+        // pane's own name.
+        PaneMenuAction(pane.id, POINTER_TOUCH)
     }
 }
 
@@ -661,7 +633,8 @@ fun BottomNav(selected: Tab, onSelect: (Tab) -> Unit) {
                 bottom = 10.dp + safe.bottom,
             ),
     ) {
-        NavItem(Tab.Herd, "Herd", KamprIcons.herd, selected, onSelect)
+        NavItem(Tab.Herd, "Kampr", KamprIcons.herd, selected, onSelect)
+        NavItem(Tab.Fleet, "Fleet", KamprIcons.fleet, selected, onSelect)
         NavItem(Tab.Settings, "Settings", KamprIcons.gear, selected, onSelect)
     }
 }

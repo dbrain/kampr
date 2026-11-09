@@ -17,9 +17,9 @@ import dev.kampr.shared.model.Herd
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.HerdPortrait
 import dev.kampr.shared.ui.HerdSidebar
-import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LocalManage
 import dev.kampr.shared.ui.ManageIo
+import dev.kampr.shared.ui.POINTER_TOUCH
 import dev.kampr.shared.wire.NodeInfo
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -131,8 +131,8 @@ class HerdQuickSessionTest {
             }
         }
         onNodeWithContentDescription("New Kampr session on comingclean")
-            .assertWidthIsAtLeast(LANDSCAPE_TOUCH)
-            .assertHeightIsAtLeast(LANDSCAPE_TOUCH)
+            .assertWidthIsAtLeast(POINTER_TOUCH)
+            .assertHeightIsAtLeast(POINTER_TOUCH)
     }
 
     private fun androidx.compose.ui.test.ComposeUiTest.portrait(manage: ManageIo, vararg nodes: NodeInfo) {

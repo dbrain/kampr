@@ -84,6 +84,16 @@ impl Client {
             .await
     }
 
+    pub async fn kill(&self, id: &str) -> Result<()> {
+        self.post(&format!("/containers/{}/kill", escape(id))).await
+    }
+
+    pub async fn remove(&self, id: &str) -> Result<()> {
+        self.call(Method::DELETE, &format!("/containers/{}?force=true", escape(id)))
+            .await
+            .map(|_| ())
+    }
+
     /// The image's `Architecture`, in Docker's spelling (`amd64`, `arm64`).
     pub async fn image_architecture(&self, image: &str) -> Result<String> {
         let id = image.trim_start_matches("sha256:");

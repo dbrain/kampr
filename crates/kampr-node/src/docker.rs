@@ -40,6 +40,8 @@ impl Manager<'_> {
             "docker.start" => client.start(id).await.map_err(failed(id))?,
             "docker.stop" => client.stop(id).await.map_err(failed(id))?,
             "docker.restart" => client.restart(id).await.map_err(failed(id))?,
+            "docker.kill" => client.kill(id).await.map_err(failed(id))?,
+            "docker.remove" => client.remove(id).await.map_err(failed(id))?,
             other => return Err(ManageError::Unsupported(other.to_string())),
         }
         Ok(json!({ "ok": true }))

@@ -21,6 +21,7 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.Area
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.Fold
 import dev.kampr.shared.model.Folds
@@ -86,16 +87,21 @@ private val HERD_JSON = """
 
 private val HERD: Herd = (Wire.decode(HERD_JSON) as ServerMsg.Herd).let { Herd(it.nodes, it.panes, known = true) }
 
-private val OPEN = Folds().with(HOST, Fold.Containers, true)
+private val OPEN = Folds().showing(HOST, Area.Containers)
 
 private class Opened : ManageIo {
     val containers = mutableListOf<Pair<String, String>>()
+    val shells = mutableListOf<Pair<String, String>>()
     override val enabled = true
     override fun openNew(paneId: String?) = Unit
     override fun openActions(paneId: String) = Unit
     override fun openMenu(paneId: String, at: MenuAnchor?) = Unit
     override fun openContainer(nodeId: String, containerId: String) {
         containers += nodeId to containerId
+    }
+
+    override fun containerShell(nodeId: String, containerId: String) {
+        shells += nodeId to containerId
     }
 }
 
@@ -116,10 +122,15 @@ private fun SemanticsNodeInteraction.state(): String? = fetchSemanticsNode().con
 @OptIn(ExperimentalTestApi::class)
 class HerdDockerTest {
     @Composable
-    private fun Portrait(folds: Folds, manage: ManageIo = Opened(), onFold: (String, Fold, Boolean) -> Unit = { _, _, _ -> }) {
+    private fun Portrait(
+        folds: Folds,
+        manage: ManageIo = Opened(),
+        onFold: (String, Fold, Boolean) -> Unit = { _, _, _ -> },
+        onArea: (String, Area) -> Unit = { _, _ -> },
+    ) {
         CompositionLocalProvider(LocalTokens provides phoneTokens(), LocalManage provides manage) {
             Box(Modifier.size(420.dp, 3000.dp)) {
-                HerdPortrait(HERD, ConnectionStatus.Live("full"), NOW, 12.0, emptyList(), {}, null, folds = folds, onFold = onFold)
+                HerdPortrait(HERD, ConnectionStatus.Live("full"), NOW, 12.0, emptyList(), {}, null, folds = folds, onFold = onFold, onArea = onArea)
             }
         }
     }
@@ -192,17 +203,21 @@ class HerdDockerTest {
     @Test
     fun aShellAndAnAdoptedNodeSitUnderTheirContainerIndentedATightEight() = runComposeUiTest {
         setContent { Portrait(OPEN) }
-        val build = find("Open build")
         val pg = find("Container kobbler-postgres-test-1,")
         val shell = find("Open pg shell")
         val inside = find("pg-inside, ")
         assertEquals(1, count("pg-inside, "), "an adopted node is drawn once")
-        assertEquals(1, count("Open pg shell"), "a shell is not also among the host's terminals")
         assertTrue(shell.top() > pg.top() && inside.top() > pg.top())
-        assertTrue(shell.top() > build.top())
-        val indent = shell.left() - build.left()
+        val indent = shell.left() - pg.left()
         assertTrue(indent > 0.dp && indent <= 8.dp, "indent was $indent")
         assertEquals(1, count("Open inside"), "the adopted node's own sessions are listed")
+    }
+
+    @Test
+    fun aShellIntoAContainerIsNotAlsoAmongTheHostsTerminals() = runComposeUiTest {
+        setContent { Portrait(Folds()) }
+        assertEquals(1, count("Open build"))
+        assertEquals(0, count("Open pg shell"))
     }
 
     @Test
@@ -213,23 +228,46 @@ class HerdDockerTest {
     }
 
     @Test
-    fun containersStartFoldedAndTheHeaderSaysSoAndUnfolds() = runComposeUiTest {
-        val folded = mutableListOf<Folded>()
-        setContent { Portrait(Folds(), onFold = { n, f, o -> folded += Folded(n, f, o) }) }
+    fun aHostOpensOnItsTerminalsAndTheSwitchSaysWhatElseItHas() = runComposeUiTest {
+        val picked = mutableListOf<Pair<String, Area>>()
+        setContent { Portrait(Folds(), onArea = { n, a -> picked += n to a }) }
+        assertEquals(1, count("Open build"))
         assertEquals(0, count("Container worker,"))
-        val header = find("Containers · docker")
-        assertEquals("collapsed", header.state())
-        assertEquals("expanded", find("Background · muffit").state())
-        assertEquals(1, count("Open wake"))
-        header.performClick()
-        assertEquals(listOf(Folded(HOST, Fold.Containers, true)), folded)
+        assertEquals(0, count("Open wake"))
+        assertEquals(true, find("Terminals").fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected))
+        find("Containers, 2 running").performClick()
+        find("Muffit sessions, 1").performClick()
+        assertEquals(listOf(HOST to Area.Containers, HOST to Area.Muffit), picked)
     }
 
     @Test
-    fun aMuffitFoldHidesTheBackgroundSessions() = runComposeUiTest {
-        setContent { Portrait(Folds().with(HOST, Fold.Muffit, false)) }
-        assertEquals(0, count("Open wake"))
-        assertEquals("collapsed", find("Background · muffit").state())
+    fun theMuffitListHoldsTheBackgroundSessionsAndNothingElse() = runComposeUiTest {
+        setContent { Portrait(Folds().showing(HOST, Area.Muffit)) }
+        assertEquals(1, count("Open wake"))
+        assertEquals(0, count("Open build"))
+        assertEquals(0, count("Container worker,"))
+    }
+
+    @Test
+    fun aHostWithOnlyTerminalsHasNoSwitch() = runComposeUiTest {
+        val plain = (Wire.decode("""{"t":"herd","nodes":[{"id":"$HOST","name":"front","kind":"local","online":true}],"panes":[]}""") as ServerMsg.Herd)
+            .let { Herd(it.nodes, it.panes, known = true) }
+        setContent {
+            CompositionLocalProvider(LocalTokens provides phoneTokens(), LocalManage provides Opened()) {
+                Box(Modifier.size(420.dp, 1200.dp)) { HerdPortrait(plain, ConnectionStatus.Live("full"), NOW, 12.0, emptyList(), {}, null) }
+            }
+        }
+        assertEquals(0, count("Terminals"))
+    }
+
+    @Test
+    fun aRunningContainersPlusShellsIntoIt() = runComposeUiTest {
+        val manage = Opened()
+        setContent { Portrait(OPEN, manage) }
+        find("Shell into kobbler-cache-1").performClick()
+        assertEquals(listOf(HOST to "c2"), manage.shells)
+        assertEquals(0, count("Shell into worker"), "a restarting container has no shell to give")
+        assertEquals(0, count("Shell into flaky"))
     }
 
     @Test
@@ -264,7 +302,7 @@ class HerdDockerTest {
     }
 
     @Test
-    fun theRailFollowsTheSameFolds() = runComposeUiTest {
+    fun theRailFollowsTheSameChoice() = runComposeUiTest {
         var folds by mutableStateOf(Folds())
         setContent {
             CompositionLocalProvider(LocalTokens provides phoneTokens(), LocalManage provides Opened()) {
@@ -273,37 +311,44 @@ class HerdDockerTest {
                 }
             }
         }
-        assertEquals(1, count("Open wake"))
-        assertEquals(0, count("Container worker,"))
-        folds = Folds().with(HOST, Fold.Muffit, false).with(HOST, Fold.Containers, true)
-        waitForIdle()
+        assertEquals(1, count("Open build"))
         assertEquals(0, count("Open wake"))
+        assertEquals(0, count("Container worker,"))
+        folds = Folds().showing(HOST, Area.Muffit)
+        waitForIdle()
+        assertEquals(1, count("Open wake"))
+        assertEquals(0, count("Open build"))
+        folds = Folds().showing(HOST, Area.Containers)
+        waitForIdle()
         assertEquals(1, count("Container worker,"))
         assertEquals(1, count("Open pg shell"))
         assertEquals(1, count("Open inside"))
     }
 
     @Test
-    fun foldsAreRememberedOnThisDeviceAcrossLaunches() {
+    fun theChoiceIsRememberedOnThisDeviceAcrossLaunches() {
         val prefs = MemoryPrefs()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val host = HERD.tree().single()
         try {
             val first = AppState(scope, KamprStore(), prefs, null)
-            assertFalse(first.folds.open(HOST, Fold.Containers))
-            assertTrue(first.folds.open(HOST, Fold.Muffit))
+            assertEquals(Area.Terminals, first.folds.area(host))
             assertFalse(first.folds.open(HOST, Fold.Stopped))
-            first.fold(HOST, Fold.Containers, true)
-            first.fold(HOST, Fold.Muffit, false)
+            first.showArea(HOST, Area.Containers)
             first.fold(CHILD, Fold.Stopped, true)
-            assertTrue(first.folds.open(HOST, Fold.Containers))
 
             val again = AppState(scope, KamprStore(), prefs, null)
-            assertTrue(again.folds.open(HOST, Fold.Containers))
-            assertFalse(again.folds.open(HOST, Fold.Muffit))
+            assertEquals(Area.Containers, again.folds.area(host))
             assertTrue(again.folds.open(CHILD, Fold.Stopped))
-            assertFalse(again.folds.open(CHILD, Fold.Containers))
+            assertFalse(again.folds.open(HOST, Fold.Stopped))
         } finally {
             scope.cancel()
         }
+    }
+
+    @Test
+    fun aPickedListThatIsNoLongerThereFallsBackToTheTerminals() {
+        val bare = HERD.tree().single().let { it.copy(node = it.node.copy(containers = emptyList())) }
+        assertEquals(Area.Terminals, Folds().showing(HOST, Area.Containers).area(bare))
     }
 }

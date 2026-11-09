@@ -162,6 +162,39 @@ async fn a_detail_rides_its_ack_and_only_the_ops_that_change_something_are_audit
 }
 
 #[tokio::test]
+async fn a_container_can_be_killed_and_then_removed() {
+    let Some((_h, mut client)) = docker_node().await else {
+        return;
+    };
+    let running = Container::run(&["--", "trap '' TERM; sleep 600 & wait"]);
+    client.container(&running.0, |e| e["state"] == "running").await;
+
+    let ack = client
+        .manage(json!({ "op": "docker.kill", "node": NODE, "id": running.0 }))
+        .await;
+    assert_eq!(ack["ok"], true, "{ack}");
+    let killed = client.container(&running.0, |e| e["state"] == "exited").await;
+    assert_eq!(killed["exit_code"], 137, "{killed}");
+
+    let ack = client
+        .manage(json!({ "op": "docker.remove", "node": NODE, "id": running.0 }))
+        .await;
+    assert_eq!(ack["ok"], true, "{ack}");
+    client
+        .until(&format!("{} gone from the herd", running.0), |c| {
+            let listed = c.nodes.get(NODE)?["containers"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            listed
+                .iter()
+                .all(|e| e["name"] != running.0.as_str())
+                .then_some(())
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn an_op_on_a_container_that_is_not_there_is_refused() {
     let Some((_h, mut client)) = docker_node().await else {
         return;

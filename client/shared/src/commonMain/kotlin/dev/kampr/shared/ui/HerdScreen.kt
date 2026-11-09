@@ -27,8 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.Area
 import dev.kampr.shared.model.ConnectionStatus
-import dev.kampr.shared.model.Fold
 import dev.kampr.shared.model.Folds
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.NodeGroup
@@ -50,6 +50,7 @@ fun HerdPortrait(
     modifier: Modifier = Modifier,
     folds: Folds = Folds(),
     onFold: OnFold = NO_FOLD,
+    onArea: OnArea = NO_AREA,
 ) {
     val tokens = Kampr.tokens
     val groups = herd.tree()
@@ -61,12 +62,11 @@ fun HerdPortrait(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                KText("Herd", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
-                Row(horizontalArrangement = Arrangement.spacedBy(9.dp), verticalAlignment = Alignment.CenterVertically) {
-                    NodeCountPill(herd.nodes.count { it.isServing }, connection, compact = false) { listing = true }
-                    MosaicAction()
-                    FleetAction()
-                    NewAction()
+                KText("Kampr", tokens.type.screenTitle, tokens.color.text, Modifier.asHeading())
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    NodeCountPill(herd.nodes.count { it.isServing }, connection, compact = true) { listing = true }
+                    MosaicAction(LANDSCAPE_TOUCH)
+                    NewAction(target = LANDSCAPE_TOUCH)
                 }
             }
             PaletteBar(hint = null, modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp))
@@ -88,16 +88,13 @@ fun HerdPortrait(
             } else {
                 Column(Modifier.weight(1f).verticalScroll(scroll)) {
                     groups.forEachIndexed { index, group ->
+                        val ctx = HerdRowsCtx(HerdLook.Portrait, now, localRtt, folds, onFold, onOpenPane, onArea = onArea)
                         NodeHeader(
-                            group.node,
-                            localRtt,
-                            PaddingValues(start = 22.dp, end = 22.dp, top = if (index == 0) 2.dp else 14.dp, bottom = 8.dp),
-                        )
-                        GroupBody(
                             group,
-                            HerdRowsCtx(HerdLook.Portrait, now, localRtt, folds, onFold, onOpenPane),
-                            Modifier.padding(horizontal = 16.dp),
+                            ctx,
+                            PaddingValues(start = 22.dp, end = 12.dp, top = if (index == 0) 2.dp else 10.dp, bottom = 4.dp),
                         )
+                        GroupBody(group, ctx, Modifier.padding(horizontal = 16.dp))
                     }
                     Box(Modifier.height(16.dp))
                 }
@@ -121,6 +118,7 @@ fun HerdLandscape(
     modifier: Modifier = Modifier,
     folds: Folds = Folds(),
     onFold: OnFold = NO_FOLD,
+    onArea: OnArea = NO_AREA,
 ) {
     val tokens = Kampr.tokens
     val groups = herd.tree()
@@ -132,12 +130,13 @@ fun HerdLandscape(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                KText("Herd", tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
+                KText("Kampr", tokens.type.paneTitle, tokens.color.text, Modifier.asHeading())
                 NodeCountPill(herd.nodes.count { it.isServing }, connection, compact = true) { listing = true }
-                MosaicAction(LANDSCAPE_TOUCH)
-                FleetAction(LANDSCAPE_TOUCH)
-                NewAction(target = LANDSCAPE_TOUCH)
-                PaletteAction(LANDSCAPE_TOUCH)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MosaicAction(LANDSCAPE_TOUCH)
+                    NewAction(target = LANDSCAPE_TOUCH)
+                    PaletteAction(LANDSCAPE_TOUCH)
+                }
                 Box(Modifier.weight(1f))
                 if (triage.isNotEmpty()) {
                     StatusBadge(
@@ -162,7 +161,7 @@ fun HerdLandscape(
                 BoxWithConstraints(Modifier.weight(1f)) {
                     val plan = columnPlan(maxWidth - 20.dp, COLUMN_GAP, wanted = groups.size)
                     val columns = groups.balancedColumns(plan.count, folds)
-                    val ctx = HerdRowsCtx(HerdLook.Landscape, now, localRtt, folds, onFold, onOpenPane)
+                    val ctx = HerdRowsCtx(HerdLook.Landscape, now, localRtt, folds, onFold, onOpenPane, onArea = onArea)
                     Row(
                         Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(COLUMN_GAP, Alignment.CenterHorizontally),
@@ -175,7 +174,7 @@ fun HerdLandscape(
                                     }
                                 }
                                 for (group in column) {
-                                    NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
+                                    NodeHeader(group, ctx, PaddingValues(start = 8.dp, end = 0.dp, top = 8.dp, bottom = 4.dp))
                                     GroupBody(group, ctx)
                                 }
                             }
@@ -202,14 +201,12 @@ private fun List<NodeGroup>.balancedColumns(count: Int, folds: Folds): List<List
 }
 
 private fun NodeGroup.rows(folds: Folds): Int {
-    val containers = if (folds.open(node.id, Fold.Containers)) {
-        node.containers.size + 1
-    } else if (node.containers.isEmpty()) {
-        0
-    } else {
-        1
+    val listed = when (folds.area(this)) {
+        Area.Terminals -> terminals.size
+        Area.Containers -> node.containers.size
+        Area.Muffit -> background.size
     }
-    return panes.size + 1 + containers + children.sumOf { it.rows(folds) }
+    return listed + 1 + children.sumOf { it.rows(folds) }
 }
 
 @Composable
@@ -231,6 +228,7 @@ fun HerdSidebar(
     modifier: Modifier = Modifier,
     folds: Folds = Folds(),
     onFold: OnFold = NO_FOLD,
+    onArea: OnArea = NO_AREA,
 ) {
     val tokens = Kampr.tokens
     val groups = herd.tree()
@@ -277,7 +275,8 @@ fun HerdSidebar(
                     KamprIcons.chevronLeft,
                     "Collapse the sidebar",
                     tokens.color.dim,
-                    LANDSCAPE_TOUCH,
+                    POINTER_TOUCH,
+                    chip = 24.dp,
                 ) { onCollapsed(true) }
             }
             Row(
@@ -288,10 +287,10 @@ fun HerdSidebar(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 NodeCountPill(herd.nodes.count { it.isServing }, connection, compact = true) { listing = true }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    MosaicAction(LANDSCAPE_TOUCH)
-                    FleetAction(LANDSCAPE_TOUCH)
-                    NewAction(target = LANDSCAPE_TOUCH)
+                Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
+                    MosaicAction(POINTER_TOUCH)
+                    FleetAction(POINTER_TOUCH)
+                    NewAction(target = POINTER_TOUCH)
                 }
             }
             PaletteBar(hint = "ctrl K", modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 12.dp))
@@ -313,16 +312,13 @@ fun HerdSidebar(
             } else {
                 Column(Modifier.weight(1f).verticalScroll(scroll)) {
                     groups.forEachIndexed { index, group ->
+                        val ctx = HerdRowsCtx(HerdLook.Sidebar, now, localRtt, folds, onFold, onOpenPane, activePaneId, onArea)
                         NodeHeader(
-                            group.node,
-                            localRtt,
-                            PaddingValues(start = 18.dp, end = 18.dp, top = if (index == 0) 0.dp else 16.dp, bottom = 7.dp),
-                        )
-                        GroupBody(
                             group,
-                            HerdRowsCtx(HerdLook.Sidebar, now, localRtt, folds, onFold, onOpenPane, activePaneId),
-                            Modifier.padding(horizontal = 10.dp),
+                            ctx,
+                            PaddingValues(start = 18.dp, end = 8.dp, top = if (index == 0) 0.dp else 12.dp, bottom = 3.dp),
                         )
+                        GroupBody(group, ctx, Modifier.padding(horizontal = 10.dp))
                     }
                 }
             }

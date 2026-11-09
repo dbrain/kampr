@@ -195,6 +195,7 @@ fun KamprApp(
                             is PaletteTarget.Go -> state.go(target.screen)
                             is PaletteTarget.NewOn -> state.openSheet(Sheet.New(target.nodeId, null))
                             is PaletteTarget.Files -> state.open(target.place)
+                            is PaletteTarget.Container -> state.openContainer(target.nodeId, target.containerId)
                         }
                     },
                     modifier = Modifier.fillMaxSize(),
@@ -389,6 +390,7 @@ internal fun AppScaffold(
                             scroll = state.herdScroll,
                             folds = state.folds,
                             onFold = state::fold,
+                            onArea = state::showArea,
                         )
                         ScreenBody(
                             Modifier.weight(1f).fillMaxSize(),
@@ -538,6 +540,7 @@ internal fun AppScaffold(
                                 scroll = state.herdScroll,
                                 folds = state.folds,
                                 onFold = state::fold,
+                                onArea = state::showArea,
                             )
                         }
                     }
@@ -615,6 +618,7 @@ internal fun AppScaffold(
                                 scroll = state.herdScroll,
                                 folds = state.folds,
                                 onFold = state::fold,
+                                onArea = state::showArea,
                             )
                         }
                     }

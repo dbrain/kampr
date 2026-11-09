@@ -12,6 +12,7 @@ pub mod convo;
 pub mod copy;
 pub mod docker;
 pub mod find;
+pub mod host;
 pub mod image;
 pub mod input;
 pub mod invite;
@@ -315,13 +316,18 @@ static SECTIONS: &[Section] = &[
         rows: &[
             (
                 "prefix g",
-                "go to any pane: type a few letters, enter · empty is the last visited · 1-9 / alt+1-9 · click",
+                "go to any pane, or a container's panel: type a few letters, enter · empty is the last visited · 1-9 / alt+1-9 · click",
             ),
             ("prefix w", "walk the sidebar — up/down, enter opens, esc leaves"),
             (
-                "enter on a ▸ section",
-                "fold or unfold a host's muffit and docker sections, and +N stopped · click too",
+                "in the sidebar: [ / ]",
+                "a host's list: ›_ terminals · ▣ containers · ◉ muffit · click a tab too",
             ),
+            (
+                "in the sidebar: . or m",
+                "a host's menu: its reach and ping, New… · enter or a click on the host too",
+            ),
+            ("enter on +N stopped", "show or hide a host's stopped containers"),
             ("click grouped/priority", "the sidebar's order; o in the sidebar"),
             (
                 "prefix shift+h",
@@ -448,11 +454,15 @@ static SECTIONS: &[Section] = &[
             ),
             (
                 "sidebar",
-                "up/down row · enter open/fold · space beside · o order · 1-9 workspace",
+                "up/down row · enter open · [ ] host's list · . host menu · space beside · o order · 1-9 workspace",
             ),
             (
                 "on a container",
-                "enter its panel (refreshes every 3 s) · s shell in · r restart · x stop/start · a adopt/release",
+                "enter its panel · s shell in (or click its +) · r restart · x stop/start · a adopt/release",
+            ),
+            (
+                "container panel",
+                "1-5 h/l tabs · j/k pgup/pgdn scroll · ←/→ pan logs · g/G top/tail · s r x a · K kill · D remove · esc",
             ),
         ],
     },

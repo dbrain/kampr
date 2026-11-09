@@ -160,7 +160,7 @@ class ComposerInsetTest {
         val (_, pane) = demoPane(RICH_CONVO)
         setContent { Phone(BARS) { ConversationView(pane, demoInfo(), Modifier.fillMaxSize()) } }
         val screen = onRoot().getUnclippedBoundsInRoot()
-        val nav = onNodeWithContentDescription("Herd tab").getUnclippedBoundsInRoot()
+        val nav = onNodeWithContentDescription("Kampr tab").getUnclippedBoundsInRoot()
         assertTrue(
             nav.bottom <= screen.bottom && nav.bottom > screen.bottom - 100.dp,
             "the bottom navigation is at ${nav.bottom} of ${screen.bottom}",

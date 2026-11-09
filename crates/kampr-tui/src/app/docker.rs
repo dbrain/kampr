@@ -1,6 +1,7 @@
 use super::{App, Screen, unix_now};
 use crate::docker::{Detail, Op, Took, ask};
-use crate::sidebar::{Fold, Hit};
+use crate::sidebar::Hit;
+use crate::switcher::Pick;
 use crossterm::event::KeyEvent;
 use kampr_client::Managed;
 use kampr_core::wire::ContainerEntry;
@@ -11,14 +12,28 @@ use std::time::Instant;
 impl App {
     pub(super) fn hit(&mut self, hit: Hit) {
         match hit {
-            Hit::Fold { node, fold } => self.fold(&node, fold),
+            Hit::Host { node } => self.host = Some(crate::host::HostMenu::new(&node)),
+            Hit::Area { node, area } => self.show_area(&node, area),
+            Hit::Stopped { node } => {
+                self.prefs.hosts.flip_stopped(&node);
+                self.keep_prefs();
+            }
             Hit::Container { node, id } => self.detail = Some(Detail::new(&node, &id)),
+            Hit::Shell { node, id } => {
+                let entry = self.container(&node, &id);
+                self.docker_op(Op::Shell, &node, entry);
+            }
         }
     }
 
-    fn fold(&mut self, node: &str, fold: Fold) {
-        self.prefs.folds.flip(node, fold);
-        self.keep_prefs();
+    pub(super) fn go_to(&mut self, to: Pick) {
+        match to {
+            Pick::Pane(pane) => {
+                self.focus(pane);
+                self.open(Screen::Panes);
+            }
+            Pick::Container { node, id } => self.detail = Some(Detail::new(&node, &id)),
+        }
     }
 
     fn container(&self, node: &str, id: &str) -> Option<ContainerEntry> {
@@ -52,7 +67,7 @@ impl App {
                 let entry = self.container(&node, &id);
                 self.docker_op(op, &node, entry);
             }
-            _ => self.note("s, r, x and a act on a container row"),
+            _ => self.note("s, r, x and a act on a container row — ] shows a host's containers"),
         }
     }
 
@@ -61,6 +76,13 @@ impl App {
             self.note("that container has gone");
             return;
         };
+        if !op.applies(&entry) {
+            self.note(match op {
+                Op::Kill => "kill is for a container that is running",
+                _ => "remove is for a container that has stopped",
+            });
+            return;
+        }
         let (writes, manage) = {
             let state = self.client.state();
             (state.role.writes(), state.caps().manage)
@@ -123,6 +145,16 @@ impl App {
                 self.focus(pane);
                 self.open(Screen::Panes);
             }
+        }
+        let gone = self.detail.as_ref().is_some_and(|d| {
+            let state = self.client.state();
+            state
+                .herd
+                .node(&d.node)
+                .is_some_and(|n| n.containers.iter().all(|c| c.id != d.id))
+        });
+        if gone {
+            self.detail = None;
         }
         let now = Instant::now();
         if let Some(detail) = self.detail.as_mut().filter(|d| d.due(now)) {

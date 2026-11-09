@@ -8,6 +8,7 @@ import dev.kampr.shared.ui.PaletteTarget
 import dev.kampr.shared.ui.Screen
 import dev.kampr.shared.ui.paletteItems
 import dev.kampr.shared.ui.paletteSearch
+import dev.kampr.shared.wire.ContainerInfo
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import kotlin.test.Test
@@ -18,7 +19,14 @@ private val HERD = Herd(
     nodes = listOf(
         NodeInfo("01JLAP", "comingclean", kind = "local"),
         NodeInfo("01JHUB", "giftofthemagi2"),
-        NodeInfo("01JNAS", "threnody"),
+        NodeInfo(
+            "01JNAS",
+            "threnody",
+            containers = listOf(
+                ContainerInfo(id = "f49c60fac115", name = "kobbler-postgres-test-1", image = "postgres:18.6", state = "running", project = "kobbler"),
+                ContainerInfo(id = "c2", name = "old-job", image = "busybox", state = "exited"),
+            ),
+        ),
         NodeInfo("01JOFF", "attic", reachable = false),
     ),
     panes = listOf(
@@ -34,6 +42,15 @@ private fun search(query: String, mosaic: Boolean = true, canCreate: Boolean = t
 private fun PaletteItem.paneId() = (target as? PaletteTarget.OpenPane)?.paneId
 
 class PaletteSearchTest {
+    @Test
+    fun aContainerIsFoundByItsNameImageOrProjectAndOpensItsSheet() {
+        val sheet = PaletteTarget.Container("01JNAS", "f49c60fac115")
+        for (query in listOf("postgres", "kobbler", "postgres:18", "threnody pg")) {
+            assertEquals(sheet, search(query).first().target, query)
+        }
+        assertEquals(PaletteTarget.Container("01JNAS", "c2"), search("old-job").first().target, "a stopped one is still found")
+    }
+
     @Test
     fun eachKindOfNameFindsItsPaneFirst() {
         val table = listOf(
@@ -56,10 +73,12 @@ class PaletteSearchTest {
     }
 
     @Test
-    fun anEmptyQueryIsTheSidebarThenThePlaces() {
+    fun anEmptyQueryIsTheSidebarThenTheContainersThenThePlaces() {
         val all = search("")
         assertEquals(HERD.panes.size, all.takeWhile { it.paneId() != null }.size)
-        assertEquals(PaletteTarget.Go(Screen.Fleet), all[HERD.panes.size].target)
+        val containers = HERD.nodes.sumOf { it.containers.size }
+        assertTrue(all.drop(HERD.panes.size).take(containers).all { it.target is PaletteTarget.Container })
+        assertEquals(PaletteTarget.Go(Screen.Fleet), all[HERD.panes.size + containers].target)
     }
 
     @Test

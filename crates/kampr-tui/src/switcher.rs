@@ -8,16 +8,28 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph, Widget};
 
 const MAX_SHOWN: usize = 12;
 
-#[derive(Debug, Clone)]
-pub struct Item {
-    pub pane: String,
-    pub name: String,
-    pub place: String,
-    pub status: AgentStatus,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pick {
+    Pane(String),
+    Container { node: String, id: String },
 }
 
-/// herdr's `goto` (`prefix g`, #289): a query over every pane on every node, matched against its
-/// name and where it lives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    Agent(AgentStatus),
+    Container { running: bool },
+}
+
+#[derive(Debug, Clone)]
+pub struct Item {
+    pub to: Pick,
+    pub name: String,
+    pub place: String,
+    pub mark: Mark,
+}
+
+/// herdr's `goto` (`prefix g`, #289): a query over every pane and container on every node, matched
+/// against its name and where it lives.
 #[derive(Debug, Default)]
 pub struct Switcher {
     query: Option<String>,
@@ -27,7 +39,7 @@ pub struct Switcher {
 pub enum Went {
     Stayed,
     Closed,
-    To(String),
+    To(Pick),
 }
 
 impl Switcher {
@@ -56,7 +68,7 @@ impl Switcher {
             && (alt || query.is_empty())
         {
             let n = c as usize - '1' as usize;
-            let picked = matches(query, items).get(n).map(|item| item.pane.clone());
+            let picked = matches(query, items).get(n).map(|item| item.to.clone());
             if picked.is_some() {
                 self.query = None;
             }
@@ -68,7 +80,7 @@ impl Switcher {
                 return Went::Closed;
             }
             KeyCode::Enter => {
-                let picked = matches(query, items).get(self.at).map(|item| item.pane.clone());
+                let picked = matches(query, items).get(self.at).map(|item| item.to.clone());
                 self.query = None;
                 return picked.map_or(Went::Closed, Went::To);
             }
@@ -91,14 +103,14 @@ impl Switcher {
         Went::Stayed
     }
 
-    /// The box it drew and the row each pane is on, for the pointer.
+    /// The box it drew and the row each item is on, for the pointer.
     pub fn render(
         &self,
         buf: &mut Buffer,
         area: Rect,
         items: &[Item],
         t: &crate::theme::Theme,
-    ) -> Option<(Rect, Vec<(Rect, String)>)> {
+    ) -> Option<(Rect, Vec<(Rect, Pick)>)> {
         let query = self.query.as_ref()?;
         let found = matches(query, items);
         let width = area.width.saturating_sub(4).min(72);
@@ -128,7 +140,7 @@ impl Switcher {
         ])];
         if found.is_empty() {
             lines.push(Line::from(Span::styled(
-                "   no pane matches",
+                "   nothing matches",
                 Style::default().fg(t.mute).bg(t.surface),
             )));
         }
@@ -144,7 +156,7 @@ impl Switcher {
                     width: inner as u16,
                     height: 1,
                 },
-                item.pane.clone(),
+                item.to.clone(),
             ));
             let digit = match i < 9 {
                 true => format!(" {}", i + 1),
@@ -164,10 +176,18 @@ impl Switcher {
             lines.push(
                 Line::from(vec![
                     Span::styled(digit, Style::default().fg(t.mute).bg(ground)),
-                    Span::styled(
-                        format!(" {} ", crate::sidebar::glyph(item.status)),
-                        Style::default().fg(t.status(item.status)).bg(ground),
-                    ),
+                    match item.mark {
+                        Mark::Agent(status) => Span::styled(
+                            format!(" {} ", crate::sidebar::glyph(status)),
+                            Style::default().fg(t.status(status)).bg(ground),
+                        ),
+                        Mark::Container { running } => Span::styled(
+                            " ▣ ",
+                            Style::default()
+                                .fg(if running { t.done } else { t.idle })
+                                .bg(ground),
+                        ),
+                    },
                     Span::styled(name, body),
                     Span::styled(" ".repeat(pad + 1), Style::default().bg(ground)),
                     Span::styled(place, Style::default().fg(t.mute).bg(ground)),
@@ -196,7 +216,7 @@ impl Switcher {
     }
 }
 
-/// Best first. An empty query is every pane in the order it was handed over.
+/// Best first. An empty query is everything in the order it was handed over.
 pub fn matches<'a>(query: &str, items: &'a [Item]) -> Vec<&'a Item> {
     let mut scored: Vec<(i32, usize, &Item)> = items
         .iter()

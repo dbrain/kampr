@@ -105,8 +105,11 @@ class FilesEntryTest {
     }
 
     @Test
-    fun theFolderBesideAMachinesPlusBrowsesItsHome() {
+    fun theMenuBesideAMachinesPlusBrowsesItsHome() {
         withApp("full") { app ->
+            assertTrue(onAllNodesWithContentDescription("Browse files on comingclean").fetchSemanticsNodes().isEmpty(), "files is in the menu, not the row")
+            onNodeWithContentDescription("More for comingclean").performClick()
+            waitForIdle()
             onNodeWithContentDescription("Browse files on comingclean").performClick()
             waitForIdle()
             assertEquals(listOf<FilesPlace>(FilesPlace.Dir("01JNODE", "01JNODE/_", "~")), app.files)

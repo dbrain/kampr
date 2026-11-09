@@ -51,7 +51,7 @@ private val PHONE = DpSize(390.dp, 844.dp)
 private val ROTATED = DpSize(844.dp, 390.dp)
 private val DESK = DpSize(1440.dp, 900.dp)
 
-private val TABS = listOf("Herd tab", "Settings tab")
+private val TABS = listOf("Kampr tab", "Fleet tab", "Settings tab")
 
 // What the pane's key row is told it owes at the bottom of the window, which is the gesture handle
 // when nothing of the app's own is under it and nothing when something is.

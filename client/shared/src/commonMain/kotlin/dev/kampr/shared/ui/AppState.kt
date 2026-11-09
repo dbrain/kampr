@@ -4,6 +4,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.kampr.shared.model.Area
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.ContainerWatch
 import dev.kampr.shared.model.Fold
@@ -48,6 +49,7 @@ import dev.kampr.shared.theme.ThemeSpec
 import dev.kampr.shared.theme.modeOf
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.DockerAction
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
@@ -76,16 +78,18 @@ fun viewOf(key: String): PaneView? = PaneView.entries.firstOrNull { it.key == ke
 // There was a third, "Pane", and it was not a peer of a list of everything: it led to whichever
 // pane had last been opened, kept pointing at it after the pane had been left, and fell through to
 // the herd when nothing had. A tab has to be a place.
-enum class Tab { Herd, Settings }
+enum class Tab { Herd, Fleet, Settings }
 
 fun screenFor(tab: Tab): Screen = when (tab) {
     Tab.Herd -> Screen.Herd
+    Tab.Fleet -> Screen.Fleet
     Tab.Settings -> Screen.Setup
 }
 
 fun tabFor(screen: Screen): Tab = when (screen) {
     Screen.Setup, Screen.Devices, Screen.Appearance, Screen.Notifications -> Tab.Settings
-    Screen.Herd, Screen.Mosaic, Screen.Fleet, is Screen.Pane -> Tab.Herd
+    Screen.Fleet -> Tab.Fleet
+    Screen.Herd, Screen.Mosaic, is Screen.Pane -> Tab.Herd
 }
 
 // Two panes of one tab, in the order and the shape the split left them: the source, then the
@@ -221,6 +225,11 @@ class AppState(
 
     fun fold(node: String, fold: Fold, open: Boolean) {
         folds = folds.with(node, fold, open)
+        prefs.set(KEY_FOLDS, folds.encode())
+    }
+
+    fun showArea(node: String, area: Area) {
+        folds = folds.showing(node, area)
         prefs.set(KEY_FOLDS, folds.encode())
     }
 
@@ -533,6 +542,11 @@ class AppState(
         if (!store.canManage) return
         val node = store.herd.value.nodes.firstOrNull { it.id == nodeId } ?: NodeInfo(nodeId)
         ask(QuickSession(quickSessionOp(node), wallClockMillis() + CREATE_OPEN_WINDOW_MS))
+    }
+
+    fun containerShell(nodeId: String, containerId: String) {
+        if (!store.canManage) return
+        ask(QuickSession(ManageOp.Docker(DockerAction.Shell, nodeId, containerId), wallClockMillis() + CREATE_OPEN_WINDOW_MS))
     }
 
     private fun ask(press: QuickSession) {

@@ -1,8 +1,9 @@
+mod area;
 mod docker;
-mod fold;
+mod heading;
 
+pub use area::{Area, Hosts, Tab, step};
 pub use docker::{ago, phrase};
-pub use fold::{Fold, Folds};
 
 use crate::theme::Theme;
 use kampr_client::Herd;
@@ -62,10 +63,15 @@ pub enum Row {
     /// The hub this client opens is not answering, and this machine's own herd is standing in.
     Away(String),
     Node {
+        id: String,
         name: String,
         serving: bool,
+        /// The machine this client connects through.
+        local: bool,
         detail: Option<String>,
-        rtt: String,
+        /// Empty when terminals are all the host has, and then no switch is drawn.
+        tabs: Vec<Tab>,
+        area: Area,
     },
     /// An offline node keeps its row: panes are not dropped for an outage (#70), so the pane
     /// count and the last-seen are what say the node exists and is unreachable.
@@ -89,9 +95,8 @@ pub enum Row {
         place: Option<String>,
     },
     Question(String),
-    Fold {
+    Stopped {
         node: String,
-        fold: Fold,
         open: bool,
         count: usize,
     },
@@ -107,8 +112,11 @@ pub enum Row {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hit {
-    Fold { node: String, fold: Fold },
+    Host { node: String },
+    Area { node: String, area: Area },
+    Stopped { node: String },
     Container { node: String, id: String },
+    Shell { node: String, id: String },
 }
 
 impl Row {
@@ -129,10 +137,8 @@ impl Row {
 
     pub fn hit(&self) -> Option<Hit> {
         match self {
-            Self::Fold { node, fold, .. } => Some(Hit::Fold {
-                node: node.clone(),
-                fold: *fold,
-            }),
+            Self::Node { id, .. } => Some(Hit::Host { node: id.clone() }),
+            Self::Stopped { node, .. } => Some(Hit::Stopped { node: node.clone() }),
             Self::Container { node, entry } => Some(Hit::Container {
                 node: node.clone(),
                 id: entry.id.clone(),
@@ -145,6 +151,55 @@ impl Row {
     pub fn selectable(&self) -> bool {
         self.pane().is_some() || self.hit().is_some() || matches!(self, Self::Pair(_))
     }
+
+    fn depth(&self) -> usize {
+        match self {
+            Self::Nested(inner) => 1 + inner.depth(),
+            _ => 0,
+        }
+    }
+
+    /// The parts of a row a click can land on apart from the row itself, at a row drawn at `rect`:
+    /// a host's switch, and a running container's `+`.
+    pub fn spots(&self, rect: Rect) -> Vec<(Hit, Rect)> {
+        match self {
+            Self::Nested(inner) => inner.spots(Rect {
+                x: rect.x + 1,
+                width: rect.width.saturating_sub(1),
+                ..rect
+            }),
+            Self::Node { id, tabs, .. } => heading::spots(id, tabs, rect),
+            Self::Container { node, entry } if docker::shellable(entry) => vec![(
+                Hit::Shell {
+                    node: node.clone(),
+                    id: entry.id.clone(),
+                },
+                Rect {
+                    x: rect.right().saturating_sub(3),
+                    width: rect.width.min(3),
+                    ..rect
+                },
+            )],
+            _ => Vec::new(),
+        }
+    }
+}
+
+/// The host a row sits under — the nearest heading above it no deeper than any row between — with
+/// the lists that host offers, the one it is showing, and the heading's index.
+pub fn host_of(rows: &[Row], at: usize) -> Option<(String, Vec<Tab>, Area, usize)> {
+    let mut limit = rows.get(at)?.depth();
+    for i in (0..=at).rev() {
+        let row = &rows[i];
+        if row.depth() > limit {
+            continue;
+        }
+        limit = row.depth();
+        if let Row::Node { id, tabs, area, .. } = row.innermost() {
+            return Some((id.clone(), tabs.clone(), *area, i));
+        }
+    }
+    None
 }
 
 pub fn glyph(status: AgentStatus) -> &'static str {
@@ -253,7 +308,7 @@ pub fn rows(
     herd: &Herd,
     order: Order,
     hub: Option<Hub<'_>>,
-    folds: &Folds,
+    hosts: &Hosts,
     now: i64,
     questions: impl Fn(&str) -> Option<String>,
 ) -> Vec<Row> {
@@ -264,7 +319,7 @@ pub fn rows(
         None => {}
     }
     match order {
-        Order::Grouped => rows.extend(spaces(herd, folds, now, &questions)),
+        Order::Grouped => rows.extend(spaces(herd, hosts, now, &questions)),
         Order::Priority => rows.extend(priority(herd, &questions)),
     }
     rows
@@ -272,9 +327,9 @@ pub fn rows(
 
 /// Grouped by node — the structural change from herdr's own sidebar, and the thing a herdr at one
 /// desk structurally cannot draw.
-pub fn spaces(herd: &Herd, folds: &Folds, now: i64, questions: &impl Fn(&str) -> Option<String>) -> Vec<Row> {
+pub fn spaces(herd: &Herd, hosts: &Hosts, now: i64, questions: &impl Fn(&str) -> Option<String>) -> Vec<Row> {
     let look = docker::Look {
-        folds,
+        hosts,
         now,
         questions,
     };
@@ -295,17 +350,23 @@ fn host<Q: Fn(&str) -> Option<String>>(
 ) {
     let node = branch.group.node;
     let serving = node.is_serving();
-    let rtt = match (serving, node.kind.as_str(), node.rtt_ms) {
-        (false, _, _) => "offline".to_string(),
-        (true, "local", _) => "local".to_string(),
-        (true, _, Some(ms)) => format!("{ms:.0}ms"),
-        (true, _, None) => "up".to_string(),
+    let tabs = match serving {
+        true => docker::tabs(branch),
+        false => Vec::new(),
+    };
+    let picked = look.hosts.area(&node.id);
+    let area = match tabs.iter().any(|t| t.area == picked) {
+        true => picked,
+        false => Area::Terminals,
     };
     rows.push(Row::Node {
+        id: node.id.clone(),
         name: node.name.clone(),
         serving,
+        local: node.kind == "local",
         detail: node.detail.clone().filter(|_| node.online || !serving),
-        rtt,
+        tabs: tabs.clone(),
+        area,
     });
     if !serving {
         rows.push(Row::Absence(absence(&branch.group.panes)));
@@ -315,6 +376,21 @@ fn host<Q: Fn(&str) -> Option<String>>(
         docker::strays(rows, branch, look, true);
         return;
     }
+    match area {
+        Area::Terminals => terminals(rows, branch, look, !tabs.is_empty()),
+        Area::Containers => docker::containers(rows, branch, look),
+        Area::Muffit => docker::background(rows, branch, look),
+    }
+    docker::strays(rows, branch, look, false);
+}
+
+fn terminals<Q: Fn(&str) -> Option<String>>(
+    rows: &mut Vec<Row>,
+    branch: &docker::Branch<'_>,
+    look: &docker::Look<'_, Q>,
+    switched: bool,
+) {
+    let node = branch.group.node;
     let terminals: Vec<&PaneEntry> = branch
         .group
         .panes
@@ -376,9 +452,9 @@ fn host<Q: Fn(&str) -> Option<String>>(
         }
         push_pane(rows, pane, None, true, look.questions);
     }
-    docker::background(rows, branch, look);
-    docker::containers(rows, branch, look);
-    docker::strays(rows, branch, look, false);
+    if switched && live.is_empty() && (node.online || !crate::manage::herdr_on(node)) {
+        rows.push(Row::Note("no terminals here".into()));
+    }
 }
 
 /// A session kampr keeps or muffit runs has no herdr workspace, and its directory is the nearest
@@ -570,27 +646,24 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
         Row::Node {
             name,
             serving,
-            rtt,
+            local,
             detail,
-        } => {
-            let band = Style::default().bg(t.surface);
-            let colour = match (serving, detail) {
-                (false, _) => t.mute,
-                (true, Some(_)) => t.blocked,
-                (true, None) => t.done,
-            };
-            let dot = if *serving { "●" } else { "○" };
-            let rtt = format!(" {rtt} ");
-            let lead = elide(&format!(" {name}"), width.saturating_sub(len(&rtt) + 2) as usize);
-            let pad = width.saturating_sub(len(&lead) + 1 + len(&rtt)) as usize;
-            let spans = vec![
-                Span::styled(lead, band.fg(t.text).add_modifier(Modifier::BOLD)),
-                Span::styled(" ".repeat(pad), band),
-                Span::styled(dot, band.fg(colour)),
-                Span::styled(rtt, band.fg(t.dim)),
-            ];
-            Line::from(spans).style(band)
-        }
+            tabs,
+            area,
+            ..
+        } => heading::line(
+            heading::Heading {
+                name,
+                serving: *serving,
+                local: *local,
+                alarm: detail.is_some(),
+                tabs,
+                area: *area,
+            },
+            t,
+            picked,
+            width,
+        ),
         Row::Absence(text) => Line::from(Span::styled(
             format!("  {}", elide(text, width.saturating_sub(3) as usize)),
             base.fg(t.mute).add_modifier(Modifier::ITALIC),
@@ -644,9 +717,7 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
             Line::from(spans).style(base)
         }
         Row::Blank => Line::from(Span::styled(" ", base)).style(base),
-        Row::Fold {
-            fold, open, count, ..
-        } => docker::fold_line(*fold, *open, *count, t, base, lift(base), width),
+        Row::Stopped { open, count, .. } => docker::stopped_line(*open, *count, t, base, lift(base), width),
         Row::Project(project) => Line::from(Span::styled(
             format!("   {}", elide(project, width.saturating_sub(4) as usize)),
             base.fg(t.mute).add_modifier(Modifier::BOLD),
@@ -700,7 +771,7 @@ mod tests {
     }
 
     fn node_rows(herd: &Herd) -> Vec<Row> {
-        spaces(herd, &Folds::default(), 0, &|_| None)
+        spaces(herd, &Hosts::default(), 0, &|_| None)
             .into_iter()
             .filter(|r| !matches!(r, Row::Workspace { .. }))
             .collect()
@@ -720,10 +791,13 @@ mod tests {
             node_rows(&herd),
             [
                 Row::Node {
+                    id: "n".into(),
                     name: "shed".into(),
                     serving: true,
+                    local: false,
                     detail: None,
-                    rtt: "12ms".into(),
+                    tabs: vec![],
+                    area: Area::Terminals,
                 },
                 Row::Absence("no herdr · 1 pane · seen —".into()),
                 Row::Pane {
@@ -747,10 +821,13 @@ mod tests {
             node_rows(&herd),
             [
                 Row::Node {
+                    id: "n".into(),
                     name: "coldbox".into(),
                     serving: false,
+                    local: false,
                     detail: Some(NO_HERDR.into()),
-                    rtt: "offline".into(),
+                    tabs: vec![],
+                    area: Area::Terminals,
                 },
                 Row::Absence("2 panes · seen —".into()),
                 Row::Absence(NO_HERDR.into()),

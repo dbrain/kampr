@@ -43,7 +43,7 @@ private val HERD = Herd(
 @OptIn(ExperimentalTestApi::class)
 class HerdBackgroundTest {
     @Test
-    fun backgroundSessionsComeAfterTheTerminalsUnderTheirOwnHeading() = runComposeUiTest {
+    fun backgroundSessionsAreListedApartFromTheTerminalsBehindTheirOwnTab() = runComposeUiTest {
         val group = HERD.groups().single()
         assertEquals(listOf("01JNODE/n:tui", "01JNODE/w1:p1"), group.terminals.map { it.id })
         assertEquals(listOf("01JNODE/m:wake"), group.background.map { it.id })
@@ -55,6 +55,6 @@ class HerdBackgroundTest {
                 }
             }
         }
-        onNodeWithContentDescription("Background · muffit").assertExists()
+        onNodeWithContentDescription("Muffit sessions, 1").assertExists()
     }
 }

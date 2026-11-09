@@ -4976,6 +4976,8 @@ async fn every_client_op_lands_on_a_real_herd() {
         "docker.start",
         "docker.stop",
         "docker.restart",
+        "docker.kill",
+        "docker.remove",
         "docker.adopt",
         "docker.release",
     ]

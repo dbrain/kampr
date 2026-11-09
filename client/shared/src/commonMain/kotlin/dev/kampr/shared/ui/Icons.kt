@@ -96,11 +96,29 @@ object KamprIcons {
     )
     val plus = icon(16f, 1.8f, d("M8 2.2v11.6M2.2 8h11.6"))
     val folder = icon(16f, 1.6f, d("M1.8 4.2a1.4 1.4 0 0 1 1.4-1.4h3l1.6 1.8h5a1.4 1.4 0 0 1 1.4 1.4v6.6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4Z"))
-    val machine = icon(16f, 1.5f, Glyph.Frame(1.8f, 2.5f, 12.4f, 8.5f, 1.4f), d("M5.5 13.8h5M8 11v2.8"))
-    val pulse = icon(16f, 1.5f, d("M1.2 8.6h3l1.7-4.2 3.1 7.6 1.8-3.4h4"))
-    val keyboard = icon(16f, 1.4f, Glyph.Frame(1.2f, 3.8f, 13.6f, 8.4f, 1.4f), d("M3.8 6.6h1M7.5 6.6h1M11.2 6.6h1M5 9.6h6"))
     val cross = icon(20f, 1.9f, d("M5 5l10 10M15 5 5 15"))
     val pencil = icon(16f, 1.6f, d("M10.6 2.6 13.4 5.4 5.4 13.4H2.6v-2.8z"))
+
+    // A whale carrying three crates.
+    val docker = icon(
+        20f,
+        1.5f,
+        d("M1.8 10.6h15.4c.6-1 1.6-1.4 2.6-1.2-.4 4.2-4.2 7.4-9.6 7.4-4.7 0-7.6-2.6-8.4-6.2z"),
+        Glyph.Frame(4.2f, 6.6f, 3.2f, 3f, 0.5f),
+        Glyph.Frame(8.2f, 6.6f, 3.2f, 3f, 0.5f),
+        Glyph.Frame(8.2f, 2.8f, 3.2f, 3f, 0.5f),
+    )
+
+    // Muffit's face: the daggit's pricked ears, its two eyes and its muzzle.
+    val muffit = icon(
+        20f,
+        1.5f,
+        d("M5.2 6.8 4.2 2.4l4 2.8M14.8 6.8l1-4.4-4 2.8"),
+        Glyph.Frame(3f, 5.2f, 14f, 12f, 4.2f),
+        Glyph.Round(7.4f, 10.2f, 1.1f, filled = true),
+        Glyph.Round(12.6f, 10.2f, 1.1f, filled = true),
+        d("M8.4 13.8h3.2M10 12.6v1.2"),
+    )
     val ellipsis = icon(
         16f,
         1.6f,

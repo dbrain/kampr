@@ -296,7 +296,10 @@ async fn the_sidebar_groups_spaces_by_node_and_keeps_an_offline_nodes_row() {
         screen.contains("laptop"),
         "an offline node keeps its row:\n{screen}"
     );
-    assert!(screen.contains("offline"), "{screen}");
+    assert!(
+        screen.lines().any(|l| l.contains("laptop") && l.contains('○')),
+        "an offline node's dot is hollow:\n{screen}"
+    );
     assert!(screen.contains("1 pane · seen 13:44"), "{screen}");
 }
 
@@ -421,9 +424,9 @@ async fn two_panes_from_two_hosts_stand_side_by_side() {
     let press = |app: &mut App, key: KeyEvent| app.key(key);
     press(&mut app, KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
     press(&mut app, KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
-    // spaces · comingclean · ▸herdr · pane · workbox · ▸data-pipeline — three steps to the peer's
-    // workspace row, because a node header carries no pane of its own.
-    for _ in 0..3 {
+    // spaces · comingclean · ▸herdr · pane · workbox · ▸data-pipeline — five steps to the peer's
+    // workspace row, because a node header is a stop too: its list switch and menu are keys on it.
+    for _ in 0..5 {
         press(&mut app, KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
     }
     press(&mut app, KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE));

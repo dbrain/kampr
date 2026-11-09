@@ -115,6 +115,9 @@ pub enum Action {
     /// Tiled, side by side, stacked: kampr's own arrangement, for a mosaic with no tree to mirror.
     Arrange,
     Docker(crate::docker::Op),
+    /// The list under the navigator's host: terminals, containers or muffit.
+    CycleArea(i8),
+    HostMenu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -377,6 +380,9 @@ pub fn navigate(key: KeyEvent) -> Option<Bind> {
         KeyCode::Char('r') => Bind::Do(Docker(crate::docker::Op::Restart)),
         KeyCode::Char('x') => Bind::Do(Docker(crate::docker::Op::Power)),
         KeyCode::Char('a') => Bind::Do(Docker(crate::docker::Op::Adopt)),
+        KeyCode::Char(']') => Bind::Do(CycleArea(1)),
+        KeyCode::Char('[') => Bind::Do(CycleArea(-1)),
+        KeyCode::Char('.') | KeyCode::Char('m') => Bind::Do(HostMenu),
         KeyCode::Char('h') => Bind::Do(Move(Dir::Left)),
         KeyCode::Char('j') => Bind::Do(Move(Dir::Down)),
         KeyCode::Char('k') => Bind::Do(Move(Dir::Up)),
@@ -426,7 +432,7 @@ pub fn footer(mode: Mode) -> Option<&'static str> {
             "RESIZE  h/l width · j/k height · space tiled/side by side/stacked · esc done · this screen's boxes, never the pane",
         ),
         Mode::Navigate => Some(
-            "NAVIGATE the sidebar  esc back · up/down row · enter open/fold · space beside · o order · s/r/x/a container · tab cycle · 1-9 workspace",
+            "NAVIGATE the sidebar  esc back · up/down row · enter open · [ ] host's list · . host menu · space beside · o order · s/r/x/a container · tab cycle · 1-9 workspace",
         ),
         // None: this mode's own row is the result line, which says both what was found and which
         // keys step it. A footer over the top of that would cover the answer with the question.
