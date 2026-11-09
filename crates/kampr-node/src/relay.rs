@@ -26,6 +26,9 @@ pub struct PeerPaneCtx {
     pub peers: Arc<Peers>,
     pub wire: Arc<Wire>,
     pub global: String,
+    /// The pane as its own node names it, which differs from `global` when a hub asked this node
+    /// for a view of a pane further down the chain.
+    pub upstream: String,
     pub conversation: bool,
     /// The width a reflowed view was asked for, which the peer re-lays and this hub relays.
     pub reflow: Option<u16>,
@@ -36,12 +39,13 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
         peers,
         wire,
         global,
+        upstream,
         conversation,
         reflow,
     } = ctx;
     // Whether this client has been handed a page for this pane yet. See [`first_page`].
     let mut paged = false;
-    let mut watcher = match watch(&peers, &global, conversation, reflow) {
+    let mut watcher = match watch(&peers, &upstream, conversation, reflow) {
         Ok(watcher) => watcher,
         Err(e) => {
             wire.error(e.code(), &e.to_string(), Some(&global));
@@ -80,7 +84,7 @@ pub async fn pump_peer_pane(ctx: PeerPaneCtx) {
             if overrun {
                 return;
             }
-            watcher = rewatch(&peers, &global, conversation, reflow).await;
+            watcher = rewatch(&peers, &upstream, conversation, reflow).await;
             for event in watcher.initial() {
                 if !emit(&peers, &wire, &global, &watcher, event, &mut paged) {
                     return;

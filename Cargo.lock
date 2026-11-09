@@ -1709,6 +1709,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2584,9 +2594,9 @@ dependencies = [
 
 [[package]]
 name = "jiff-tzdb"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "142bd39932ad231f10513df9ab62661fead8719872150b7ad02a2df79f4e141e"
+checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
 
 [[package]]
 name = "jiff-tzdb-platform"
@@ -2709,7 +2719,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-auth"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "argon2",
  "base64 0.23.1",
@@ -2732,7 +2742,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-cli"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2740,6 +2750,7 @@ dependencies = [
  "kampr-auth",
  "kampr-client",
  "kampr-core",
+ "kampr-docker",
  "kampr-fleet",
  "kampr-herdr",
  "kampr-keep",
@@ -2768,7 +2779,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-client"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2793,7 +2804,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-core"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2815,8 +2826,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "kampr-docker"
+version = "0.1.140"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "kampr-core",
+ "kampr-testkit",
+ "serde",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kampr-fleet"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2836,7 +2869,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-herdr"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2851,7 +2884,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-journal"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "base64 0.23.1",
  "kampr-proc",
@@ -2865,7 +2898,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-keep"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "kampr-proc",
@@ -2880,7 +2913,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-mesh"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2905,7 +2938,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-muffit"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2925,7 +2958,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-native"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -2954,7 +2987,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-node"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2966,6 +2999,7 @@ dependencies = [
  "getrandom 0.4.3",
  "kampr-auth",
  "kampr-core",
+ "kampr-docker",
  "kampr-fleet",
  "kampr-herdr",
  "kampr-journal",
@@ -3006,7 +3040,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-proc"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "libc",
  "tempfile",
@@ -3014,7 +3048,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-push"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "base64 0.23.1",
  "jwt-simple",
@@ -3031,7 +3065,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-spike"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "kampr-herdr",
@@ -3042,7 +3076,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-term"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "kampr-testkit",
@@ -3055,14 +3089,14 @@ dependencies = [
 
 [[package]]
 name = "kampr-testkit"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "kampr-tui"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -3090,7 +3124,7 @@ dependencies = [
 
 [[package]]
 name = "kampr-watch"
-version = "0.1.139"
+version = "0.1.140"
 dependencies = [
  "libc",
  "rustix",
@@ -5698,6 +5732,16 @@ name = "tap"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+]
 
 [[package]]
 name = "tempfile"

@@ -21,12 +21,20 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.Fold
+import dev.kampr.shared.model.Folds
 import dev.kampr.shared.model.Herd
-import dev.kampr.shared.model.groups
+import dev.kampr.shared.model.NodeGroup
+import dev.kampr.shared.model.childOf
+import dev.kampr.shared.model.containerSpoken
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.sections
+import dev.kampr.shared.model.shellsOf
 import dev.kampr.shared.model.statusOf
+import dev.kampr.shared.model.strayChildren
+import dev.kampr.shared.model.tree
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.wire.ContainerInfo
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 
@@ -65,6 +73,8 @@ fun HerdRail(
     onSettings: () -> Unit,
     onExpand: () -> Unit,
     modifier: Modifier = Modifier,
+    folds: Folds = Folds(),
+    onFold: OnFold = NO_FOLD,
 ) {
     val tokens = Kampr.tokens
     Column(
@@ -105,19 +115,8 @@ fun HerdRail(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
-            for (group in herd.groups()) {
-                RailNodeMark(group.node)
-                for ((index, section) in group.sections.withIndex()) {
-                    // No room for a name: a gap between workspaces, so two of them do not read as one.
-                    if (index > 0 && section.heading != null) Box(Modifier.height(6.dp).named("Workspace ${section.heading}"))
-                    for (pane in section.panes) {
-                        RailPane(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
-                    }
-                }
-                for (pane in group.background) {
-                    RailPane(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
-                }
-            }
+            val ctx = HerdRowsCtx(HerdLook.Sidebar, now, null, folds, onFold, onOpenPane, activePaneId)
+            for (group in herd.tree()) RailGroup(group, ctx)
         }
         Box(
             Modifier
@@ -131,6 +130,53 @@ fun HerdRail(
             IconGlyph(KamprIcons.gear, 15.dp, tokens.color.mute)
         }
     }
+}
+
+// The folds are the sidebar's, read here and never set: a rail has no room for a header to press.
+@Composable
+private fun RailGroup(group: NodeGroup, ctx: HerdRowsCtx) {
+    val node = group.node.id
+    val pane: @Composable (PaneInfo) -> Unit = { RailPane(it, ctx.now, it.id == ctx.activePaneId) { ctx.onOpenPane(it.id) } }
+    RailNodeMark(group.node)
+    for ((index, section) in group.sections.withIndex()) {
+        // No room for a name: a gap between workspaces, so two of them do not read as one.
+        if (index > 0 && section.heading != null) Box(Modifier.height(6.dp).named("Workspace ${section.heading}"))
+        for (p in section.panes) pane(p)
+    }
+    if (ctx.folds.open(node, Fold.Muffit)) for (p in group.background) pane(p)
+    val listed = group.listedContainers(ctx.folds.open(node, Fold.Containers), ctx.folds.open(node, Fold.Stopped), ctx.now)
+    for (container in listed) {
+        RailContainer(node, container, ctx.now)
+        for (p in group.shellsOf(container)) pane(p)
+        group.childOf(container)?.let { RailGroup(it, ctx) }
+    }
+    for (child in group.strayChildren) RailGroup(child, ctx)
+}
+
+@Composable
+private fun RailContainer(nodeId: String, container: ContainerInfo, now: Double) {
+    val tokens = Kampr.tokens
+    val manage = LocalManage.current
+    val shape = RoundedCornerShape(tokens.radii.sm)
+    val spoken = containerSpoken(container, now)
+    Box(
+        Modifier
+            .padding(horizontal = 5.dp)
+            .fillMaxWidth()
+            .height(TILE)
+            .let { if (manage.enabled) it.action(spoken, { manage.openContainer(nodeId, container.id) }, shape) else it.named(spoken) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            KText(containerSigil(container.name), tokens.type.pill, tokens.color.dim, maxLines = 1)
+            Mark(containerColor(container), containerShape(container), 7.dp)
+        }
+    }
+}
+
+private fun containerSigil(name: String): String {
+    val letters = (name.substringAfterLast('/').split('-', '_', '.').lastOrNull { it.any(Char::isLetter) } ?: name).filter { it.isLetterOrDigit() }
+    return letters.take(1).uppercase() + letters.drop(1).take(1).lowercase()
 }
 
 // A machine is a separator here rather than a header: the rail has no room for a name, and a run

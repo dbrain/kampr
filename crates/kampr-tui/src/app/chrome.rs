@@ -72,6 +72,7 @@ pub struct Layout {
     pub dividers: Vec<crate::mosaic::Divider>,
     /// The sidebar's last column, which a drag resizes it by.
     pub edge: Option<Rect>,
+    pub hits: Vec<(sidebar::Hit, Rect)>,
 }
 
 impl Layout {
@@ -96,6 +97,7 @@ impl App {
         self.settle_manage();
         self.settle_pairing();
         self.follow_route();
+        self.tick_docker();
         let area = frame.area();
         let t = self.options.theme;
         let mut layout = Layout::default();
@@ -138,6 +140,9 @@ impl App {
                     sidebar::Row::Pair(_) => layout.pair = Some(rect),
                     _ => {}
                 }
+                if let Some(hit) = row.hit() {
+                    layout.hits.push((hit, rect));
+                }
                 layout.rows.push((row.pane().map(str::to_string), rect));
             }
             right
@@ -164,6 +169,13 @@ impl App {
             Screen::Fleet => self.draw_fleet(frame, panes, &mut layout),
         }
         self.draw_borrowed(frame, self.copy_dodge(borrowed, panes));
+        self.draw_docker(
+            Rect {
+                height: panes.height.saturating_sub(1),
+                ..panes
+            },
+            frame.buffer_mut(),
+        );
         if self.keybinds {
             self.draw_keybinds(frame, area);
         }

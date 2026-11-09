@@ -74,6 +74,9 @@ fn a_pane_entry_carries_the_node_qualified_id() {
             build: None,
             update: None,
             detail: None,
+            docker: None,
+            containers: Vec::new(),
+            parent: None,
         }],
         panes: vec![PaneEntry::new("01J", &info, true)],
     })
@@ -375,6 +378,9 @@ fn a_node_names_the_release_that_supersedes_it_and_says_nothing_otherwise() {
         build: Some("0.1.0".into()),
         update: Some("0.1.2".into()),
         detail: None,
+        docker: None,
+        containers: Vec::new(),
+        parent: None,
     };
     let v = serde_json::to_value(ServerMsg::Herd {
         nodes: vec![entry.clone()],
@@ -522,6 +528,9 @@ fn a_node_serves_while_herdr_or_its_native_or_muffit_sessions_can() {
         build: None,
         update: None,
         detail: None,
+        docker: None,
+        containers: Vec::new(),
+        parent: None,
     };
     let cases = [
         (node(true, Some(true), None, None), true),

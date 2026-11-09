@@ -6,12 +6,14 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import dev.kampr.shared.push.ADOPTION_CHANNEL
+import dev.kampr.shared.push.ADOPTION_NOTIFICATION_ID
 import dev.kampr.shared.push.BLOCKED_CHANNEL
 import dev.kampr.shared.push.BLOCKED_NOTIFICATION_ID
 import dev.kampr.shared.push.DONE_CHANNEL
 import dev.kampr.shared.push.DONE_NOTIFICATION_ID
 
-// The two kinds the node sends, and the two slots they land in. `wire` is the word in the payload
+// The kinds the node sends, and the slots they land in. `wire` is the word in the payload
 // (`kampr_push::note::Kind`); a payload with no `kind` at all is from a node that only ever sent
 // one, so it is the blocked one.
 //
@@ -28,6 +30,7 @@ enum class NoteKind(
 ) {
     Blocked("blocked", BLOCKED_CHANNEL, BLOCKED_NOTIFICATION_ID, "Blocked agents", NotificationManager.IMPORTANCE_HIGH),
     Done("done", DONE_CHANNEL, DONE_NOTIFICATION_ID, "Finished agents", NotificationManager.IMPORTANCE_DEFAULT),
+    Adoption("adoption", ADOPTION_CHANNEL, ADOPTION_NOTIFICATION_ID, "Container adoptions", NotificationManager.IMPORTANCE_DEFAULT),
     ;
 
     companion object {

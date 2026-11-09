@@ -215,5 +215,47 @@
     "t": "manage",
     "op": "native.desk",
     "at": "01JNODE/n:01k8native"
+  },
+  "docker.detail": {
+    "t": "manage",
+    "op": "docker.detail",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
+  "docker.shell": {
+    "t": "manage",
+    "op": "docker.shell",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
+  "docker.start": {
+    "t": "manage",
+    "op": "docker.start",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
+  "docker.stop": {
+    "t": "manage",
+    "op": "docker.stop",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
+  "docker.restart": {
+    "t": "manage",
+    "op": "docker.restart",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
+  "docker.adopt": {
+    "t": "manage",
+    "op": "docker.adopt",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
+  },
+  "docker.release": {
+    "t": "manage",
+    "op": "docker.release",
+    "node": "01JNODE",
+    "id": "f49c60fac115"
   }
 }

@@ -4,6 +4,8 @@ static ALLOCATOR: kampr_testkit::alloc::Counting = kampr_testkit::alloc::Countin
 mod alerts;
 mod copy;
 mod desk;
+mod docker;
+mod docker_rows;
 mod images;
 mod keys;
 mod links;

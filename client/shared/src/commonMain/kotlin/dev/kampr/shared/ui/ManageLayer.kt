@@ -19,6 +19,7 @@ import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.capsFor
 import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.net.anchorPane
+import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.NodeInfo
@@ -51,6 +52,9 @@ interface ManageIo {
     // type, so a read-only one is not offered a folder it would only be refused.
     val browses: Boolean get() = false
     fun browse(node: NodeInfo) = Unit
+
+    // A container's detail sheet (docs/19).
+    fun openContainer(nodeId: String, containerId: String) = Unit
 }
 
 private object NoManage : ManageIo {
@@ -85,6 +89,10 @@ class AppManage(private val state: AppState) : ManageIo {
 
     override fun quickSession(nodeId: String) {
         state.quickSession(nodeId)
+    }
+
+    override fun openContainer(nodeId: String, containerId: String) {
+        state.openContainer(nodeId, containerId)
     }
 }
 
@@ -246,6 +254,21 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 onOpen = { state.openPane(pane.id) },
                 onDismiss = state::closeSheet,
                 desk = herd.hasDesk(pane.nodeId),
+            )
+        }
+
+        is Sheet.Container -> {
+            val node = herd.nodes.firstOrNull { it.id == sheet.nodeId } ?: return
+            val container = node.containers.firstOrNull { it.id == sheet.containerId } ?: return
+            DockerSheet(
+                breakpoint = breakpoint,
+                node = node,
+                container = container,
+                detail = state.containers.detail,
+                refusal = state.containers.refusal,
+                now = wallClockMillis() + state.clockOffsetMs,
+                onManage = state.containers::act,
+                onDismiss = state::closeSheet,
             )
         }
     }

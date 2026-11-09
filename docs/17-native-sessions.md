@@ -40,7 +40,7 @@ policy is ours and every input to it is an event rather than an inference.
      NativeProvider            │         │
      kampr-term per session    │         │
           │                    ▼         ▼
-          └──── log + fd ──► kampr-keep@<id> (one per session, systemd user unit)
+          └──── log + fd ──► kampr-keep-<id> (one per session, systemd user unit)
                           │  the PTY master, the child, its log on tmpfs
                           ▼
                     claude / codex / bash …
@@ -56,8 +56,8 @@ ends it**: not a node upgrade, not a node crash, not an upgrade of the piece tha
 not that piece crashing either. #589 and #590 measured how to get all four, and the answer is to
 make the part that must survive so small that everything else can restart around it.
 
-A keeper is one process per session, a `kampr-keep@<id>.service` systemd user unit, and it does
-five things:
+A keeper is one process per session, a transient systemd user unit `kampr-keep-<id>` started with
+`systemd-run`, and it does five things:
 
 - forks the program on a PTY it allocates, setting `KAMPR_SESSION_ID`, and keeps the master;
 - drains the master continuously (a full PTY blocks the child; the herdr client in #507 had the
@@ -120,11 +120,22 @@ What each kind of restart costs, measured:
 |---|---|---|
 | node restart, crash or upgrade | the node re-reads the directory and replays each log from its newest checkpoint, each resize at its byte | none (the log is not the node's); a log trimmed past every checkpoint replays from mid-stream |
 | keeper upgrade | `SIGUSR1` after the binary is replaced, which the node sends by itself: at its start (so after every `kampr update`) and every minute, to each keeper no longer running the file at its own path: each keeper records in `keeper.json` the file it started from (`image`, a device and inode), which a Mac can tell as well as Linux, and one from before the record is read from `/proc/<pid>/exe` (#598). Same pid, same parent, no SIGHUP, no gap in 1.2 M lines (#589) | none, if the new keeper accepts the old one's handover: the master's fd number, the child pid, the log offset. Keep that format frozen |
-| keeper crash | `Restart=always` brings it back with the master from `LISTEN_FDS`; the child blocks on the full PTY meanwhile (#590) | at most the one read in flight (13 bytes in three of five runs). The child's parent is now the user manager, so its **exit status is lost** and `exit` records only that it ended. `state` (below) is also EPERM from then on |
+| keeper crash | `Restart=on-failure` brings it back with the master from `LISTEN_FDS`; the child blocks on the full PTY meanwhile (#590) | at most the one read in flight (13 bytes in three of five runs). The child's parent is now the user manager, so its **exit status is lost** and `exit` records only that it ended. `state` (below) is also EPERM from then on |
 | without the fd store | the child gets SIGHUP and dies (#590's control) | the session |
 
 `KillMode=process` is required, or systemd kills the child with the keeper. `session.close` signals
 the child's process group, and the keeper exits when the master reaches EOF.
+
+**Without systemd** (no user manager, as in a container, or `KAMPR_KEEP_LAUNCH=detached`) a keeper
+is launched detached: double-forked and `setsid`, so it outlives the node that started it, with
+`NOTIFY_SOCKET` and `LISTEN_*` taken out of its environment so it never speaks to the launcher's
+own manager. Upgrades work the same way (`SIGUSR1` and a re-exec); a **keeper crash ends the
+session**, because there is no fd store to hand the master back. With no manager watching the pid,
+`keeper.json` also records the start time of the keeper and of its child (`keeper_start`,
+`child_start`, from `/proc/<pid>/stat`), and a session is alive only while a process with that pid
+*and* that start time exists: a restarted container hands its first pids straight out again, and a
+pid alone would read a dead session as live. Off Linux, and from a keeper older than the fields,
+the pid alone is still the answer.
 
 **One thing does want the keeper's ancestry.** Under yama, `/proc/<pid>/{syscall,wchan}` is EPERM to
 anyone but an ancestor (#331), and `kampr-fleet/src/waiting.rs` needs it. So the keeper answers a

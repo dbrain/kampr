@@ -1052,10 +1052,11 @@ impl Session {
                 "scrollback": scrollback, "conversation": conversation, "reflow": reflow, "peer": true
             })),
         );
+        let upstream = self.upstream(pane).0;
         let hold = hand_over(
             &mut self.panes,
             self.wire.outbox(),
-            Streams::Peer(&self.node.peers, &self.node.peers.relayed_as(pane, reflow)),
+            Streams::Peer(&self.node.peers, &self.node.peers.relayed_as(upstream, reflow)),
             pane,
         );
         let tasks = vec![tokio::spawn(crate::relay::pump_peer_pane(
@@ -1063,6 +1064,7 @@ impl Session {
                 peers: self.node.peers.clone(),
                 wire: self.wire.clone(),
                 global: pane.to_string(),
+                upstream: upstream.to_string(),
                 conversation,
                 reflow,
             },
@@ -1091,9 +1093,18 @@ impl Session {
     /// What a verb about this client's watch of a peer's pane names on the link: the view it is
     /// relayed as, when it asked for one.
     fn relayed_as(&self, pane: &str) -> String {
-        self.node
-            .peers
-            .relayed_as(pane, self.panes.get(pane).and_then(|h| h.reflow))
+        let (upstream, view) = self.upstream(pane);
+        let reflow = self.panes.get(pane).and_then(|h| h.reflow).or(view);
+        self.node.peers.relayed_as(upstream, reflow)
+    }
+
+    /// A hub names a reflowed view as `<pane>~<cols>`, and a node relaying it on to the pane's own
+    /// node asks for the view of the pane, not a view of the view.
+    fn upstream<'a>(&self, pane: &'a str) -> (&'a str, Option<u16>) {
+        match self.caller {
+            Caller::Hub => kampr_core::split_view(pane),
+            _ => (pane, None),
+        }
     }
 
     /// Anything addressed at a pane this process does not serve goes to the node that does,
@@ -1402,17 +1413,29 @@ impl Session {
                 end => Some(kampr_mesh::Span { start, end }),
             });
         let (credit, granted) = mpsc::channel(kampr_mesh::ATT_WINDOW as usize);
-        let task = tokio::spawn(pump_attachment(AttachmentCtx {
-            node: self.node.clone(),
-            outbox: self.wire.outbox().clone(),
-            rid,
-            pane: pane.to_string(),
-            id: id.to_string(),
-            path_form,
-            span,
-            window,
-            granted,
-        }));
+        let task = match self.further_down(pane) {
+            true => tokio::spawn(crate::relay_transfer::fetch(crate::relay_transfer::Fetch {
+                peers: self.node.peers.clone(),
+                outbox: self.wire.outbox().clone(),
+                rid,
+                pane: pane.to_string(),
+                id: id.to_string(),
+                span,
+                window,
+                granted,
+            })),
+            false => tokio::spawn(pump_attachment(AttachmentCtx {
+                node: self.node.clone(),
+                outbox: self.wire.outbox().clone(),
+                rid,
+                pane: pane.to_string(),
+                id: id.to_string(),
+                path_form,
+                span,
+                window,
+                granted,
+            })),
+        };
         self.sending.insert(
             rid,
             Sending {
@@ -1470,17 +1493,40 @@ impl Session {
             return refuse(&self.wire, "busy");
         }
         let (sink, chunks) = mpsc::channel(kampr_mesh::ATT_WINDOW as usize + 1);
-        tokio::spawn(crate::upload_peer::receive(crate::upload_peer::Receiving {
-            node: self.node.clone(),
-            device: self.device.clone(),
-            peer: self.peer.clone(),
-            outbox: self.wire.outbox().clone(),
-            rid,
-            dir: message["dir"].as_str().unwrap_or_default().to_string(),
-            name: message["name"].as_str().unwrap_or_default().to_string(),
-            chunks,
-        }));
+        let dir = message["dir"].as_str().unwrap_or_default().to_string();
+        let name = message["name"].as_str().unwrap_or_default().to_string();
+        match message["node"].as_str().filter(|node| self.further_down(node)) {
+            Some(node) => {
+                tokio::spawn(crate::relay_transfer::push(crate::relay_transfer::Push {
+                    peers: self.node.peers.clone(),
+                    outbox: self.wire.outbox().clone(),
+                    rid,
+                    node: node.to_string(),
+                    dir,
+                    name,
+                    chunks,
+                }));
+            }
+            None => {
+                tokio::spawn(crate::upload_peer::receive(crate::upload_peer::Receiving {
+                    node: self.node.clone(),
+                    device: self.device.clone(),
+                    peer: self.peer.clone(),
+                    outbox: self.wire.outbox().clone(),
+                    rid,
+                    dir,
+                    name,
+                    chunks,
+                }));
+            }
+        }
         self.receiving.insert(rid, sink);
+    }
+
+    /// A node or pane a hub asked this node about that is not this node's own, but one it reaches
+    /// over a link of its own.
+    fn further_down(&self, id: &str) -> bool {
+        self.node.route(id).is_none() && self.node.peers.link_for(id).is_some()
     }
 
     fn unwatch(&mut self, pane: &str) {
@@ -2135,10 +2181,17 @@ impl Session {
             );
             return;
         }
-        // `op` and a label say that something ran. `cwd`, `env`, `args`, `path` and `branch` are
-        // what it ran, where, and against which tree — which is the whole question the log exists
-        // to answer.
-        self.audit("manage", op.at.as_deref(), Some(manage_detail(&op)));
+        // Read-only and polled every 3 s while a sheet is open (docs/19), so not audited.
+        if op.op != "docker.detail" {
+            // `op` and a label say that something ran. `cwd`, `env`, `args`, `path` and `branch`
+            // are what it ran, where, and against which tree — which is the whole question the
+            // log exists to answer.
+            self.audit("manage", op.at.as_deref(), Some(manage_detail(&op)));
+        }
+        if crate::docker::off_the_loop(&op.op) {
+            self.docker_served(op, raw, rid);
+            return;
+        }
         // **Before routing, deliberately.** The book is this node's and names no host, so a
         // `fleet.save` carrying a `node` must not be relayed to it — the operator's list would
         // then live on whichever machine their last pane happened to be on. It reaches herdr for
@@ -2253,6 +2306,7 @@ impl Session {
             native: primary.native.as_ref(),
             muffit: primary.muffit.as_ref(),
             muffit_tui: self.node.config.muffit.tui_command(),
+            docker: primary.docker.as_ref(),
             holder: &kampr_keep::view_holder(&self.device.name),
             config: &self.node.config,
         };
@@ -2367,6 +2421,27 @@ impl Session {
         // until the next discovery poll. The wait is bounded by `SESSION_SETTLE` and the ack lands
         // in an outbox that is already gone, which costs nothing.
         drop(task);
+    }
+
+    fn docker_served(&self, op: ManageOp, raw: Value, rid: Option<Value>) {
+        let node = self.node.clone();
+        let wire = self.wire.clone();
+        tokio::spawn(async move {
+            match crate::docker::served(&node, &op, raw).await {
+                Ok(mut ack) => {
+                    match &rid {
+                        Some(rid) => ack["rid"] = rid.clone(),
+                        None => {
+                            if let Some(object) = ack.as_object_mut() {
+                                object.remove("rid");
+                            }
+                        }
+                    }
+                    wire.send_json(&ack);
+                }
+                Err((code, message)) => refuse_on(&wire, &op.op, None, code, &message, rid.as_ref()),
+            }
+        });
     }
 
     fn refuse(&self, op: &str, at: Option<&str>, code: ErrorCode, message: &str, rid: Option<&Value>) {
@@ -2647,8 +2722,9 @@ fn refuse_on(wire: &Wire, op: &str, at: Option<&str>, code: ErrorCode, message: 
 
 fn manage_detail(op: &ManageOp) -> Value {
     let mut detail = json!({ "op": op.op });
-    let fields: [(&str, Value); 15] = [
+    let fields: [(&str, Value); 16] = [
         ("node", json!(op.node)),
+        ("id", json!(op.id)),
         ("entry", json!(op.entry)),
         ("label", json!(op.label)),
         ("cwd", json!(op.cwd)),
@@ -2725,6 +2801,9 @@ fn hello(node: &Node, device: &Device, caller: Caller) -> Value {
     value["caps"]["reflow"] = json!(true);
     if node.primary().muffit.is_some() {
         value["caps"]["muffit"] = json!(true);
+    }
+    if node.primary().docker.is_some() {
+        value["caps"]["docker"] = json!(true);
     }
     // A hub reads this to decide whether it may keep an `att` on a block it relays. It is said
     // only to a hub because `att.fetch` is answered only for one: a browser has the HTTP route,

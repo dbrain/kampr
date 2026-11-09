@@ -13,6 +13,9 @@ use serde::Serialize;
 pub enum Kind {
     Blocked,
     Done,
+    /// A container a host adopted cannot come back. Not an agent, but the same set-not-edge
+    /// shape: the set is every failing adoption, keyed `<host>/docker:<name>`.
+    Adoption,
 }
 
 /// One tag per kind, so a second notification of the same kind **replaces** the first rather than
@@ -20,24 +23,28 @@ pub enum Kind {
 /// information three times — while the other kind's slot is left alone.
 pub const TAG_BLOCKED: &str = "kampr.blocked";
 pub const TAG_DONE: &str = "kampr.done";
+pub const TAG_ADOPTION: &str = "kampr.adoption";
 
 impl Kind {
     pub fn tag(self) -> &'static str {
         match self {
             Self::Blocked => TAG_BLOCKED,
             Self::Done => TAG_DONE,
+            Self::Adoption => TAG_ADOPTION,
         }
     }
 
     /// The payload version a client must have declared before this kind may be sent to it.
     ///
     /// `Blocked` asks for nothing, because every client that ever subscribed was built for it.
-    /// `Done` asks for [`VERSION`], because a client with one notification slot renders it as the
-    /// blocked one — see the note on `VERSION`.
+    /// `Done` asks for 3, because a client with one notification slot renders it as the
+    /// blocked one — see the note on `VERSION`. `Adoption` asks for 4 for the same reason: an
+    /// Android client before it reads an unknown kind as the blocked one.
     pub fn min_payload_version(self) -> i64 {
         match self {
             Self::Blocked => 1,
-            Self::Done => VERSION as i64,
+            Self::Done => 3,
+            Self::Adoption => 4,
         }
     }
 }
@@ -108,14 +115,15 @@ pub struct Notification {
     pub alert: bool,
 }
 
-/// v2 added [`Notification::alert`] and `count: 0`. v3 added [`Kind`] and the second tag.
+/// v2 added [`Notification::alert`] and `count: 0`. v3 added [`Kind`] and the second tag. v4
+/// added [`Kind::Adoption`] and its tag.
 ///
 /// **v3 is why a subscription records the payload version it can read.** A client older than it
 /// posts every payload into its one blocked slot whatever the tag says, so a `done` sent to one
 /// would overwrite a live question — the one degradation this feature may not cause. The gate is
 /// in [`crate::Store::push_targets`](../../kampr_auth/struct.Store.html), not here: an old client
 /// is never sent a `done` at all, rather than sent one it renders wrongly.
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 
 /// A body is a notification's whole content on a locked phone, and a question cut mid-word is
 /// worse than a short one. Push services also cap the encrypted payload at 4096 bytes, which this
@@ -149,6 +157,7 @@ impl Notification {
         let (title, body) = match kind {
             Kind::Blocked => ("Answered elsewhere", "Nothing is waiting on you now"),
             Kind::Done => ("Caught up", "Every finished agent has been seen"),
+            Kind::Adoption => ("Adoptions recovered", "Every adopted container is back"),
         };
         Self {
             v: VERSION,
@@ -181,6 +190,14 @@ impl Notification {
                 ),
             ),
             (Kind::Done, n) => (format!("{} finished", newest_and_count(&panes, n)), lines(&panes)),
+            (Kind::Adoption, 1) => (
+                format!("Adopting {} is failing", first.who()),
+                trim(first.detail.as_deref().unwrap_or("It cannot come back")),
+            ),
+            (Kind::Adoption, n) => (
+                format!("Adopting {} is failing", newest_and_count(&panes, n)),
+                lines(&panes),
+            ),
         };
         Some(Self {
             v: VERSION,
@@ -189,7 +206,7 @@ impl Notification {
             body,
             tag: kind.tag().to_string(),
             count: panes.len(),
-            pane: (panes.len() == 1).then(|| first.pane.clone()),
+            pane: (kind != Kind::Adoption && panes.len() == 1).then(|| first.pane.clone()),
             panes,
             alert,
         })
@@ -456,6 +473,44 @@ mod tests {
     }
 
     #[test]
+    fn a_failing_adoption_names_the_container_says_why_and_opens_no_pane() {
+        let failing = |name: &str, why: &str| Agent {
+            pane: format!("01J/docker:{name}"),
+            node: "01J".into(),
+            agent: None,
+            label: Some(name.into()),
+            title: None,
+            detail: Some(why.into()),
+        };
+        let one = Notification::batch(Kind::Adoption, vec![failing("db", "db no longer exists")]).unwrap();
+        assert_eq!(one.title, "Adopting db is failing");
+        assert_eq!(one.body, "db no longer exists");
+        assert_eq!((one.tag.as_str(), one.pane.as_ref()), (TAG_ADOPTION, None));
+        assert_eq!(serde_json::to_value(&one).unwrap()["kind"], "adoption");
+        assert!(one.alert);
+
+        let two = Notification::batch(
+            Kind::Adoption,
+            vec![failing("db", "gone"), failing("web", "no space")],
+        )
+        .unwrap();
+        assert_eq!(two.title, "Adopting db and 1 other is failing");
+        assert!(two.body.contains("web — no space"), "{}", two.body);
+    }
+
+    /// An Android build before v4 reads a kind it does not know as the blocked one, so a failing
+    /// adoption sent to it would take a live question off the phone.
+    #[test]
+    fn only_a_client_that_reads_v4_is_sent_an_adoption() {
+        assert_eq!(Kind::Adoption.min_payload_version(), 4);
+        assert_eq!(Kind::Done.min_payload_version(), 3);
+        assert_eq!(Kind::Blocked.min_payload_version(), 1);
+        assert_eq!(VERSION, 4);
+        let tags = [Kind::Blocked, Kind::Done, Kind::Adoption].map(Kind::tag);
+        assert_eq!(tags, [TAG_BLOCKED, TAG_DONE, TAG_ADOPTION]);
+    }
+
+    #[test]
     fn every_notification_of_one_kind_shares_that_kinds_tag() {
         let a = Notification::batch(Kind::Blocked, vec![agent("w1:p1", "claude", None)]).unwrap();
         let b = Notification::batch(Kind::Blocked, vec![agent("w2:p1", "codex", None)]).unwrap();
@@ -473,7 +528,7 @@ mod tests {
     /// payload now, and `count: 0` is what tells a client to take the prompt down.
     #[test]
     fn nothing_outstanding_is_the_notification_that_takes_the_prompt_down() {
-        for kind in [Kind::Blocked, Kind::Done] {
+        for kind in [Kind::Blocked, Kind::Done, Kind::Adoption] {
             let clear = Notification::resync(kind, Vec::new());
             assert_eq!(clear.count, 0);
             assert!(clear.panes.is_empty());
@@ -559,7 +614,7 @@ mod tests {
         let note = Notification::batch(Kind::Done, vec![agent("w1:p1", "claude", None)]).unwrap();
         let json = serde_json::to_value(&note).unwrap();
         assert_eq!(json["kind"], "done");
-        assert_eq!(json["v"], 3);
+        assert_eq!(json["v"], 4);
         assert_eq!(json["tag"], TAG_DONE);
     }
 }

@@ -113,6 +113,8 @@ pub fn serve(dir: &Path) -> Result<()> {
             started_unix: now_unix(),
             how,
             image: std::fs::metadata(&exe).ok().map(|meta| Image::of(&meta)),
+            keeper_start: crate::sys::started(getpid().as_raw_nonzero().get() as u32),
+            child_start: crate::sys::started(child),
         },
     )?;
     if how == How::Spawn {

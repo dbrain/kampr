@@ -3,7 +3,7 @@ use crate::state::{BUILD, Node};
 use kampr_auth::{Entry, MeshRole};
 use kampr_mesh::dial::{DialPolicy, Hub};
 use kampr_mesh::ws::ServerSocket;
-use kampr_mesh::{HubIdentity, Outgoing, Presence};
+use kampr_mesh::{Heard, HubIdentity, Incoming, Outgoing, Presence};
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -233,7 +233,8 @@ pub async fn dial_hubs(node: Weak<Node>) {
                             let weak = weak.clone();
                             async move {
                                 if let Some(node) = weak.upgrade() {
-                                    serve_hub(node, hub, out, incoming).await;
+                                    let heard = incoming.heard();
+                                    serve_hub(node, hub, out, incoming, heard).await;
                                 }
                             }
                         }
@@ -251,11 +252,12 @@ pub async fn dial_hubs(node: Weak<Node>) {
 /// read-only refusal, the re-read before every write, the audit line naming who typed — applies
 /// to a hub without a second implementation. The row carries no token, so nothing can present it
 /// as a bearer credential.
-async fn serve_hub(
+pub async fn serve_hub<O: Outgoing, I: Incoming>(
     node: Arc<Node>,
     hub: HubIdentity,
-    out: kampr_mesh::dial::WsOut,
-    incoming: kampr_mesh::dial::WsIn,
+    out: O,
+    incoming: I,
+    heard: Arc<Heard>,
 ) {
     let name = format!("hub {}", hub.node_name);
     let device = match node
@@ -282,7 +284,6 @@ async fn serve_hub(
     // one was handed a transport with nowhere to record an answer, so the ping arm never ran — and
     // an operator's laptop, whose network went away and came back, went on believing it was
     // serving a hub that had dropped it fifteen seconds in. Three hours, ended by hand (#500).
-    let heard = incoming.heard();
     session::run_on_watched(
         out,
         incoming,

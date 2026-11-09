@@ -16,11 +16,13 @@ import kotlin.test.assertTrue
 
 private class RecordingPush : PushPlatform by NoPush() {
     val reconciled = mutableListOf<Pair<Boolean, Boolean>>()
+    val adoptions = mutableListOf<Boolean>()
 
     val blocked: List<Boolean> get() = reconciled.map { it.first }
 
-    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean) {
+    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean, anyAdoptionFailing: Boolean) {
         reconciled += anyBlocked to anyDone
+        adoptions += anyAdoptionFailing
     }
 }
 
@@ -138,6 +140,22 @@ class NotificationReconcileTest {
                 push.reconciled.isEmpty(),
                 "an empty herd nobody has fetched is not an answered prompt",
             )
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun anAdoptionThatComesBackTakesItsNotificationDown() {
+        val (_, store, scope) = app()
+        fun herd(error: String?) = """{"t":"herd","nodes":[{"id":"01JNODE","name":"box","kind":"local","containers":[
+            {"id":"c1","name":"db","state":"running"${error?.let { ",\"adopt_error\":\"$it\"" } ?: ""}}]}],
+            "panes":[{"id":"01JNODE/w1:p1","node_id":"01JNODE","agent":"claude","agent_status":"idle"}]}"""
+        try {
+            store.take(herd("db is not running"))
+            assertEquals(listOf(true), push.adoptions)
+            store.take(herd(null))
+            assertEquals(listOf(true, false), push.adoptions)
         } finally {
             scope.cancel()
         }

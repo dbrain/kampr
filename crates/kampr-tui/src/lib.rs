@@ -10,6 +10,7 @@ pub mod app;
 
 pub mod convo;
 pub mod copy;
+pub mod docker;
 pub mod find;
 pub mod image;
 pub mod input;
@@ -317,6 +318,10 @@ static SECTIONS: &[Section] = &[
                 "go to any pane: type a few letters, enter · empty is the last visited · 1-9 / alt+1-9 · click",
             ),
             ("prefix w", "walk the sidebar — up/down, enter opens, esc leaves"),
+            (
+                "enter on a ▸ section",
+                "fold or unfold a host's muffit and docker sections, and +N stopped · click too",
+            ),
             ("click grouped/priority", "the sidebar's order; o in the sidebar"),
             (
                 "prefix shift+h",
@@ -443,7 +448,11 @@ static SECTIONS: &[Section] = &[
             ),
             (
                 "sidebar",
-                "up/down row · enter open · space beside · o order · 1-9 workspace",
+                "up/down row · enter open/fold · space beside · o order · 1-9 workspace",
+            ),
+            (
+                "on a container",
+                "enter its panel (refreshes every 3 s) · s shell in · r restart · x stop/start · a adopt/release",
             ),
         ],
     },

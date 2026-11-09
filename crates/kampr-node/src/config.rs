@@ -43,6 +43,73 @@ pub struct Config {
     pub native: Native,
     #[serde(default)]
     pub muffit: Muffit,
+    #[serde(default)]
+    pub docker: Docker,
+}
+
+/// The Docker daemon on this machine (docs/19).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Docker {
+    /// Absent is on exactly when the socket answers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub socket: String,
+    /// What an adopted container runs before anything else is tried. It must be static.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub binary: String,
+    /// Absent is on: a container nothing local runs in gets this version's published release.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fetch: Option<bool>,
+    /// Where releases are fetched from instead of GitHub. Never read from a file: it chooses the
+    /// checksums a download is checked against, so only a test sets it.
+    #[serde(skip)]
+    pub release_base: Option<String>,
+    /// What a shell into a container with none of its own runs beside it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub debug_image: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DockerSource {
+    pub socket: PathBuf,
+    /// Asked for by name, so a socket that does not answer is reported as down rather than absent.
+    pub required: bool,
+}
+
+impl Docker {
+    pub fn configured(&self) -> Option<PathBuf> {
+        Some(self.binary.trim())
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
+    }
+
+    pub fn fetches(&self) -> bool {
+        self.fetch.unwrap_or(true)
+    }
+
+    pub fn debug_image(&self) -> &str {
+        match self.debug_image.trim() {
+            "" => kampr_docker::shell::DEBUG_IMAGE,
+            image => image,
+        }
+    }
+
+    pub fn resolve(&self, docker_host: Option<&str>) -> Option<DockerSource> {
+        let socket = kampr_docker::socket::resolve(&self.socket, docker_host);
+        match self.enabled {
+            Some(false) => None,
+            Some(true) => Some(DockerSource {
+                socket,
+                required: true,
+            }),
+            None => socket.exists().then_some(DockerSource {
+                socket,
+                required: false,
+            }),
+        }
+    }
 }
 
 /// The muffit daemon on this machine (docs/18).
@@ -529,6 +596,7 @@ impl Config {
             fleet: Fleet::default(),
             native: Native::default(),
             muffit: Muffit::default(),
+            docker: Docker::default(),
         }
     }
 
@@ -646,6 +714,53 @@ impl Config {
 mod tests {
     use super::*;
     use kampr_core::local_node::{DEFAULT_PORT, LocalNode, default_state_dir};
+
+    #[test]
+    fn docker_is_on_where_its_socket_is_unless_somebody_said_otherwise() {
+        let dir = tempfile::tempdir().unwrap();
+        let there = dir.path().join("docker.sock");
+        std::fs::write(&there, "").unwrap();
+        let missing = dir.path().join("none.sock");
+        let docker = |socket: &Path, enabled: Option<bool>| Docker {
+            enabled,
+            socket: socket.display().to_string(),
+            ..Docker::default()
+        };
+        let source = |socket: &Path, required: bool| {
+            Some(DockerSource {
+                socket: socket.to_path_buf(),
+                required,
+            })
+        };
+        assert_eq!(docker(&there, None).resolve(None), source(&there, false));
+        assert_eq!(docker(&missing, None).resolve(None), None);
+        assert_eq!(docker(&missing, Some(true)).resolve(None), source(&missing, true));
+        assert_eq!(docker(&there, Some(false)).resolve(None), None);
+        let host = format!("unix://{}", there.display());
+        assert_eq!(Docker::default().resolve(Some(&host)), source(&there, false));
+    }
+
+    #[test]
+    fn a_configured_binary_is_named_and_fetching_is_on_unless_turned_off() {
+        assert_eq!(Docker::default().configured(), None);
+        assert!(Docker::default().fetches());
+        let set: Docker =
+            toml::from_str("binary = \"/opt/kampr-static\"\nfetch = false\nrelease_base = \"file:///x\"\n")
+                .unwrap();
+        assert_eq!(set.configured(), Some(PathBuf::from("/opt/kampr-static")));
+        assert!(!set.fetches());
+        assert_eq!(
+            set.release_base, None,
+            "a file cannot choose where releases come from"
+        );
+    }
+
+    #[test]
+    fn a_debug_shell_runs_the_pinned_busybox_unless_an_image_is_configured() {
+        assert_eq!(Docker::default().debug_image(), kampr_docker::shell::DEBUG_IMAGE);
+        let set: Docker = toml::from_str("debug_image = \"alpine:3.22\"\n").unwrap();
+        assert_eq!(set.debug_image(), "alpine:3.22");
+    }
 
     #[test]
     fn muffit_is_reached_with_the_first_token_found_and_only_then() {

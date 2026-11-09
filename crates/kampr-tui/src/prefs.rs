@@ -1,4 +1,4 @@
-use crate::sidebar::Order;
+use crate::sidebar::{Folds, Order};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -17,6 +17,7 @@ pub struct Prefs {
     pub toast: Option<crate::alert::Setting>,
     /// Most recent first, keyed by the herd's origin: a pane id means nothing on another herd.
     pub recent: BTreeMap<String, Vec<String>>,
+    pub folds: Folds,
 }
 
 impl Prefs {

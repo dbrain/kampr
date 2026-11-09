@@ -1,3 +1,4 @@
+mod adopted;
 mod android_passkeys;
 mod attachment;
 mod attachment_mesh;
@@ -5,6 +6,7 @@ mod backpressure;
 mod compression;
 mod device_store;
 mod discovery;
+mod docker_mesh;
 mod done_read;
 mod files;
 mod fleet_book;

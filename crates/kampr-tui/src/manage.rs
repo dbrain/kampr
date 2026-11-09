@@ -890,6 +890,10 @@ impl Manage {
         Progress::Send(op)
     }
 
+    pub fn sent(&mut self, op: Value) {
+        self.fire(op);
+    }
+
     /// An op this client refused before it ever reached a node, said the same way a node's own
     /// refusal is said.
     pub fn refused(&mut self, op: &str, why: &str) {

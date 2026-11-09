@@ -28,13 +28,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.Fold
+import dev.kampr.shared.model.Folds
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.NodeGroup
 import dev.kampr.shared.model.TriageItem
-import dev.kampr.shared.model.groups
-import dev.kampr.shared.model.sections
+import dev.kampr.shared.model.tree
 import dev.kampr.shared.theme.Kampr
-import dev.kampr.shared.wire.PaneInfo
 
 @Composable
 fun HerdPortrait(
@@ -48,9 +48,11 @@ fun HerdPortrait(
     onResync: () -> Unit = {},
     scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
+    folds: Folds = Folds(),
+    onFold: OnFold = NO_FOLD,
 ) {
     val tokens = Kampr.tokens
-    val groups = herd.groups()
+    val groups = herd.tree()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
@@ -91,26 +93,11 @@ fun HerdPortrait(
                             localRtt,
                             PaddingValues(start = 22.dp, end = 22.dp, top = if (index == 0) 2.dp else 14.dp, bottom = 8.dp),
                         )
-                        Column(
+                        GroupBody(
+                            group,
+                            HerdRowsCtx(HerdLook.Portrait, now, localRtt, folds, onFold, onOpenPane),
                             Modifier.padding(horizontal = 16.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            if (group.panes.isEmpty()) {
-                                NodeQuiet(group.node, Modifier.padding(start = 6.dp, bottom = 4.dp))
-                            }
-                            for (section in group.sections) {
-                                section.heading?.let { WorkspaceHeading(it, Modifier.padding(start = 6.dp, top = 6.dp)) }
-                                for (pane in section.panes) {
-                                    PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
-                                }
-                            }
-                            if (group.background.isNotEmpty()) {
-                                BackgroundHeading(Modifier.padding(start = 6.dp, top = 6.dp))
-                            }
-                            for (pane in group.background) {
-                                PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
-                            }
-                        }
+                        )
                     }
                     Box(Modifier.height(16.dp))
                 }
@@ -132,9 +119,11 @@ fun HerdLandscape(
     onResync: () -> Unit = {},
     scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
+    folds: Folds = Folds(),
+    onFold: OnFold = NO_FOLD,
 ) {
     val tokens = Kampr.tokens
-    val groups = herd.groups()
+    val groups = herd.tree()
     var listing by remember { mutableStateOf(false) }
     Box(modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().background(tokens.color.bg)) {
@@ -172,7 +161,8 @@ fun HerdLandscape(
             } else {
                 BoxWithConstraints(Modifier.weight(1f)) {
                     val plan = columnPlan(maxWidth - 20.dp, COLUMN_GAP, wanted = groups.size)
-                    val columns = groups.balancedColumns(plan.count)
+                    val columns = groups.balancedColumns(plan.count, folds)
+                    val ctx = HerdRowsCtx(HerdLook.Landscape, now, localRtt, folds, onFold, onOpenPane)
                     Row(
                         Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(COLUMN_GAP, Alignment.CenterHorizontally),
@@ -186,23 +176,7 @@ fun HerdLandscape(
                                 }
                                 for (group in column) {
                                     NodeHeader(group.node, localRtt, PaddingValues(start = 8.dp, end = 8.dp, top = 10.dp, bottom = 6.dp))
-                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        if (group.panes.isEmpty()) {
-                                            NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
-                                        }
-                                        for (section in group.sections) {
-                                            section.heading?.let { WorkspaceHeading(it, Modifier.padding(start = 8.dp, top = 6.dp)) }
-                                            for (pane in section.panes) {
-                                                PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
-                                            }
-                                        }
-                                        if (group.background.isNotEmpty()) {
-                                            BackgroundHeading(Modifier.padding(start = 8.dp, top = 6.dp))
-                                        }
-                                        for (pane in group.background) {
-                                            PaneCard(pane, now, { onOpenPane(pane.id) }, Modifier.fillMaxWidth())
-                                        }
-                                    }
+                                    GroupBody(group, ctx)
                                 }
                             }
                         }
@@ -216,15 +190,26 @@ fun HerdLandscape(
 
 private val COLUMN_GAP = 10.dp
 
-private fun List<NodeGroup>.balancedColumns(count: Int): List<List<NodeGroup>> {
+private fun List<NodeGroup>.balancedColumns(count: Int, folds: Folds): List<List<NodeGroup>> {
     val columns = List(count) { mutableListOf<NodeGroup>() }
     val heights = IntArray(count)
     for (group in this) {
         val shortest = heights.indices.minBy { heights[it] }
         columns[shortest] += group
-        heights[shortest] += group.panes.size + 1
+        heights[shortest] += group.rows(folds)
     }
     return columns
+}
+
+private fun NodeGroup.rows(folds: Folds): Int {
+    val containers = if (folds.open(node.id, Fold.Containers)) {
+        node.containers.size + 1
+    } else if (node.containers.isEmpty()) {
+        0
+    } else {
+        1
+    }
+    return panes.size + 1 + containers + children.sumOf { it.rows(folds) }
 }
 
 @Composable
@@ -244,9 +229,11 @@ fun HerdSidebar(
     onCollapsed: (Boolean) -> Unit = {},
     scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
+    folds: Folds = Folds(),
+    onFold: OnFold = NO_FOLD,
 ) {
     val tokens = Kampr.tokens
-    val groups = herd.groups()
+    val groups = herd.tree()
     var listing by remember { mutableStateOf(false) }
     if (collapsed) {
         HerdRail(
@@ -260,6 +247,8 @@ fun HerdSidebar(
             onSettings = onSettings,
             onExpand = { onCollapsed(false) },
             modifier = modifier,
+            folds = folds,
+            onFold = onFold,
         )
         return
     }
@@ -329,23 +318,11 @@ fun HerdSidebar(
                             localRtt,
                             PaddingValues(start = 18.dp, end = 18.dp, top = if (index == 0) 0.dp else 16.dp, bottom = 7.dp),
                         )
-                        Column(Modifier.padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            if (group.panes.isEmpty()) {
-                                NodeQuiet(group.node, Modifier.padding(start = 8.dp, bottom = 4.dp))
-                            }
-                            for (section in group.sections) {
-                                section.heading?.let { WorkspaceHeading(it, Modifier.padding(start = 8.dp, top = 8.dp, bottom = 2.dp)) }
-                                for (pane in section.panes) {
-                                    PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
-                                }
-                            }
-                            if (group.background.isNotEmpty()) {
-                                BackgroundHeading(Modifier.padding(start = 8.dp, top = 8.dp, bottom = 2.dp))
-                            }
-                            for (pane in group.background) {
-                                PaneRow(pane, now, pane.id == activePaneId) { onOpenPane(pane.id) }
-                            }
-                        }
+                        GroupBody(
+                            group,
+                            HerdRowsCtx(HerdLook.Sidebar, now, localRtt, folds, onFold, onOpenPane, activePaneId),
+                            Modifier.padding(horizontal = 10.dp),
+                        )
                     }
                 }
             }

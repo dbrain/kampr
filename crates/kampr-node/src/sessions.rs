@@ -48,6 +48,10 @@ pub struct SessionNode {
     pub muffit: Option<Arc<MuffitProvider>>,
     /// The primary's daemon on every session, since a TUI in any session's pane is its client.
     machine_muffit: Option<Arc<MuffitProvider>>,
+    /// Only on the primary: the containers are the machine's (docs/19).
+    pub docker: Option<Arc<kampr_docker::Directory>>,
+    /// Beside `docker`: the containers this node runs a child node in.
+    pub adopted: Option<Arc<crate::adopt::Ledger>>,
     pub registry: Arc<PaneRegistry>,
 }
 
@@ -67,7 +71,9 @@ impl SessionNode {
         primary: bool,
         desk: Option<Arc<NativeProvider>>,
         machine_muffit: Option<Arc<MuffitProvider>>,
+        docker: Option<DockerHost>,
     ) -> Arc<Self> {
+        let (docker, adopted) = docker.unzip();
         let herdr = Herdr::new(&socket);
         let native = primary.then(|| native_provider(config)).flatten();
         let muffit = primary.then(|| muffit_provider(config)).flatten();
@@ -126,6 +132,8 @@ impl SessionNode {
             native,
             muffit,
             machine_muffit,
+            docker,
+            adopted,
             registry,
         })
     }
@@ -232,6 +240,21 @@ fn native_provider(config: &Config) -> Option<Arc<NativeProvider>> {
     }
 }
 
+type DockerHost = (Arc<kampr_docker::Directory>, Arc<crate::adopt::Ledger>);
+
+fn docker_source(config: &Config, state_dir: &Path) -> Option<DockerHost> {
+    let source = config
+        .docker
+        .resolve(std::env::var("DOCKER_HOST").ok().as_deref())?;
+    let dir = state_dir.join("docker");
+    let journal = kampr_docker::Journal::open(&dir.join("events.jsonl"));
+    let client = kampr_docker::Client::new(source.socket);
+    Some((
+        kampr_docker::Directory::follow(client, journal, source.required),
+        Arc::new(crate::adopt::Ledger::open(&dir)),
+    ))
+}
+
 fn muffit_provider(config: &Config) -> Option<Arc<MuffitProvider>> {
     let endpoint = config.muffit.resolve(&config.journal_home())?;
     match kampr_muffit::Client::new(&endpoint.url, &endpoint.token) {
@@ -290,7 +313,7 @@ pub struct Sessions {
 impl Sessions {
     /// **Never touches the network.** Every provider connects on its own supervised loop, so a
     /// node with no herdr at all still binds its port and serves an empty herd.
-    pub fn open(config: &Config) -> Arc<Self> {
+    pub fn open(config: &Config, state_dir: &Path) -> Arc<Self> {
         let socket = match config.herdr.socket.as_str() {
             "" => Herdr::discover().map_or_else(|_| default_socket(), |h| h.socket().to_path_buf()),
             path => PathBuf::from(path),
@@ -298,7 +321,15 @@ impl Sessions {
         let mut config = config.clone();
         config.herdr.enabled = Some(config.herdr.is_on(&socket));
         let config = &config;
-        let primary = SessionNode::open(config, &session_name_of(&socket), socket, true, None, None);
+        let primary = SessionNode::open(
+            config,
+            &session_name_of(&socket),
+            socket,
+            true,
+            None,
+            None,
+            docker_source(config, state_dir),
+        );
         Arc::new(Self {
             config: config.clone(),
             all: RwLock::new(vec![primary.clone()]),
@@ -387,6 +418,7 @@ impl Sessions {
                 false,
                 self.primary.native.clone(),
                 self.primary.muffit.clone(),
+                None,
             );
             info!(session = %entry.name, node = %session.node_id, "serving a herdr session");
             self.all.write().unwrap().push(session);
@@ -550,6 +582,7 @@ mod tests {
     fn node(id: &str) -> Arc<SessionNode> {
         let mut config = Config::bootstrap("host");
         config.muffit.enabled = Some(false);
+        config.docker.enabled = Some(false);
         config.node_id = "01J".into();
         config.herdr.socket = "/nowhere/herdr.sock".into();
         config.native.root = "/nowhere/native".into();
@@ -559,6 +592,7 @@ mod tests {
             if primary { "default" } else { "agents" },
             "/nowhere/herdr.sock".into(),
             primary,
+            None,
             None,
             None,
         )
@@ -590,10 +624,11 @@ mod tests {
     fn sessions() -> Arc<Sessions> {
         let mut config = Config::bootstrap("host");
         config.muffit.enabled = Some(false);
+        config.docker.enabled = Some(false);
         config.node_id = "01J".into();
         config.herdr.socket = "/nowhere/default/herdr.sock".into();
         config.native.root = "/nowhere/native".into();
-        Sessions::open(&config)
+        Sessions::open(&config, Path::new("/nowhere/state"))
     }
 
     /// One `herdr session list` that could not be read used to read as "there are no named

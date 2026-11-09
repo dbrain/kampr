@@ -133,6 +133,7 @@ fn pane(question: Question) -> PaneEntry {
                 second: true,
             }],
         }),
+        container: Some("db".into()),
     }
 }
 
@@ -151,6 +152,31 @@ fn node() -> NodeEntry {
         build: Some("0.1.0".into()),
         update: Some("0.1.1".into()),
         detail: Some("d".into()),
+        docker: Some(true),
+        containers: vec![ContainerEntry {
+            id: "f49c".into(),
+            name: "db".into(),
+            image: "postgres:18.6".into(),
+            state: "exited".into(),
+            health: Some("unhealthy".into()),
+            started_at: Some(1),
+            finished_at: Some(2),
+            exit_code: Some(137),
+            oom: true,
+            restarts: 3,
+            crashes: 4,
+            last_crash: Some(CrashEntry {
+                at: 2,
+                exit_code: 137,
+                oom: true,
+            }),
+            project: Some("p".into()),
+            service: Some("s".into()),
+            ports: vec!["5432→5432/tcp".into()],
+            child: Some("n-c-f49c".into()),
+            adopt_error: Some("db no longer exists".into()),
+        }],
+        parent: Some("h".into()),
     }
 }
 

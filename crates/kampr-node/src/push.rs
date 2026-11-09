@@ -34,6 +34,7 @@ const QUEUE: usize = 64;
 struct Feeds {
     blocked: mpsc::Sender<Change>,
     done: mpsc::Sender<Change>,
+    adoption: mpsc::Sender<Change>,
 }
 
 impl Feeds {
@@ -41,8 +42,15 @@ impl Feeds {
         match kind {
             Kind::Blocked => &self.blocked,
             Kind::Done => &self.done,
+            Kind::Adoption => &self.adoption,
         }
     }
+}
+
+struct Queues {
+    blocked: mpsc::Receiver<Change>,
+    done: mpsc::Receiver<Change>,
+    adoption: mpsc::Receiver<Change>,
 }
 
 pub struct Push {
@@ -89,11 +97,10 @@ impl Push {
         self.vapid.as_ref().map(|v| v.public_key_b64())
     }
 
-    fn feed(&mut self) -> (mpsc::Receiver<Change>, mpsc::Receiver<Change>) {
-        let (blocked, blocked_rx) = mpsc::channel(QUEUE);
-        let (done, done_rx) = mpsc::channel(QUEUE);
-        self.changes = Some(Feeds { blocked, done });
-        (blocked_rx, done_rx)
+    fn feed(&mut self) -> Queues {
+        let (feeds, queues) = feeds(QUEUE);
+        self.changes = Some(feeds);
+        queues
     }
 
     /// A test-visible hand-delivery of one change: the batching and the fan-out are the parts
@@ -139,13 +146,30 @@ impl Push {
     }
 }
 
-pub struct PushCtx {
-    pub push: Arc<Push>,
-    pub store: Store,
-    pub sessions: Arc<Sessions>,
-    pub herd: watch::Receiver<Arc<HerdModel>>,
-    pub blocked: mpsc::Receiver<Change>,
-    pub done: mpsc::Receiver<Change>,
+fn feeds(depth: usize) -> (Feeds, Queues) {
+    let (blocked, blocked_rx) = mpsc::channel(depth);
+    let (done, done_rx) = mpsc::channel(depth);
+    let (adoption, adoption_rx) = mpsc::channel(depth);
+    (
+        Feeds {
+            blocked,
+            done,
+            adoption,
+        },
+        Queues {
+            blocked: blocked_rx,
+            done: done_rx,
+            adoption: adoption_rx,
+        },
+    )
+}
+
+struct PushCtx {
+    push: Arc<Push>,
+    store: Store,
+    sessions: Arc<Sessions>,
+    herd: watch::Receiver<Arc<HerdModel>>,
+    queues: Queues,
 }
 
 /// Starts the push channel, returning it and the two tasks that drive it.
@@ -171,15 +195,14 @@ pub fn start(
         }
     };
     info!(key = %vapid.public_key_b64(), subject = %vapid.subject(), "web push is available");
-    let (blocked, done) = push.feed();
+    let queues = push.feed();
     let push = Arc::new(push);
     let ctx = PushCtx {
         push: push.clone(),
         store,
         sessions,
         herd,
-        blocked,
-        done,
+        queues,
     };
     let tasks = vec![tokio::spawn(run(ctx))];
     (push, tasks)
@@ -191,16 +214,17 @@ async fn run(ctx: PushCtx) {
         store,
         sessions,
         herd,
-        blocked,
-        done,
+        queues,
     } = ctx;
     let feeds = push.changes.clone().expect("a live push channel has a feed");
     let watcher = tokio::spawn(watch_herd(herd, sessions, feeds));
-    // Two windows, not one: a `done` landing beside a `blocked` must not hold the question back,
-    // and neither may be folded into the other's payload.
-    let quiet = tokio::spawn(pipeline(push.clone(), store.clone(), done));
-    pipeline(push, store, blocked).await;
+    // A window per kind, not one: a `done` landing beside a `blocked` must not hold the question
+    // back, and none may be folded into another's payload.
+    let quiet = tokio::spawn(pipeline(push.clone(), store.clone(), queues.done));
+    let adoption = tokio::spawn(pipeline(push.clone(), store.clone(), queues.adoption));
+    pipeline(push, store, queues.blocked).await;
     quiet.abort();
+    adoption.abort();
     watcher.abort();
 }
 
@@ -240,14 +264,17 @@ async fn watch_herd(mut herd: watch::Receiver<Arc<HerdModel>>, sessions: Arc<Ses
             return;
         }
         let model = herd.borrow_and_update().clone();
-        for kind in [Kind::Blocked, Kind::Done] {
+        for kind in [Kind::Blocked, Kind::Done, Kind::Adoption] {
             let seen = previously.entry(kind).or_default();
-            let now: HashSet<String> = model
-                .panes
-                .iter()
-                .filter(|p| p.agent_status == status_for(kind))
-                .map(|p| p.id.clone())
-                .collect();
+            let now: HashSet<String> = match kind {
+                Kind::Adoption => failing_adoptions(&model).map(|a| a.pane).collect(),
+                kind => model
+                    .panes
+                    .iter()
+                    .filter(|p| p.agent_status == status_for(kind))
+                    .map(|p| p.id.clone())
+                    .collect(),
+            };
             // A pane that stayed in the set is not a change, and rebuilding the herd every three
             // seconds is not either. Leaving early here is also what keeps `question_for` — a read
             // against a real herdr, per outstanding pane — off the poll path.
@@ -257,7 +284,14 @@ async fn watch_herd(mut herd: watch::Receiver<Arc<HerdModel>>, sessions: Arc<Ses
             let fresh: HashSet<String> = now.difference(seen).cloned().collect();
             let cleared: HashSet<String> = seen.difference(&now).cloned().collect();
             let mut outstanding = Vec::with_capacity(now.len());
-            for pane in model.panes.iter().filter(|p| now.contains(&p.id)) {
+            if kind == Kind::Adoption {
+                outstanding.extend(failing_adoptions(&model));
+            }
+            for pane in model
+                .panes
+                .iter()
+                .filter(|p| kind != Kind::Adoption && now.contains(&p.id))
+            {
                 outstanding.push(Agent {
                     pane: pane.id.clone(),
                     node: pane.node_id.clone(),
@@ -298,10 +332,27 @@ async fn watch_herd(mut herd: watch::Receiver<Arc<HerdModel>>, sessions: Arc<Ses
     }
 }
 
+/// Every adopted container whose adoption is failing, on any node in the herd: the hub's herd
+/// carries each peer's containers, so a failure on a peer reaches the hub's devices.
+fn failing_adoptions(model: &HerdModel) -> impl Iterator<Item = Agent> + '_ {
+    model.nodes.iter().flat_map(|node| {
+        node.containers.iter().filter_map(move |c| {
+            Some(Agent {
+                pane: format!("{}/docker:{}", node.id, c.name),
+                node: node.id.clone(),
+                agent: None,
+                label: Some(c.name.clone()),
+                title: None,
+                detail: Some(c.adopt_error.clone()?),
+            })
+        })
+    })
+}
+
 fn status_for(kind: Kind) -> AgentStatus {
     match kind {
         Kind::Blocked => AgentStatus::Blocked,
-        Kind::Done => AgentStatus::Done,
+        Kind::Done | Kind::Adoption => AgentStatus::Done,
     }
 }
 
@@ -316,6 +367,7 @@ async fn detail_for(kind: Kind, pane: &PaneEntry, sessions: &Sessions) -> Option
     match kind {
         Kind::Blocked => question_for(sessions, &pane.id, pane.agent.as_deref()).await,
         Kind::Done => pane.cwd.as_deref().map(|cwd| home_relative(cwd, home())),
+        Kind::Adoption => None,
     }
 }
 
@@ -407,22 +459,24 @@ mod tests {
     fn sessions() -> Arc<Sessions> {
         let mut config = Config::bootstrap("push");
         config.muffit.enabled = Some(false);
+        config.docker.enabled = Some(false);
         config.herdr.socket = "/nowhere/kampr-push-test.sock".into();
         config.native.root = "/nowhere/native".into();
         config.herdr.binary = "/nowhere/kampr-push-test-herdr".into();
-        Sessions::open(&config)
+        Sessions::open(&config, std::path::Path::new("/nowhere/state"))
     }
 
     async fn asked_of_native(script: &str) -> Option<String> {
         let root = tempfile::Builder::new().prefix("kp").tempdir_in("/tmp").unwrap();
         let mut config = Config::bootstrap("push");
         config.muffit.enabled = Some(false);
+        config.docker.enabled = Some(false);
         config.herdr.socket = "/nowhere/kampr-push-test.sock".into();
         config.herdr.binary = "/nowhere/kampr-push-test-herdr".into();
         config.native.root = root.path().display().to_string();
         config.native.keeper = kampr_testkit::keeper().display().to_string();
         config.native.launch = "detached".into();
-        let sessions = Sessions::open(&config);
+        let sessions = Sessions::open(&config, std::path::Path::new("/nowhere/state"));
         let native = sessions.primary().native.clone().expect("a native provider");
         let pane = native
             .create(kampr_native::NewSession {
@@ -470,20 +524,96 @@ mod tests {
         herd: watch::Sender<Arc<HerdModel>>,
         blocked: mpsc::Receiver<Change>,
         done: mpsc::Receiver<Change>,
+        adoption: mpsc::Receiver<Change>,
         task: tokio::task::JoinHandle<()>,
     }
 
     fn watching(depth: usize) -> Watched {
-        let (blocked, blocked_rx) = mpsc::channel(depth);
-        let (done, done_rx) = mpsc::channel(depth);
+        let (feeds, queues) = feeds(depth);
         let (herd, herd_rx) = watch::channel(Arc::new(HerdModel::default()));
-        let task = tokio::spawn(watch_herd(herd_rx, sessions(), Feeds { blocked, done }));
+        let task = tokio::spawn(watch_herd(herd_rx, sessions(), feeds));
         Watched {
             herd,
-            blocked: blocked_rx,
-            done: done_rx,
+            blocked: queues.blocked,
+            done: queues.done,
+            adoption: queues.adoption,
             task,
         }
+    }
+
+    fn adoptions(failing: &[(&str, &str, Option<&str>)]) -> HerdModel {
+        let mut nodes: Vec<kampr_core::wire::NodeEntry> = Vec::new();
+        for (node, name, why) in failing {
+            let at = match nodes.iter().position(|n| n.id == *node) {
+                Some(at) => at,
+                None => {
+                    nodes.push(
+                        serde_json::from_value(serde_json::json!({
+                            "id": node, "name": node, "kind": "local", "online": true
+                        }))
+                        .unwrap(),
+                    );
+                    nodes.len() - 1
+                }
+            };
+            nodes[at].containers.push(kampr_core::wire::ContainerEntry {
+                name: (*name).into(),
+                child: Some(format!("{node}-c-{name}")),
+                adopt_error: why.map(str::to_string),
+                ..Default::default()
+            });
+        }
+        HerdModel {
+            nodes,
+            panes: Vec::new(),
+        }
+    }
+
+    /// Once per failure episode: a supervisor retrying the same failing adoption rebuilds the
+    /// herd every time, and only the adoption starting to fail, or getting better, is a change.
+    #[tokio::test]
+    async fn an_adoption_that_starts_failing_is_told_once_and_again_when_it_recovers() {
+        let mut watched = watching(16);
+
+        watched
+            .herd
+            .send_replace(Arc::new(adoptions(&[("01J", "db", None), ("01P", "web", None)])));
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(watched.adoption.try_recv().is_err(), "nothing is failing");
+
+        watched.herd.send_replace(Arc::new(adoptions(&[
+            ("01J", "db", None),
+            ("01P", "web", Some("web no longer exists")),
+        ])));
+        let failing = next(&mut watched.adoption, "a peer's adoption started failing").await;
+        assert_eq!(failing.kind, Kind::Adoption);
+        assert_eq!(failing.fresh.iter().collect::<Vec<_>>(), vec!["01P/docker:web"]);
+        let named = &failing.outstanding[0];
+        assert_eq!(named.label.as_deref(), Some("web"));
+        assert_eq!(named.detail.as_deref(), Some("web no longer exists"));
+
+        for why in [
+            "web no longer exists",
+            "kampr could not be copied into web: no space",
+        ] {
+            watched
+                .herd
+                .send_replace(Arc::new(adoptions(&[("01P", "web", Some(why))])));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            watched.adoption.try_recv().is_err(),
+            "a retry failing again is not news"
+        );
+
+        watched
+            .herd
+            .send_replace(Arc::new(adoptions(&[("01P", "web", None)])));
+        let back = next(&mut watched.adoption, "the adoption recovered").await;
+        watched.task.abort();
+        assert!(back.fresh.is_empty() && back.outstanding.is_empty());
+        assert_eq!(back.cleared.iter().collect::<Vec<_>>(), vec!["01P/docker:web"]);
+        assert!(watched.blocked.try_recv().is_err() && watched.done.try_recv().is_err());
     }
 
     /// A queue smaller than the changes arriving at it.

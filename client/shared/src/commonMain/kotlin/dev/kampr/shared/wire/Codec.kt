@@ -152,6 +152,7 @@ object Wire {
                 message = obj.str("message"),
                 layout = obj["layout"] as? JsonObject,
                 held = obj.bool("held"),
+                detail = obj["detail"] as? JsonObject,
             )
 
             "hold.lost" -> ServerMsg.HoldLost(obj.str("pane") ?: return null)

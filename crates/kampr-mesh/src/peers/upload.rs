@@ -51,7 +51,9 @@ impl Peers {
             seq: 0,
             done: false,
         };
-        link.request(json!({ "t": "up.open", "rid": rid, "dir": dir, "name": name }))?;
+        link.request(
+            json!({ "t": "up.open", "rid": rid, "node": Self::node_of(node), "dir": dir, "name": name }),
+        )?;
         match upload.event().await? {
             UpEvent::More(n) => {
                 upload.credit = n;

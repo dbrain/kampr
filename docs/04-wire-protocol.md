@@ -57,7 +57,8 @@ hostname would buy (findings §3.7).
             "find": true,     // this node answers `find`; absent means it does not — see below
             "convo.find": true,    // and the transcript search beside it, promised separately
             "pane.grow": true,     // `pane.size` takes `grow`; a client sends none to a node without it
-            "reflow": true },      // a hub may relay a reflowed watch as a view; see "Relay, and backpressure per hop"
+            "reflow": true,        // a hub may relay a reflowed watch as a view; see "Relay, and backpressure per hop"
+            "docker": true },      // ABSENT without a docker source; see "Docker containers"
   "device": { "id": "01J...", "name": "pixel", "expires_at": 1788000000 },
                                      // expires_at is epoch seconds, or null for a device that does not expire
   "security": {
@@ -126,6 +127,9 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "rtt_ms": 0.4, "herdr_version": "0.8.2",
                "build": "0.1.21",          // this node's kampr build — see "Version skew"
                "update": "0.1.2",          // ABSENT unless a newer release exists — see below
+               "docker": true,             // ABSENT: no docker source; false: configured and not answering
+               "containers": [ { } ],      // ABSENT when empty — see "Docker containers"
+               "parent": "01J...",         // ABSENT unless a host adopted this node into a container
                "detail": "…" } ],   // ABSENT when the node is up — see below
   "panes": [ { "id": "01J.../w3:p2", "node_id": "01J...",
                "workspace_id": "01J.../w3", "tab_id": "01J.../w3:t1",  // node-qualified, usable as `at`
@@ -144,6 +148,7 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "argv": "cargo test",                 // its whole command line — OFF by default, see below
                "fleet": { },                          // ABSENT on every ordinary pane — see "Fleet runs"
                "provider": "native",                 // ABSENT unless Kampr keeps the session ("native") or muffit does ("muffit")
+               "container": "kobbler-postgres-1",    // ABSENT unless it is a `docker.shell` into that container
                "tile": { "group": "01J.../w3:t1",    // ABSENT on a pane in no tree — see "Tiles"
                          "path": [ { "split": "right", "ratio": 600, "second": true },
                                    { "split": "down",  "ratio": 300 } ] },
@@ -2087,6 +2092,89 @@ typed into it as a bracketed paste, which the TUI attaches as a picture.
 native session running the TUI with `terminal`, else the session's `m:` pane. `close`,
 `native.close` and `muffit.close` stop a muffit session; every other management op is
 `bad_request` on one.
+
+### Docker containers
+
+The containers on the node's machine ([docs/19](./19-docker.md)), followed over the daemon's
+`/events` and listed on the node's `nodes[]` entry. A node with a docker source says `caps.docker`
+in `hello` and `"docker"` on its node: `true` while the daemon answers, `false` while a socket the
+operator configured does not. A daemon that is down is no containers, never an error.
+
+```jsonc
+"containers": [ {
+  "id": "f49c60fac115…",             // full id
+  "name": "kobbler-postgres-test-1",
+  "image": "postgres:18.6",
+  "state": "running",                // created|running|paused|restarting|exited|dead|removing,
+                                     // or missing: adopted, and the daemon no longer has it (id is its name)
+  "health": "healthy",               // ABSENT without a healthcheck; starting|healthy|unhealthy
+  "started_at": 1794219336,          // unix seconds
+  "finished_at": 1794212000,         // ABSENT while it never finished
+  "exit_code": 137,                  // ABSENT while running
+  "oom": true,                       // ABSENT when false
+  "restarts": 3,                     // RestartCount, ABSENT when 0
+  "crashes": 4,                      // non-zero exits in the last 24 h, ABSENT when 0
+  "last_crash": { "at": 1794219337, "exit_code": 137, "oom": true },   // ABSENT when none journalled
+  "project": "kobbler",              // com.docker.compose.project
+  "service": "postgres-test",        // com.docker.compose.service
+  "ports": ["5432→5432/tcp"],        // host→container, ABSENT when none are published
+  "child": "01J…-c-f49c60fac115",    // ABSENT unless adopted
+  "adopt_error": "…"                 // ABSENT unless adopted and that is failing: why, in a sentence
+} ]
+```
+
+Sorted by compose project, then name. The daemon keeps only its last 256 events, so `crashes` and
+`last_crash` come from the node's own journal (`<state>/docker/events.jsonl`, 14 days or 2 MB). A
+crash is a `die` with a non-zero exit that nobody asked for: one beside a `kill` or `stop` is a
+`docker stop` or `docker kill`. `oom` on a crash is an `oom` event just before its `die`, or
+`OOMKilled` on the container when that die is its last exit.
+
+```jsonc
+{ "t":"manage", "op":"docker.detail",  "node":"01J…", "id":"kobbler-postgres-test-1" }
+{ "t":"manage", "op":"docker.shell",   "node":"01J…", "id":"f49c60fac115…" }
+{ "t":"manage", "op":"docker.start",   "node":"01J…", "id":"…" }   // and docker.stop, docker.restart
+{ "t":"manage", "op":"docker.adopt",   "node":"01J…", "id":"…" }   // and docker.release
+```
+
+`id` is a container id or name. A container that is not there is `unknown_pane`.
+
+- **`docker.detail`** acks with `detail`: the container's entry plus `command`, `created`,
+  `restart_policy` (`on-failure:3`), `limits {memory, nano_cpus}` (0 is unlimited), `env[]`,
+  `labels{}`, `mounts[{src,dst,mode}]`, `networks[]`, `health_log[{start,end,exit_code,output}]`,
+  `logs[{at,stream,line}]` (the last 200), `stats {cpu_pct, mem_used, mem_limit, net_rx, net_tx,
+  blk_read, blk_write, pids}` (running only; `mem_used` leaves out page cache, as `docker stats`
+  does) and `events[{at, action, exit_code?, signal?, health?}]` (the journal's last 100). It is
+  read-only and polled while a sheet is open, so it is served beside the socket's other messages
+  rather than in turn with them, and it is not audited.
+- **`docker.shell`** starts a native session into the container and acks the pane's `id` as
+  `native.create` does, with `shell`: `bash` or `sh` when it runs the container's own (`docker exec
+  -it` at its working directory, `bash -l` where there is one), `debug` when the container has no
+  shell and the session is a sidecar from the node's debug image sharing its processes and network,
+  started in its filesystem at `/proc/1/root`. The pane is labelled with the container's name
+  (`<name> · debug` for a sidecar) and carries `"container"`. `bad_request` on a container that is
+  not running (`<name> isn't running — start it first`), and on one with no shell whose debug image
+  cannot be pulled, saying why. It is served beside the socket's other messages, since a pull can
+  take a while.
+- **`docker.start`**, **`docker.stop`** and **`docker.restart`** ack once the daemon has; the
+  herd follows from the daemon's own events. A stop gives the container ten seconds.
+- **`docker.adopt`** copies a static `kampr` that runs there (the configured one, the host's own,
+  or this version's published release, fetched and verified) into the container and runs a node there
+  over `docker exec`, and acks with `node`: the child's node id, `<host id>-c-<12 hex of the
+  container id>`, sent once the herd lists it (or after 60 s if it has not come up). The id is kept
+  by container *name*, so a container recreated under the same name is the same node. `bad_request`
+  on a container that is not running, one whose root filesystem is read-only, and when nothing
+  would run there and no release could be fetched (the message names each binary tried and why);
+  nothing is copied or remembered then. It is served beside the socket's other
+  messages, as `docker.detail` is, and audited with its `id`.
+- **`docker.release`** stops that node, revokes its key and forgets the adoption; the node leaves
+  the herd rather than staying listed offline. Sessions inside keep running until the container
+  stops. `bad_request` on a container that is not adopted.
+
+An adopted container's entry carries **`child`**, the child's node id, and that node's own entry
+carries **`parent`**, the host's id. `parent` is stamped by the host on everything the child's link
+advertises and never taken from the child, so a node cannot claim to be somebody's container. A
+client draws a node with `parent` under its container's row; one that ignores both shows it as an
+ordinary host.
 
 ### Fleet runs
 

@@ -15,9 +15,9 @@ use std::time::Duration;
 
 const KEY: &str = "3333333333333333333333333333333333333333333333333333333333333333";
 
-struct Herd {
-    c: Client,
-    peer: Arc<Node>,
+pub(crate) struct Herd {
+    pub(crate) c: Client,
+    pub(crate) peer: Arc<Node>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
     _state: tempfile::TempDir,
 }
@@ -38,7 +38,7 @@ impl Herd {
         Self::start_with(role, |_| {}).await
     }
 
-    async fn start_with(role: Role, tweak: impl FnOnce(&mut Config)) -> Self {
+    pub(crate) async fn start_with(role: Role, tweak: impl FnOnce(&mut Config)) -> Self {
         let c = Client::start().await;
         let state = tempfile::tempdir().expect("a state dir");
         let home = state.path().join("home");
@@ -105,7 +105,7 @@ impl Herd {
         panic!("the hub never heard the peer say it serves attachments");
     }
 
-    fn peer_id(&self) -> String {
+    pub(crate) fn peer_id(&self) -> String {
         self.peer.node_id().to_string()
     }
 }

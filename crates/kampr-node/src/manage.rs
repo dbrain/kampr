@@ -95,6 +95,9 @@ pub struct ManageOp {
     /// to Kampr when it points nowhere.
     #[serde(default)]
     pub provider: Option<String>,
+    /// A container, by id or name, for the `docker.*` ops.
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 const MUFFIT_LISTED: Duration = Duration::from_secs(3);
@@ -315,6 +318,7 @@ pub struct Manager<'a> {
     pub native: Option<&'a std::sync::Arc<NativeProvider>>,
     pub muffit: Option<&'a std::sync::Arc<kampr_muffit::MuffitProvider>>,
     pub muffit_tui: &'a str,
+    pub docker: Option<&'a std::sync::Arc<kampr_docker::Directory>>,
     /// Who a native `pane.size` names as the size's holder, `phone:<device>`.
     pub holder: &'a str,
     pub config: &'a crate::Config,
@@ -367,6 +371,10 @@ impl Manager<'_> {
             // opened a terminal on is still a host they can run a command across.
             "fleet.run" | "fleet.stop" | "fleet.forget" => Ok(Managed {
                 reply: self.fleet_op(op).await?,
+                settle: None,
+            }),
+            _ if crate::docker::is_docker_op(&op.op) => Ok(Managed {
+                reply: self.docker_op(op).await?,
                 settle: None,
             }),
             _ if op.op.starts_with("muffit.") || self.muffit_target(op).is_some() => Ok(Managed {

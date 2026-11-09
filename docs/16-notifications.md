@@ -6,14 +6,15 @@ change that.
 Every number here was measured on 2026-08-20 against **herdr 0.8.2, protocol 20**, in throwaway
 named sessions torn down afterwards. Claims without a measurement behind them say so.
 
-## Two kinds, two slots
+## Three kinds, three slots
 
-A node sends two kinds of notification, and they are deliberately **not** one.
+A node sends three kinds of notification, and they are deliberately **not** one.
 
 | Kind | The event | Tag / Android channel | Interrupts | The body says |
 |---|---|---|---|---|
 | `blocked` | An agent is waiting on a person | `kampr.blocked`, `IMPORTANCE_HIGH` | Yes — heads-up | The question |
 | `done` | An agent finished while nobody was looking | `kampr.done`, `IMPORTANCE_DEFAULT` | A sound, no heads-up | Where it ran |
+| `adoption` | A container a host adopted cannot come back ([docs/19](./19-docker.md)) | `kampr.adoption`, `IMPORTANCE_DEFAULT` | A sound, no heads-up | Why, in a sentence |
 
 **Why not one notification for both.** One tag is one slot: whatever arrives last under it is the
 only thing on the screen. An agent finishing while another is asking a question is the ordinary
@@ -85,9 +86,21 @@ one degradation this feature may not cause — and old APKs are on real phones.
 So a subscription records the payload version its client declared (`v` on
 `POST /api/push/subscribe`, `push_subscriptions.payload_version`, defaulting to
 `ASSUMED_PAYLOAD_VERSION` = 2 for every row written before the column existed), and
-`Store::push_targets` takes the version a kind needs. `Kind::Done` needs 3; `Kind::Blocked` needs
-nothing, because every client that ever subscribed was built for it. **An old client is never sent
-a `done` at all**, rather than sent one it renders wrongly.
+`Store::push_targets` takes the version a kind needs. `Kind::Done` needs 3; `Kind::Adoption` needs
+4, because an Android build before it reads a kind it does not know as the blocked one;
+`Kind::Blocked` needs nothing, because every client that ever subscribed was built for it. **An old
+client is never sent a `done` or an `adoption` at all**, rather than sent one it renders wrongly.
+
+### `adoption`, the one that is not about an agent
+
+The third set is every container entry in the herd carrying `adopt_error`, keyed
+`<host node>/docker:<name>`, so the hub tells its devices about a peer's container too. It rides the
+same machinery: a container entering the set buzzes once, a retry failing again with another
+sentence is no change, and recovering sends the quiet resync that takes it down (`Adoptions
+recovered` at `count: 0`). Its payload has no `pane`, so a tap opens the herd, where the container's
+row carries an `adoption failing` badge and its sheet the sentence. A client takes it down itself
+when the herd has no failing adoption left, as it does the other two. Muting is per key like a
+pane's, so the only rule that reaches it today is muting everything.
 
 The number is clamped rather than trusted: it is a claim a device makes about itself, and the only
 thing it may do is *withhold* a kind.

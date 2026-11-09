@@ -155,9 +155,10 @@ private class BrowserPush : PushPlatform {
 
     override suspend fun unsubscribe(): String? = runCatching { jsUnsubscribe().await() }.getOrNull()?.toString()
 
-    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean) {
+    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean, anyAdoptionFailing: Boolean) {
         if (!anyBlocked) jsClearTag(TAG_BLOCKED)
         if (!anyDone) jsClearTag(TAG_DONE)
+        if (!anyAdoptionFailing) jsClearTag(TAG_ADOPTION)
     }
 }
 

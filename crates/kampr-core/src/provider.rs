@@ -108,7 +108,7 @@ pub struct FleetPane {
 }
 
 /// A session Kampr keeps itself (docs/17), with no herdr behind it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NativePane {
     pub session_id: String,
     /// The herdr pane a `kampr attach` is showing it in, from the first live host that has one.
@@ -119,6 +119,8 @@ pub struct NativePane {
     pub exited: Option<NativeExit>,
     /// What the harness itself says over `OSC 7501` (#600), `None` while that channel is down.
     pub program: Option<ProgramStatus>,
+    /// The container a `docker.shell` session is a shell into (docs/19).
+    pub container: Option<String>,
 }
 
 /// A harness's own run state, as Claude Code publishes it to a terminal that answered `OSC 7501;?`

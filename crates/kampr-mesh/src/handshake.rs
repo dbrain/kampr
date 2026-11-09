@@ -18,7 +18,7 @@ const NONCE_BYTES: usize = 32;
 const MAX_NODE_ID: usize = 64;
 const MAX_NODE_NAME: usize = 64;
 
-fn valid_node_id(id: &str) -> bool {
+pub fn valid_node_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_NODE_ID
         && id

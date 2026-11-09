@@ -140,6 +140,11 @@ data class NodeInfo(
     // False is a node with herdr off, by config or by herdr not being installed there. Null is an
     // older node, for which herdr is as on as it always was.
     val herdr: Boolean? = null,
+    // docs/19. Null is no docker source; false is a socket configured and not answering.
+    val docker: Boolean? = null,
+    @Serializable(with = ContainerList::class) val containers: List<ContainerInfo> = emptyList(),
+    // The host that adopted this node into one of its containers, stamped by that host.
+    val parent: String? = null,
 ) {
     val herdrOn: Boolean get() = herdr != false
 
@@ -216,6 +221,8 @@ data class PaneInfo(
     // Where the pane sits in its tab's split tree (#616), herdr's tab or a group of Kampr sessions
     // split from one another; the tree is rebuilt from every pane's path in `tileTree`.
     val tile: Tile? = null,
+    // The name of the container on this pane's node that this pane is a shell into.
+    val container: String? = null,
 )
 
 @Serializable
@@ -615,6 +622,8 @@ sealed interface ServerMsg {
         // `pane.size`'s answer to whether a controller is now held on the pane. A `grow` the pane
         // did not need is `ok` and not held.
         val held: Boolean? = null,
+        // `docker.detail`'s answer (docs/19).
+        val detail: JsonObject? = null,
     ) : ServerMsg
 
     // Somebody else took a pane this session was holding at a view's size (ADR 0013).

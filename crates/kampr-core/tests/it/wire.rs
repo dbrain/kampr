@@ -320,6 +320,7 @@ fn a_native_pane_says_so_and_a_herdr_pane_carries_none_of_it() {
         "detached",
         "size_holder",
         "exited",
+        "container",
     ] {
         assert!(plain.get(field).is_none(), "{field}: {plain}");
     }
@@ -348,6 +349,7 @@ fn a_native_pane_says_so_and_a_herdr_pane_carries_none_of_it() {
                 size_holder: Some("spawn".into()),
                 exited,
                 program: None,
+                container: None,
             }),
             ..herdr.clone()
         };
@@ -357,7 +359,19 @@ fn a_native_pane_says_so_and_a_herdr_pane_carries_none_of_it() {
         }
         assert_eq!(entry.get("on_desk").is_some(), desk.is_some(), "{entry}");
         assert_eq!(entry.get("exited").is_some(), exited.is_some(), "{entry}");
+        assert!(entry.get("container").is_none(), "{entry}");
     }
+    let shell = PaneInfo {
+        pane_id: "n:01s".into(),
+        native: Some(NativePane {
+            session_id: "01s".into(),
+            container: Some("kobbler-postgres-test-1".into()),
+            ..NativePane::default()
+        }),
+        ..herdr
+    };
+    let entry = serde_json::to_value(PaneEntry::new("01J", &shell, false)).unwrap();
+    assert_eq!(entry["container"], "kobbler-postgres-test-1", "{entry}");
 }
 
 /// Probe #223: a cell is a grapheme, so `x` alone can no longer say what is on the screen. The

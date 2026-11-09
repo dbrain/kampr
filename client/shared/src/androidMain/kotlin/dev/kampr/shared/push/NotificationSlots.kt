@@ -1,6 +1,6 @@
 package dev.kampr.shared.push
 
-// The two notification slots, one per kind the node sends. Each channel and id must match a
+// The notification slots, one per kind the node sends. Each channel and id must match a
 // `kampr_push::note::Kind`'s tag, so the newest notification of a kind replaces the last of that
 // kind rather than stacking a column of stale ones on a phone that was away.
 //
@@ -21,3 +21,6 @@ const val BLOCKED_NOTIFICATION_ID = 1
 
 const val DONE_CHANNEL = TAG_DONE
 const val DONE_NOTIFICATION_ID = 2
+
+const val ADOPTION_CHANNEL = TAG_ADOPTION
+const val ADOPTION_NOTIFICATION_ID = 3

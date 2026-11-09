@@ -2,15 +2,6 @@ use anyhow::{Context, Result, bail};
 use kampr_node::{BUILD, Config, ConfigError};
 use std::path::Path;
 
-/// The installer, as it shipped in this binary.
-///
-/// **Embedded rather than fetched.** `install.sh` is the thing that decides whether a download is
-/// genuine, and fetching the verifier over the same channel as the artefact means whoever can
-/// serve a binary can serve a verifier that accepts it. This copy came out of the release the
-/// operator already verified when they installed it, and it cannot drift from the one in the tree
-/// because it *is* the one in the tree.
-const INSTALLER: &str = include_str!("../../../packaging/install.sh");
-
 pub struct Update {
     pub check: bool,
     /// A tag, for going back to a release that worked. `None` is the latest.
@@ -77,24 +68,13 @@ fn install(config: &Config, version: Option<&str>) -> Result<()> {
         .tempdir()
         .context("a directory to unpack into")?;
     let script = staged.path().join("install.sh");
-    std::fs::write(&script, INSTALLER).with_context(|| format!("writing {}", script.display()))?;
+    std::fs::write(&script, kampr_node::installer::SCRIPT)
+        .with_context(|| format!("writing {}", script.display()))?;
 
-    let status = std::process::Command::new("sh")
-        .arg(&script)
+    let status = kampr_node::installer::command(&script, &config.update.repo)
         .env("KAMPR_PREFIX", &prefix)
-        .env("KAMPR_REPO", &config.update.repo)
         .env("KAMPR_VERSION", wanted)
         .env("KAMPR_MODE", "update")
-        // The escape hatch exists for an operator installing a binary they built themselves. It
-        // must not be reachable by an environment variable that happened to be set in the shell
-        // that ran this, because what it switches off is the only thing standing between a
-        // tampered download and a process that can type into every terminal on this host.
-        .env_remove("KAMPR_ALLOW_UNVERIFIED")
-        // The same rule, and the larger hole of the two: the base supplies the tarball *and* the
-        // SHA256SUMS it is checked against, so a base set in the caller's environment chooses what
-        // kampr becomes and gets "checksum verified: yes" printed underneath it. An operator
-        // installing from their own base runs `install.sh` and sets it there, deliberately.
-        .env_remove("KAMPR_BASE_URL")
         .status()
         .context("running the installer — is `sh` on this host?")?;
 

@@ -5,6 +5,7 @@
 
 mod assetlinks;
 mod cert;
+mod docker;
 mod exposure;
 mod herd;
 mod host;
@@ -131,6 +132,7 @@ async fn collect(dirs: &Dirs) -> Report {
     checks.push(host::linger(&service));
     checks.push(host::fleet_path(&config));
     checks.push(keep::check(&config));
+    checks.push(docker::check(&config, &state_dir).await);
 
     // The device store is the one check that needs the database open, and a database that will
     // not open is itself the answer.

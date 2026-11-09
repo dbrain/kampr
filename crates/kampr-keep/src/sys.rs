@@ -27,12 +27,18 @@ mod imp {
     }
 
     pub fn pid_alive(pid: u32) -> bool {
-        let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-            return false;
-        };
-        stat.rsplit_once(')')
-            .and_then(|(_, rest)| rest.split_ascii_whitespace().next())
-            .is_some_and(|state| state != "Z" && state != "X")
+        stat_field(pid, 0).is_some_and(|state| state != "Z" && state != "X")
+    }
+
+    pub fn started(pid: u32) -> Option<u64> {
+        stat_field(pid, 19)?.parse().ok()
+    }
+
+    // Counted from the field after the parenthesised comm, which may itself hold spaces.
+    fn stat_field(pid: u32, after_comm: usize) -> Option<String> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let (_, rest) = stat.rsplit_once(')')?;
+        rest.split_ascii_whitespace().nth(after_comm).map(str::to_string)
     }
 
     pub fn child_pre_exec() {}
@@ -114,6 +120,10 @@ mod imp {
                 Ok(()) | Err(rustix::io::Errno::PERM)
             )
         })
+    }
+
+    pub fn started(_pid: u32) -> Option<u64> {
+        None
     }
 
     pub fn child_pre_exec() {

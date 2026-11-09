@@ -200,6 +200,9 @@ fn same_node(a: &NodeEntry, b: &NodeEntry) -> bool {
         && a.build == b.build
         && a.update == b.update
         && a.detail == b.detail
+        && a.docker == b.docker
+        && a.containers == b.containers
+        && a.parent == b.parent
 }
 
 fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
@@ -225,6 +228,7 @@ fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
         && a.size_holder == b.size_holder
         && a.exited == b.exited
         && a.tile == b.tile
+        && a.container == b.container
 }
 
 #[cfg(test)]
@@ -501,6 +505,9 @@ mod tests {
                 build: Some(build.to_string()),
                 update: update.map(str::to_string),
                 detail: None,
+                docker: None,
+                containers: Vec::new(),
+                parent: None,
             }],
             panes: Vec::new(),
         }

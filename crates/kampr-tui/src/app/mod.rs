@@ -1,6 +1,7 @@
 mod act;
 mod chrome;
 mod copy;
+mod docker;
 mod tiles;
 
 pub use chrome::{Chips, Layout, Placed};
@@ -225,6 +226,8 @@ pub struct App {
     acks: UnboundedReceiver<Acked>,
     keybinds: bool,
     help_top: usize,
+    detail: Option<crate::docker::Detail>,
+    opening: Option<String>,
     quit: bool,
 }
 
@@ -287,6 +290,8 @@ impl App {
             acks,
             keybinds: false,
             help_top: 0,
+            detail: None,
+            opening: None,
             quit: false,
         }
     }
@@ -673,6 +678,7 @@ impl App {
             Click::Menu(menu) => self.context_menu(menu),
             Click::Divide { divider, to } => self.divide(divider, to),
             Click::Edge { width, done } => self.edge(width, done),
+            Click::Sidebar(hit) => self.hit(hit),
         }
     }
 
@@ -793,6 +799,12 @@ impl App {
             Ok(()) => self.note(format!("saved {}", to.display())),
             Err(e) => self.note(format!("could not save it · {e}")),
         }
+    }
+
+    pub fn picked_row(&self) -> Option<usize> {
+        (self.router.mode() == crate::keymap::Mode::Navigate)
+            .then(|| self.pick.checked_sub(self.sidebar_top))
+            .flatten()
     }
 
     pub fn focused(&self) -> Option<&str> {
@@ -1125,4 +1137,10 @@ fn sanitise(name: &str) -> String {
         true => "attachment".to_string(),
         false => cleaned,
     }
+}
+
+pub(crate) fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
 }

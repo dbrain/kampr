@@ -115,6 +115,7 @@ impl FleetProvider {
                 env: path.map(|p| ("PATH".to_string(), p)).into_iter().collect(),
                 cohort: Some(cohort.to_string()),
                 workspace: None,
+                container: None,
             })
             .await?;
         let session = native

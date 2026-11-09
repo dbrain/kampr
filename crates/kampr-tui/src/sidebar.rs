@@ -1,8 +1,14 @@
+mod docker;
+mod fold;
+
+pub use docker::{ago, phrase};
+pub use fold::{Fold, Folds};
+
 use crate::theme::Theme;
 use kampr_client::Herd;
 use kampr_core::naming::{Fields, Template};
 use kampr_core::provider::AgentStatus;
-use kampr_core::wire::PaneEntry;
+use kampr_core::wire::{ContainerEntry, PaneEntry};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -83,19 +89,61 @@ pub enum Row {
         place: Option<String>,
     },
     Question(String),
+    Fold {
+        node: String,
+        fold: Fold,
+        open: bool,
+        count: usize,
+    },
+    Project(String),
+    Container {
+        node: String,
+        entry: Box<ContainerEntry>,
+    },
+    Note(String),
+    Nested(Box<Row>),
     Blank,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Hit {
+    Fold { node: String, fold: Fold },
+    Container { node: String, id: String },
 }
 
 impl Row {
     pub fn pane(&self) -> Option<&str> {
         match self {
             Self::Workspace { pane, .. } | Self::Tab { pane, .. } | Self::Pane { pane, .. } => Some(pane),
+            Self::Nested(inner) => inner.pane(),
+            _ => None,
+        }
+    }
+
+    fn innermost(&self) -> &Row {
+        match self {
+            Self::Nested(inner) => inner.innermost(),
+            other => other,
+        }
+    }
+
+    pub fn hit(&self) -> Option<Hit> {
+        match self {
+            Self::Fold { node, fold, .. } => Some(Hit::Fold {
+                node: node.clone(),
+                fold: *fold,
+            }),
+            Self::Container { node, entry } => Some(Hit::Container {
+                node: node.clone(),
+                id: entry.id.clone(),
+            }),
+            Self::Nested(inner) => inner.hit(),
             _ => None,
         }
     }
 
     pub fn selectable(&self) -> bool {
-        self.pane().is_some() || matches!(self, Self::Pair(_))
+        self.pane().is_some() || self.hit().is_some() || matches!(self, Self::Pair(_))
     }
 }
 
@@ -205,6 +253,8 @@ pub fn rows(
     herd: &Herd,
     order: Order,
     hub: Option<Hub<'_>>,
+    folds: &Folds,
+    now: i64,
     questions: impl Fn(&str) -> Option<String>,
 ) -> Vec<Row> {
     let mut rows = vec![Row::Header(order)];
@@ -214,7 +264,7 @@ pub fn rows(
         None => {}
     }
     match order {
-        Order::Grouped => rows.extend(spaces(herd, &questions)),
+        Order::Grouped => rows.extend(spaces(herd, folds, now, &questions)),
         Order::Priority => rows.extend(priority(herd, &questions)),
     }
     rows
@@ -222,90 +272,113 @@ pub fn rows(
 
 /// Grouped by node — the structural change from herdr's own sidebar, and the thing a herdr at one
 /// desk structurally cannot draw.
-pub fn spaces(herd: &Herd, questions: &impl Fn(&str) -> Option<String>) -> Vec<Row> {
+pub fn spaces(herd: &Herd, folds: &Folds, now: i64, questions: &impl Fn(&str) -> Option<String>) -> Vec<Row> {
+    let look = docker::Look {
+        folds,
+        now,
+        questions,
+    };
     let mut rows = Vec::new();
-    for group in herd.groups() {
-        let node = group.node;
-        let serving = node.is_serving();
-        let rtt = match (serving, node.kind.as_str(), node.rtt_ms) {
-            (false, _, _) => "offline".to_string(),
-            (true, "local", _) => "local".to_string(),
-            (true, _, Some(ms)) => format!("{ms:.0}ms"),
-            (true, _, None) => "up".to_string(),
-        };
+    for branch in docker::tree(herd.groups()) {
         if !rows.is_empty() {
             rows.push(Row::Blank);
         }
-        rows.push(Row::Node {
-            name: node.name.clone(),
-            serving,
-            detail: node.detail.clone().filter(|_| node.online || !serving),
-            rtt,
-        });
-        if !serving {
-            rows.push(Row::Absence(absence(&group.panes)));
-            if let Some(detail) = &node.detail {
-                rows.push(Row::Absence(detail.clone()));
-            }
-            continue;
-        }
-        let (mut live, remembered): (Vec<&PaneEntry>, Vec<&PaneEntry>) = group
-            .panes
-            .iter()
-            .partition(|p| node.online || !crate::manage::herdr_on(node) || p.provider.is_some());
-        // `groups()` ranks by status first, and a workspace whose panes are not all in one state
-        // was drawn as a header per run of them. Priority is the other order; this one is shape.
-        live.sort_by(|a, b| {
-            space(a)
-                .cmp(space(b))
-                .then_with(|| a.tab_id.cmp(&b.tab_id))
-                .then_with(|| a.id.cmp(&b.id))
-        });
-        if !node.online && crate::manage::herdr_on(node) {
-            rows.push(Row::Absence(match remembered.is_empty() {
-                true => "no herdr".to_string(),
-                false => format!("no herdr · {}", absence(&remembered)),
-            }));
-        }
-        let mut workspace = None;
-        let mut tab = None;
-        for pane in live.iter().copied() {
-            let here = space(pane);
-            if workspace != Some(here) {
-                tab = None;
-                rows.push(Row::Workspace {
-                    subtitle: pane
-                        .workspace
-                        .as_ref()
-                        .and(pane.cwd.as_deref())
-                        .map(short)
-                        .map(str::to_string),
-                    name: here.to_string(),
-                    pane: pane.id.clone(),
-                });
-                workspace = Some(here);
-            }
-            let tabs = live
-                .iter()
-                .filter(|p| space(p) == here)
-                .filter_map(|p| p.tab_id.as_deref())
-                .collect::<std::collections::BTreeSet<_>>()
-                .len();
-            if tabs > 1 && tab != pane.tab_id.as_deref() {
-                tab = pane.tab_id.as_deref();
-                rows.push(Row::Tab {
-                    name: pane
-                        .tab
-                        .clone()
-                        .or_else(|| pane.tab_id.clone())
-                        .unwrap_or_default(),
-                    pane: pane.id.clone(),
-                });
-            }
-            push_pane(&mut rows, pane, None, true, questions);
-        }
+        host(&mut rows, &branch, &look);
     }
     rows
+}
+
+fn host<Q: Fn(&str) -> Option<String>>(
+    rows: &mut Vec<Row>,
+    branch: &docker::Branch<'_>,
+    look: &docker::Look<'_, Q>,
+) {
+    let node = branch.group.node;
+    let serving = node.is_serving();
+    let rtt = match (serving, node.kind.as_str(), node.rtt_ms) {
+        (false, _, _) => "offline".to_string(),
+        (true, "local", _) => "local".to_string(),
+        (true, _, Some(ms)) => format!("{ms:.0}ms"),
+        (true, _, None) => "up".to_string(),
+    };
+    rows.push(Row::Node {
+        name: node.name.clone(),
+        serving,
+        detail: node.detail.clone().filter(|_| node.online || !serving),
+        rtt,
+    });
+    if !serving {
+        rows.push(Row::Absence(absence(&branch.group.panes)));
+        if let Some(detail) = &node.detail {
+            rows.push(Row::Absence(detail.clone()));
+        }
+        docker::strays(rows, branch, look, true);
+        return;
+    }
+    let terminals: Vec<&PaneEntry> = branch
+        .group
+        .panes
+        .iter()
+        .copied()
+        .filter(|p| docker::terminal(node, p))
+        .collect();
+    let (mut live, remembered): (Vec<&PaneEntry>, Vec<&PaneEntry>) = terminals
+        .into_iter()
+        .partition(|p| node.online || !crate::manage::herdr_on(node) || p.provider.is_some());
+    // `groups()` ranks by status first, and a workspace whose panes are not all in one state
+    // was drawn as a header per run of them. Priority is the other order; this one is shape.
+    live.sort_by(|a, b| {
+        space(a)
+            .cmp(space(b))
+            .then_with(|| a.tab_id.cmp(&b.tab_id))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    if !node.online && crate::manage::herdr_on(node) {
+        rows.push(Row::Absence(match remembered.is_empty() {
+            true => "no herdr".to_string(),
+            false => format!("no herdr · {}", absence(&remembered)),
+        }));
+    }
+    let mut workspace = None;
+    let mut tab = None;
+    for pane in live.iter().copied() {
+        let here = space(pane);
+        if workspace != Some(here) {
+            tab = None;
+            rows.push(Row::Workspace {
+                subtitle: pane
+                    .workspace
+                    .as_ref()
+                    .and(pane.cwd.as_deref())
+                    .map(short)
+                    .map(str::to_string),
+                name: here.to_string(),
+                pane: pane.id.clone(),
+            });
+            workspace = Some(here);
+        }
+        let tabs = live
+            .iter()
+            .filter(|p| space(p) == here)
+            .filter_map(|p| p.tab_id.as_deref())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        if tabs > 1 && tab != pane.tab_id.as_deref() {
+            tab = pane.tab_id.as_deref();
+            rows.push(Row::Tab {
+                name: pane
+                    .tab
+                    .clone()
+                    .or_else(|| pane.tab_id.clone())
+                    .unwrap_or_default(),
+                pane: pane.id.clone(),
+            });
+        }
+        push_pane(rows, pane, None, true, look.questions);
+    }
+    docker::background(rows, branch, look);
+    docker::containers(rows, branch, look);
+    docker::strays(rows, branch, look, false);
 }
 
 /// A session kampr keeps or muffit runs has no herdr workspace, and its directory is the nearest
@@ -389,7 +462,7 @@ impl Widget for Sidebar<'_> {
             .take(area.height as usize)
             .map(|(i, row)| {
                 let picked = self.selected == Some(i);
-                let here = matches!(row, Row::Pane { .. }) && row.pane() == self.focused;
+                let here = matches!(row.innermost(), Row::Pane { .. }) && row.pane() == self.focused;
                 line(row, t, picked, here, area.width)
             })
             .collect();
@@ -571,6 +644,27 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
             Line::from(spans).style(base)
         }
         Row::Blank => Line::from(Span::styled(" ", base)).style(base),
+        Row::Fold {
+            fold, open, count, ..
+        } => docker::fold_line(*fold, *open, *count, t, base, lift(base), width),
+        Row::Project(project) => Line::from(Span::styled(
+            format!("   {}", elide(project, width.saturating_sub(4) as usize)),
+            base.fg(t.mute).add_modifier(Modifier::BOLD),
+        ))
+        .style(base),
+        Row::Container { entry, .. } => docker::container_line(entry, t, base, lift(base.fg(t.text)), width),
+        Row::Note(text) => Line::from(Span::styled(
+            format!("    {}", elide(text, width.saturating_sub(5) as usize)),
+            base.fg(t.mute),
+        ))
+        .style(base),
+        Row::Nested(inner) => {
+            let mut nested = line(inner, t, picked, here, width.saturating_sub(1));
+            nested
+                .spans
+                .insert(0, Span::styled("│", Style::default().fg(t.line).bg(t.bar)));
+            nested
+        }
     }
 }
 
@@ -606,7 +700,7 @@ mod tests {
     }
 
     fn node_rows(herd: &Herd) -> Vec<Row> {
-        spaces(herd, &|_| None)
+        spaces(herd, &Folds::default(), 0, &|_| None)
             .into_iter()
             .filter(|r| !matches!(r, Row::Workspace { .. }))
             .collect()

@@ -4970,6 +4970,14 @@ async fn every_client_op_lands_on_a_real_herd() {
         "native.desk",
         "native.close",
         "native.forget",
+        // Driven against the machine's own docker daemon in `native::docker` and `native::adopt`.
+        "docker.detail",
+        "docker.shell",
+        "docker.start",
+        "docker.stop",
+        "docker.restart",
+        "docker.adopt",
+        "docker.release",
     ]
     .into_iter()
     .collect();

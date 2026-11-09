@@ -387,6 +387,8 @@ internal fun AppScaffold(
                             collapsed = state.sidebarCollapsed,
                             onCollapsed = state::collapseSidebar,
                             scroll = state.herdScroll,
+                            folds = state.folds,
+                            onFold = state::fold,
                         )
                         ScreenBody(
                             Modifier.weight(1f).fillMaxSize(),
@@ -534,6 +536,8 @@ internal fun AppScaffold(
                                 herd, connectionStatus, now, localRtt, triage, state::openPane, null,
                                 onResync = { state.connection.send(ClientMsg.Resync) },
                                 scroll = state.herdScroll,
+                                folds = state.folds,
+                                onFold = state::fold,
                             )
                         }
                     }
@@ -609,6 +613,8 @@ internal fun AppScaffold(
                                 if (readOnly) null else { paneId: String -> answer(paneId, "1") },
                                 onResync = { state.connection.send(ClientMsg.Resync) },
                                 scroll = state.herdScroll,
+                                folds = state.folds,
+                                onFold = state::fold,
                             )
                         }
                     }

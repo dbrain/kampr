@@ -211,6 +211,62 @@ pub struct NodeEntry {
     /// is empty instead of showing an empty herd.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// docs/19: `Some(false)` is a configured socket that does not answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub containers: Vec<ContainerEntry>,
+    /// The host that adopted this node into one of its containers. Stamped by that host's
+    /// `Peers::publish` for the link it spawned, never taken from the node's own claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerEntry {
+    pub id: String,
+    pub name: String,
+    pub image: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub oom: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub restarts: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub crashes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_crash: Option<CrashEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ports: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child: Option<String>,
+    /// Why an adoption cannot come back, while its last attempt failed (docs/19).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub adopt_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CrashEntry {
+    pub at: i64,
+    pub exit_code: i64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub oom: bool,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -341,6 +397,9 @@ pub struct PaneEntry {
     /// node-qualified like `tab_id`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tile: Option<crate::tile::Tile>,
+    /// docs/19: the name of the container this pane is a shell into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
 }
 
 /// **A signal is reported as a signal**, as on a fleet run, and a keeper that died without
@@ -458,6 +517,7 @@ impl PaneEntry {
                 group: format!("{node_id}/{}", t.group),
                 path: t.path.clone(),
             }),
+            container: p.native.as_ref().and_then(|n| n.container.clone()),
         }
     }
 

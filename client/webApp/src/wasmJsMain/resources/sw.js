@@ -12,7 +12,7 @@ const CACHE = 'kampr-warm-v1';
 const DB = 'kampr';
 const STORE = 'auth';
 
-// Notifications are tagged per kind — `kampr.blocked` and `kampr.done`, matching
+// Notifications are tagged per kind — `kampr.blocked`, `kampr.done` and `kampr.adoption`, matching
 // `kampr_push::note::Kind::tag` — so the newest of a kind replaces the last of that kind rather
 // than stacking a column of stale prompts on a phone that was away, while leaving the other
 // kind's slot alone. The tag arrives in the payload; this is only what a payload too broken to

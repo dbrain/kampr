@@ -250,6 +250,18 @@ $ kampr mesh list
 And in any client: one herd, with `front`, `laptop` and `workshop` in it, each with its own
 `rtt_ms`, its own herdr version, and its own kampr build.
 
+### A child node over a command's stdio
+
+A node can also host a node it spawns, with no join code and no network: `kampr serve --peer-stdio`
+speaks the mesh as newline-delimited JSON on its own stdin and stdout, binds no port and logs to
+stderr. The host mints the child's key and node id, enrols the key as a peer before spawning, hands
+the identity and its own public key over in `KAMPR_PEER_STDIO`, and runs the hub side of the same
+handshake over the pipes; the child refuses any host but the one whose key it was handed. The host
+publishes everything the link's own node advertises with `parent` set to itself, and a hub above it
+receives the child as it receives any node its peers relay, `parent` and all. This is how a host
+adopts a Docker container ([docs/19](./19-docker.md)); the machinery is
+`kampr_node::child`, and it does not know what the command is.
+
 ---
 
 ## 4. Cutting a node off

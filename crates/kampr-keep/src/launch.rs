@@ -157,6 +157,10 @@ fn detached(session: &SessionDir, exe: &Path) -> Result<PipeReader> {
         .arg("keep")
         .arg(session.path())
         .env(READY_FD, ready_fd.to_string())
+        .env_remove("NOTIFY_SOCKET")
+        .env_remove("LISTEN_PID")
+        .env_remove("LISTEN_FDS")
+        .env_remove("LISTEN_FDNAMES")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(err);

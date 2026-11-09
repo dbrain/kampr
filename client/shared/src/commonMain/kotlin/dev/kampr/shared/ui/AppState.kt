@@ -5,9 +5,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.model.ConnectionStatus
+import dev.kampr.shared.model.ContainerWatch
+import dev.kampr.shared.model.Fold
+import dev.kampr.shared.model.Folds
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.SeenDone
+import dev.kampr.shared.model.anyAdoptionFailing
 import dev.kampr.shared.model.closed
 import dev.kampr.shared.model.createdPane
 import dev.kampr.shared.model.fleetTargets
@@ -112,6 +116,8 @@ sealed interface Sheet {
     // The list menu, off a row rather than off a screen. `at` is where it hangs from on a desk and
     // null on a phone, which has no pointer and gets the bottom sheet instead.
     data class Menu(val paneId: String, val at: MenuAnchor?) : Sheet
+
+    data class Container(val nodeId: String, val containerId: String) : Sheet
 }
 
 // One field carried both endings and one strip painted both, so a refusal arrived in the colour
@@ -135,6 +141,7 @@ private const val KEY_AGENT_ARGS = "agent.args."
 private const val KEY_RAIL = "sidebar.collapsed"
 private const val KEY_CONFIRM = "confirm.risky"
 private const val KEY_LAST_PANE = "pane.last"
+private const val KEY_FOLDS = "herd.folds"
 
 private const val RECENT_ADDRESSES = 5
 
@@ -198,6 +205,24 @@ class AppState(
 
     var sheet: Sheet? by mutableStateOf(null)
         private set
+
+    val containers = ContainerWatch(scope, { connection.manage(it) }) {
+        opening(it)
+        closeSheet()
+    }
+
+    private fun show(which: Sheet?) {
+        sheet = which
+        if (which is Sheet.Container) containers.watch(which.nodeId, which.containerId) else containers.stop()
+    }
+
+    var folds: Folds by mutableStateOf(Folds.decode(prefs.get(KEY_FOLDS)))
+        private set
+
+    fun fold(node: String, fold: Fold, open: Boolean) {
+        folds = folds.with(node, fold, open)
+        prefs.set(KEY_FOLDS, folds.encode())
+    }
 
     // Survives a reload because the browser is where this client is most often left open: an
     // operator who collapsed the sidebar to read a pane has not asked for it back on every refresh.
@@ -466,11 +491,13 @@ class AppState(
         if (!store.canManage) return
         // A stale ack from an earlier op would otherwise close the sheet the moment it opened.
         store.clearManaged()
-        sheet = which
+        show(which)
     }
 
+    fun openContainer(nodeId: String, containerId: String) = openSheet(Sheet.Container(nodeId, containerId))
+
     fun closeSheet() {
-        sheet = null
+        show(null)
     }
 
     var files: List<FilesPlace> by mutableStateOf(emptyList())
@@ -587,7 +614,7 @@ class AppState(
     // Watch on arrival, unwatch on departure: an observer that outlives the screen holding it is
     // exactly the thing the mosaic's observer count would then be lying about.
     fun go(target: Screen) {
-        sheet = null
+        show(null)
         files = emptyList()
         val leaving = (screen as? Screen.Pane)?.paneId
         if (target is Screen.Pane) connection.watch(target.paneId)
@@ -792,7 +819,7 @@ class AppState(
         // about the pane already filling the screen is the app talking to itself.
         for (pane in onScreen()) seenDone.saw(store.paneInfo(pane))
         tellNodeRead(herd)
-        push.reconcile(store.blocked().isNotEmpty(), herd.unreadDone(seenDone).isNotEmpty())
+        push.reconcile(store.blocked().isNotEmpty(), herd.unreadDone(seenDone).isNotEmpty(), herd.anyAdoptionFailing)
     }
 
     private fun onScreen(): List<String> = when (val current = screen) {
@@ -849,6 +876,7 @@ class AppState(
             }
         }
         scope.launch { store.managed.collect { ack -> ack?.let(::quickSessionAcked) } }
+        scope.launch { store.acks.collect(containers::acked) }
     }
 }
 

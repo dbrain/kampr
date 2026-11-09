@@ -10,6 +10,16 @@ import kotlinx.serialization.json.put
 
 enum class SplitDirection(val wire: String) { Right("right"), Down("down") }
 
+enum class DockerAction(val wire: String) {
+    Detail("detail"),
+    Shell("shell"),
+    Start("start"),
+    Stop("stop"),
+    Restart("restart"),
+    Adopt("adopt"),
+    Release("release"),
+}
+
 enum class ZoomMode(val wire: String) { Toggle("toggle"), On("on"), Off("off") }
 
 // `Once` resizes and hands the PTY straight back; `Hold` keeps the claim so the size survives on a
@@ -264,6 +274,11 @@ sealed interface ManageOp {
             const val OP = "muffit.create"
         }
     }
+
+    // docs/19. `id` is the container's full id; the node runs the op against its own docker.
+    data class Docker(val action: DockerAction, val node: String, val id: String) : ManageOp {
+        override val op: String get() = "docker.${action.wire}"
+    }
 }
 
 fun ManageOp.fields(): JsonObject = buildJsonObject {
@@ -412,6 +427,11 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         is ManageOp.SessionStop -> {
             put("node", node)
             put("name", name)
+        }
+
+        is ManageOp.Docker -> {
+            put("node", node)
+            put("id", id)
         }
     }
 }

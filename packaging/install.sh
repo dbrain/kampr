@@ -16,9 +16,13 @@
 #                         It sources the checksums as well as the tarball, so it is a trust
 #                         decision: `kampr update` clears it, and a base you set yourself is
 #                         the only one where a missing signature is not fatal
-#   KAMPR_MODE            plugin | update | standalone (default standalone)
+#   KAMPR_MODE            plugin | update | fetch | standalone (default standalone)
 #                         plugin stops after installing; update also restarts the service but
-#                         drops the first-run epilogue, and is what `kampr update` runs
+#                         drops the first-run epilogue, and is what `kampr update` runs; fetch
+#                         verifies and unpacks into KAMPR_PREFIX without running the binary,
+#                         and is how a node gets a build for a container (docs/19)
+#   KAMPR_TARGET          a release target such as aarch64-unknown-linux-musl, instead of this
+#                         host's: a container's architecture is not always its host's
 #   KAMPR_REQUIRE_SIGNATURE=1 refuse to install unless cosign is present and the signature checks
 #   KAMPR_ALLOW_UNVERIFIED=1  proceed without a checksum, or without a cosign to check the
 #                         signature with. Only for a local test build. `kampr update` clears it.
@@ -32,19 +36,28 @@ ISSUER="https://token.actions.githubusercontent.com"
 
 die() { echo "kampr: $*" >&2; exit 1; }
 
-case "$(uname -s)" in
-  Linux)  os=unknown-linux-musl ;;
-  Darwin) os=apple-darwin ;;
-  MINGW*|MSYS*|CYGWIN*|Windows_NT)
-    die "Windows is not supported. The node reaches Herdr over a Unix domain socket and
+if [ -n "${KAMPR_TARGET:-}" ]; then
+  case "$KAMPR_TARGET" in
+    x86_64-unknown-linux-musl|aarch64-unknown-linux-musl|x86_64-apple-darwin|aarch64-apple-darwin) ;;
+    *) die "no kampr release is built for $KAMPR_TARGET" ;;
+  esac
+  arch="${KAMPR_TARGET%%-*}"
+  os="${KAMPR_TARGET#*-}"
+else
+  case "$(uname -s)" in
+    Linux)  os=unknown-linux-musl ;;
+    Darwin) os=apple-darwin ;;
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+      die "Windows is not supported. The node reaches Herdr over a Unix domain socket and
        supervises itself with systemd or launchd; neither exists on Windows. Use WSL2." ;;
-  *) die "unsupported OS $(uname -s)" ;;
-esac
-case "$(uname -m)" in
-  x86_64|amd64) arch=x86_64 ;;
-  arm64|aarch64) arch=aarch64 ;;
-  *) die "unsupported architecture $(uname -m)" ;;
-esac
+    *) die "unsupported OS $(uname -s)" ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x86_64 ;;
+    arm64|aarch64) arch=aarch64 ;;
+    *) die "unsupported architecture $(uname -m)" ;;
+  esac
+fi
 
 asset="kampr-${arch}-${os}.tar.gz"
 # `own_base` is the whole difference between "the operator pointed this at their own directory"
@@ -175,6 +188,16 @@ tar -xzf "$tmp/$asset" -C "$tmp"
 chmod +x "$tmp/kampr"
 mkdir -p "$PREFIX"
 [ -w "$PREFIX" ] || die "$PREFIX is not writable — nothing has been changed"
+
+# A fetched build may be another machine's, so it is not run here; a container runs it.
+if [ "$MODE" = fetch ]; then
+  mv "$tmp/kampr" "$PREFIX/kampr.new"
+  mv "$PREFIX/kampr.new" "$PREFIX/kampr"
+  echo "kampr: fetched ${asset} to $PREFIX/kampr"
+  echo "kampr: checksum verified: $checksum_state"
+  echo "kampr: signature verified: $signature_state"
+  exit 0
+fi
 
 # The binary that works is kept until the new one has proved it runs. The window is one rename
 # wide, but on the far side of a bad one is a host with no working kampr and no way to fetch one.

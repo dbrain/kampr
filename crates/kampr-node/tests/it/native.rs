@@ -14,7 +14,9 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
+mod adopt;
 mod convo;
+mod docker;
 mod reflow;
 mod structure;
 
@@ -81,7 +83,11 @@ impl Harness {
     }
 
     /// A new node on the same state and the same native root, with every keeper left running.
-    async fn restart(mut self) -> Self {
+    async fn restart(self) -> Self {
+        self.restart_with(|_| {}).await
+    }
+
+    async fn restart_with(mut self, tweak: fn(&mut Config)) -> Self {
         let home = self.home.take().expect("a home");
         let port = self.port;
         drop(self);
@@ -91,7 +97,7 @@ impl Harness {
                 Err(_) => tokio::time::sleep(Duration::from_millis(50)).await,
             }
         };
-        Self::on(home, listener, port, |_| {}).await
+        Self::on(home, listener, port, tweak).await
     }
 
     async fn on(
@@ -107,6 +113,7 @@ impl Harness {
         let mut config = Config::bootstrap("native");
 
         config.muffit.enabled = Some(false);
+        config.docker.enabled = Some(false);
         config.update.check = false;
         config.config_dir = config_dir.display().to_string();
         config.state_dir = state_dir.display().to_string();
@@ -271,8 +278,17 @@ impl Client {
         true
     }
 
-    pub(crate) async fn until<T>(&mut self, what: &str, mut found: impl FnMut(&mut Self) -> Option<T>) -> T {
-        let deadline = tokio::time::Instant::now() + SOON;
+    pub(crate) async fn until<T>(&mut self, what: &str, found: impl FnMut(&mut Self) -> Option<T>) -> T {
+        self.until_within(what, SOON, found).await
+    }
+
+    pub(crate) async fn until_within<T>(
+        &mut self,
+        what: &str,
+        within: Duration,
+        mut found: impl FnMut(&mut Self) -> Option<T>,
+    ) -> T {
+        let deadline = tokio::time::Instant::now() + within;
         loop {
             if let Some(t) = found(self) {
                 return t;

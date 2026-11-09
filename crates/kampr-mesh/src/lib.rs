@@ -15,13 +15,16 @@ mod fanout;
 pub mod handshake;
 pub mod peers;
 pub mod shadow;
+pub mod stdio;
 pub mod transport;
 pub mod ws;
 
 pub const MAX_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub use dial::{DialPolicy, Hub, dial, mesh_url, supervise};
-pub use handshake::{Accepted, HandshakeError, HubIdentity, MESH_PROTOCOL, Presence, accept, greet};
+pub use handshake::{
+    Accepted, HandshakeError, HubIdentity, MESH_PROTOCOL, Presence, accept, greet, valid_node_id,
+};
 pub use peers::{
     ATT_CHUNK_BYTES, ATT_TRANSFERS, ATT_WINDOW, AttHeader, FetchError, PeerHerd, PeerState, Peers,
     PeersConfig, RelayError, RemoteEvent, RemoteWatcher, Span, Transfer, Upload,

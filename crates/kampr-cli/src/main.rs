@@ -5,6 +5,7 @@ mod init;
 mod mesh;
 mod native;
 mod pairing;
+mod peer_stdio;
 mod recovery;
 mod report;
 mod resize;
@@ -76,6 +77,10 @@ enum Command {
     Serve {
         #[command(flatten)]
         dirs: Dirs,
+        /// Serve the host that spawned this process over stdin and stdout, as its child node,
+        /// with the identity it hands over in KAMPR_PEER_STDIO. Binds no port.
+        #[arg(long)]
+        peer_stdio: bool,
     },
     /// Pair devices, revoke them, and install the service; and report the tier ladder
     Setup {
@@ -256,6 +261,10 @@ fn main() -> Result<()> {
         ),
         Some(Command::Ls { dirs }) => native::ls(&dirs),
         Some(Command::Attach { dirs, id }) => native::attach(&dirs, &id),
+        Some(Command::Serve {
+            dirs,
+            peer_stdio: true,
+        }) => peer_stdio::run(&dirs),
         _ => run(cli),
     }
 }
@@ -308,7 +317,7 @@ async fn run(cli: Cli) -> Result<()> {
             println!("`kampr` with no arguments now opens {}", paired.name);
             Ok(())
         }
-        Command::Serve { dirs } => serve(&dirs).await,
+        Command::Serve { dirs, .. } => serve(&dirs).await,
         Command::Setup { dirs } => setup::run(&dirs.config(), dirs.state_override()).await,
         Command::Status { dirs } => status(&dirs).await,
         Command::Url { dirs } => {

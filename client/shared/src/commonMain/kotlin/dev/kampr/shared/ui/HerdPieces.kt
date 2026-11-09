@@ -177,11 +177,24 @@ fun WorkspaceHeading(name: String, modifier: Modifier = Modifier) {
     KText(name, tokens.type.captionSmall, tokens.color.mute, modifier.asHeading().announce("Workspace $name"), maxLines = 1)
 }
 
+// A host's section that folds: its muffit sessions, its containers. What is under it is the
+// operator's to hide, so the heading is a control and says which way it is.
 @Composable
-fun BackgroundHeading(modifier: Modifier = Modifier) {
+fun FoldHeading(title: String, open: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier, detail: String? = null) {
     val tokens = Kampr.tokens
-    val said = "Background · muffit"
-    KText(said, tokens.type.captionSmall, tokens.color.mute, modifier.asHeading().announce(said), maxLines = 1)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .touchable(LANDSCAPE_TOUCH)
+            .action(title, onToggle, state = if (open) "expanded" else "collapsed")
+            .asHeading(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        IconGlyph(if (open) KamprIcons.chevronDown else KamprIcons.chevronRight, 10.dp, tokens.color.mute)
+        DisableSelection { KText(title, tokens.type.captionSmall, tokens.color.mute, maxLines = 1) }
+        if (detail != null) KText(detail, tokens.type.micro, tokens.color.mute, maxLines = 1)
+    }
 }
 
 @Composable
@@ -247,6 +260,7 @@ fun nodeReach(node: NodeInfo): String = if (node.kind == "local") "local" else "
 // from nothing at all.
 fun nodeFacts(node: NodeInfo, withStatus: Boolean = false): List<String> = listOfNotNull(
     if (node.kind == "local") "this machine" else "peer",
+    "in a container".takeIf { node.parent != null },
     node.session.takeIf { it != "default" }?.let { "session $it" },
     if (withStatus) (if (node.isServing) "online" else "offline") else null,
     "no herdr".takeIf { node.herdrOn && node.isServing && !node.online },

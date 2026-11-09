@@ -29,6 +29,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ),
     ("kampr-mesh", &["kampr-auth", "kampr-core", "kampr-term"]),
     ("kampr-muffit", &["kampr-core", "kampr-journal"]),
+    ("kampr-docker", &["kampr-core"]),
     (
         "kampr-native",
         &[
@@ -46,6 +47,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
         &[
             "kampr-auth",
             "kampr-core",
+            "kampr-docker",
             "kampr-fleet",
             "kampr-herdr",
             "kampr-journal",
@@ -75,6 +77,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "kampr-auth",
             "kampr-client",
             "kampr-core",
+            "kampr-docker",
             "kampr-fleet",
             "kampr-herdr",
             "kampr-keep",

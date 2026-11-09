@@ -435,13 +435,40 @@ impl Peers {
         ended
     }
 
+    /// Drops what the herd remembers of a peer's link that has ended, for a peer that is not coming
+    /// back: a released child, whose nodes would otherwise stay listed offline.
+    pub fn forget(&self, pubkey: &str) {
+        let forgotten = self.remembered.lock().unwrap().remove(pubkey).is_some();
+        if forgotten {
+            self.publish();
+        }
+    }
+
     /// Serves one authenticated mesh link until it ends. Every failure inside is this link's
     /// alone: it detaches, its nodes go offline, and the rest of the herd never notices.
-    pub async fn serve<O: Outgoing, I: Incoming>(
+    pub async fn serve<O: Outgoing, I: Incoming>(self: &Arc<Self>, accepted: Accepted, out: O, incoming: I) {
+        self.serve_link(accepted, out, incoming, None).await;
+    }
+
+    /// [`Self::serve`] for a node this one spawned and hosts: everything the link's own node
+    /// advertises is published as this node's child. Only the spawning side can say so, which is
+    /// why it is a different call rather than anything the peer sends.
+    pub async fn serve_adopted<O: Outgoing, I: Incoming>(
+        self: &Arc<Self>,
+        accepted: Accepted,
+        out: O,
+        incoming: I,
+    ) {
+        let parent = self.config.own_node_id.clone();
+        self.serve_link(accepted, out, incoming, parent).await;
+    }
+
+    async fn serve_link<O: Outgoing, I: Incoming>(
         self: &Arc<Self>,
         accepted: Accepted,
         mut out: O,
         mut incoming: I,
+        parent: Option<String>,
     ) {
         let (requests, mut outbound) = mpsc::channel(REQUEST_QUEUE);
         let link = Arc::new(PeerLink {
@@ -449,6 +476,7 @@ impl Peers {
             name: accepted.node.name.clone(),
             pubkey: accepted.node.pubkey.clone(),
             build: accepted.build.clone(),
+            parent,
             requests,
             state: Mutex::new(LinkState::default()),
             panes: Mutex::new(HashMap::new()),
@@ -555,7 +583,14 @@ impl Peers {
             self.remembered.lock().unwrap().insert(
                 link.pubkey.clone(),
                 Remembered {
-                    nodes: state.nodes.clone(),
+                    nodes: state
+                        .nodes
+                        .iter()
+                        .map(|node| NodeEntry {
+                            parent: link.parent_of(node),
+                            ..node.clone()
+                        })
+                        .collect(),
                     panes: state.panes.clone(),
                     detail: detail.clone(),
                 },
@@ -712,6 +747,7 @@ impl Peers {
                     reachable: Some(node.is_reachable()),
                     rtt_ms: state.rtt_ms.map(|link_rtt| link_rtt + node.rtt_ms.unwrap_or(0.0)),
                     build: node.build.clone().or_else(|| Some(link.build.clone())),
+                    parent: link.parent_of(node),
                     ..node.clone()
                 });
             }
@@ -787,6 +823,7 @@ pub struct PeerLink {
     pub name: String,
     pub pubkey: String,
     pub build: String,
+    parent: Option<String>,
     requests: mpsc::Sender<String>,
     state: Mutex<LinkState>,
     panes: Mutex<HashMap<String, Weak<RemotePane>>>,
@@ -811,6 +848,20 @@ impl PeerLink {
 
     pub fn rtt_ms(&self) -> Option<f64> {
         self.state.lock().unwrap().rtt_ms
+    }
+
+    /// A node's own word on its parent is never taken for itself, only for the nodes it relays
+    /// from further down, which is how a chain of hosts reaches the top with each one's parent.
+    fn parent_of(&self, node: &NodeEntry) -> Option<String> {
+        let own = node.id == self.node_id
+            || node
+                .id
+                .strip_prefix(self.node_id.as_str())
+                .is_some_and(|rest| rest.starts_with('.'));
+        match own {
+            true => self.parent.clone(),
+            false => node.parent.clone(),
+        }
     }
 
     /// What the peer says it holds, which is evidence about nothing until it has been checked
@@ -1529,6 +1580,7 @@ mod tests {
             name: "laptop".into(),
             pubkey: KEY.into(),
             build: "0.1.0".into(),
+            parent: None,
             requests,
             state: Mutex::new(LinkState::default()),
             panes: Mutex::new(HashMap::new()),

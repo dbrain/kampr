@@ -78,6 +78,7 @@ pub enum Click {
         width: u16,
         done: bool,
     },
+    Sidebar(crate::sidebar::Hit),
 }
 
 /// What a press on a boundary took hold of, and how far from the boundary itself it landed, so
@@ -244,6 +245,9 @@ impl Mouse {
         }
         if let Some(pane) = pick_row(&layout.rows, at) {
             return Click::Focus(pane);
+        }
+        if let Some((hit, _)) = layout.hits.iter().find(|(_, rect)| inside(*rect, at)) {
+            return Click::Sidebar(hit.clone());
         }
         match inside(layout.sidebar, at) {
             true => Click::OpenHerd,

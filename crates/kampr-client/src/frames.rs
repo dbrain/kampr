@@ -108,6 +108,7 @@ pub struct Managed {
     pub code: Option<String>,
     pub message: Option<String>,
     pub layout: Option<Value>,
+    pub detail: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]

@@ -35,8 +35,9 @@ data class Herd(
 }
 
 @Immutable
-data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>) {
-    val terminals: List<PaneInfo> get() = panes.filterNot { it.isMuffit }
+data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>, val children: List<NodeGroup> = emptyList()) {
+    // A shell into one of this node's containers is listed under that container instead.
+    val terminals: List<PaneInfo> get() = panes.filterNot { it.isMuffit || node.containers.any { c -> c.name == it.container } }
 
     // Muffit sessions no terminal is showing: a daggit's wake, one the web UI or the + sheet
     // started in the background (docs/18).
@@ -80,6 +81,25 @@ fun Herd.groups(): List<NodeGroup> {
     val byNode = panes.filter { it.fleet == null }.groupBy { it.nodeId }
     val ordered = nodes.sortedByDescending { it.kind == "local" }
     return ordered.map { NodeGroup(it, byNode[it.id].orEmpty().sortedWith(paneOrder)) }
+}
+
+// The herd as it is drawn: a node a host adopted into one of its containers (docs/19) hangs under
+// that host rather than standing beside it. A parent that is not in the herd, or a loop, leaves the
+// node at the top, which is where an older client shows it anyway.
+fun Herd.tree(): List<NodeGroup> {
+    val flat = groups()
+    val ids = flat.mapTo(HashSet()) { it.node.id }
+    val byParent = flat.filter { it.node.parent in ids && it.node.parent != it.node.id }.groupBy { it.node.parent!! }
+    val placed = HashSet<String>()
+    fun build(group: NodeGroup): NodeGroup {
+        placed += group.node.id
+        val kids = byParent[group.node.id].orEmpty().filter { it.node.id !in placed }
+        kids.forEach { placed += it.node.id }
+        return group.copy(children = kids.map(::build))
+    }
+    val roots = flat.filter { it.node.parent !in ids || it.node.parent == it.node.id }.map(::build).toMutableList()
+    for (group in flat) if (group.node.id !in placed) roots += build(group)
+    return roots
 }
 
 private val paneOrder = compareBy<PaneInfo>(

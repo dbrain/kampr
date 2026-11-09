@@ -33,6 +33,10 @@ pub struct Spec {
     pub cohort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
+    /// The Docker container a `docker.shell` session is a shell into (docs/19). Kept here rather
+    /// than in `env`, which is cleared from disk once the child is spawned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub container: Option<String>,
 }
 
 impl Spec {
@@ -49,6 +53,7 @@ impl Spec {
             created_unix: now_unix(),
             cohort: None,
             workspace: None,
+            container: None,
         }
     }
 }
@@ -128,6 +133,12 @@ pub struct KeeperInfo {
     /// The file at `exe` when this keeper started. `None` from a keeper older than the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<Image>,
+    /// Clock ticks after boot, from `/proc/<pid>/stat`: a pid alone is reused, and a container
+    /// that restarts hands its first pids straight out again. `None` off Linux and from older keepers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keeper_start: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_start: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,7 +343,7 @@ impl SessionDir {
             return false;
         }
         self.keeper()
-            .is_some_and(|k| pid_alive(k.keeper) || pid_alive(k.child))
+            .is_some_and(|k| still_running(k.keeper, k.keeper_start) || still_running(k.child, k.child_start))
     }
 }
 
@@ -414,6 +425,10 @@ fn hosts_lock(session: &SessionDir) -> io::Result<fs::File> {
 
 pub(crate) fn pid_alive(pid: u32) -> bool {
     crate::sys::pid_alive(pid)
+}
+
+fn still_running(pid: u32, started: Option<u64>) -> bool {
+    pid_alive(pid) && started.is_none_or(|then| crate::sys::started(pid).is_none_or(|now| now == then))
 }
 
 pub(crate) fn read_json<T: DeserializeOwned>(path: &Path) -> io::Result<T> {

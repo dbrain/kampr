@@ -86,6 +86,7 @@ pub struct NewSession {
     pub cohort: Option<String>,
     /// A workspace id, as `resolve_workspace` or `new_workspace` answered it.
     pub workspace: Option<String>,
+    pub container: Option<String>,
 }
 
 pub struct NativeProvider {
@@ -180,6 +181,7 @@ impl NativeProvider {
         }
         spec.cohort = new.cohort;
         spec.workspace = new.workspace;
+        spec.container = new.container;
         let config = self.inner.config.clone();
         let session = tokio::task::spawn_blocking(move || {
             let launch = config.launch.unwrap_or_else(Launch::auto);
@@ -593,6 +595,7 @@ impl Inner {
                     None => None,
                 },
                 program,
+                container: spec.container.clone(),
             }),
             ..PaneInfo::default()
         })

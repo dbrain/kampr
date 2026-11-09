@@ -5,15 +5,18 @@
 //! phone on a bad link must not be able to grow the node's memory. And the style table is per
 //! connection, because the protocol only promises id stability for the life of a socket.
 
+pub mod adopt;
 pub mod assetlinks;
 pub mod assets;
 pub mod attach;
 pub mod book;
 pub mod caps;
+pub mod child;
 pub mod config;
 pub mod convo;
 pub mod desk;
 pub mod device_watch;
+pub mod docker;
 pub mod find;
 pub mod fs;
 pub mod git;
@@ -21,6 +24,7 @@ pub mod herd;
 mod herd_files;
 pub mod holds;
 pub mod http;
+pub mod installer;
 pub mod lost;
 pub mod manage;
 pub mod mesh;
@@ -32,6 +36,7 @@ pub mod pending;
 pub mod push;
 pub mod reads;
 pub mod relay;
+mod relay_transfer;
 pub mod restore;
 pub mod served;
 pub mod session;

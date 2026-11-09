@@ -36,6 +36,10 @@ impl App {
         if self.pairing.as_mut().is_some_and(|pairing| pairing.key(key)) {
             return;
         }
+        if self.detail.is_some() && !self.manage.active() {
+            self.docker_key(key);
+            return;
+        }
         if let Some(invite) = self.invite.as_mut() {
             match invite.key(key) {
                 crate::invite::Done::Closed => self.invite = None,
@@ -432,7 +436,7 @@ impl App {
         );
     }
 
-    fn send_manage(&mut self, op: serde_json::Value) {
+    pub(super) fn send_manage(&mut self, op: serde_json::Value) {
         self.send_manage_claiming(op, None);
     }
 
@@ -472,6 +476,9 @@ impl App {
             // for, for eight seconds, on every window resize.
             if let Some(claim) = claim {
                 self.claim_answered(claim, ack.ok);
+                continue;
+            }
+            if self.docker_ack(&ack) {
                 continue;
             }
             self.manage.observe(&Event::Managed(ack));
@@ -584,6 +591,7 @@ impl App {
             Taller => self.resize(Axis::Down, true),
             Shorter => self.resize(Axis::Down, false),
             Arrange => self.arrange(),
+            Docker(op) => self.docker_on_pick(op),
             OpenLaunched => self.open_launched(),
             TakeDeskLine => self.take_desk_line(),
             ToggleView => self.toggle_view(),
@@ -1022,9 +1030,14 @@ impl App {
 
     pub(super) fn rows(&self) -> Vec<Row> {
         let state = self.client.state();
-        sidebar::rows(&state.herd, self.prefs.order, self.hub_row(), |pane| {
-            self.convo.pending(pane).and_then(|p| p.question.clone())
-        })
+        sidebar::rows(
+            &state.herd,
+            self.prefs.order,
+            self.hub_row(),
+            &self.prefs.folds,
+            super::unix_now(),
+            |pane| self.convo.pending(pane).and_then(|p| p.question.clone()),
+        )
     }
 
     fn move_pick(&mut self, dir: Dir) {
@@ -1068,6 +1081,10 @@ impl App {
         if matches!(rows.get(self.pick), Some(Row::Pair(_))) {
             self.router.leave();
             self.open_pairing();
+            return;
+        }
+        if let Some(hit) = rows.get(self.pick).and_then(|r| r.hit()) {
+            self.hit(hit);
             return;
         }
         if let Some(pane) = rows.get(self.pick).and_then(|r| r.pane()).map(str::to_string) {

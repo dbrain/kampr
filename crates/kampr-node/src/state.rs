@@ -67,6 +67,7 @@ pub struct Node {
     /// permit before it starts serving, or a handful of peers would close the door behind them.
     pub handshakes: Arc<Semaphore>,
     pub stream_tickets: crate::stream_tickets::StreamTickets,
+    pub(crate) children: crate::adopt::Children,
     journals: watch::Sender<Arc<Journals>>,
     caps: crate::caps::Caps,
     herd: watch::Sender<Arc<HerdModel>>,
@@ -92,7 +93,7 @@ impl Node {
     /// a herd is running and can serve its own "herdr is not running" state.
     pub async fn start(config: Config, state_dir: &Path) -> Result<Arc<Self>> {
         crate::upload::sweep(state_dir);
-        let sessions = Sessions::open(&config);
+        let sessions = Sessions::open(&config, state_dir);
         let auth = Arc::new(build_auth(&config, state_dir).await?);
         // A hub is told its own node id so a peer cannot advertise the machine the operator is
         // standing on.
@@ -150,6 +151,7 @@ impl Node {
             push,
             toaster: crate::toast::Toaster::default(),
             stream_tickets: crate::stream_tickets::StreamTickets::default(),
+            children: crate::adopt::Children::default(),
             journals,
             caps: crate::caps::Caps::default(),
             herd,
@@ -164,6 +166,9 @@ impl Node {
             .lock()
             .unwrap()
             .push(tokio::spawn(crate::mesh::dial_hubs(Arc::downgrade(&node))));
+        if let Some(task) = crate::adopt::follow(&node) {
+            node.tasks.lock().unwrap().push(task);
+        }
         Ok(node)
     }
 
@@ -274,6 +279,10 @@ impl Node {
         if let Some(muffit) = &self.primary().muffit {
             muffit.shutdown();
         }
+        if let Some(docker) = &self.primary().docker {
+            docker.stop();
+        }
+        self.children.clear();
     }
 
     pub fn node_id(&self) -> &str {
@@ -474,6 +483,13 @@ async fn moved<T>(rx: &mut watch::Receiver<T>) {
     }
 }
 
+async fn maybe_moved<T>(rx: &mut Option<watch::Receiver<T>>) {
+    match rx {
+        Some(rx) => moved(rx).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 /// The three things a session can report between two rebuilds: a structural change, a herdr going
 /// away, and a viewer joining or leaving a pane.
 type SessionChanges = (
@@ -484,12 +500,27 @@ type SessionChanges = (
 
 /// Everything a rebuild is worth doing for, subscribed in one go.
 ///
+fn containers(session: &SessionNode) -> Vec<kampr_core::wire::ContainerEntry> {
+    let mut containers = session
+        .docker
+        .as_ref()
+        .map(|d| d.containers())
+        .unwrap_or_default();
+    if let Some(adopted) = &session.adopted {
+        let up = session.docker.as_ref().and_then(|d| d.reported()) == Some(true);
+        crate::adopt::annotate(adopted, &mut containers, up);
+    }
+    containers
+}
+
 /// The **set** is here rather than in the `select!` for the reason [`Sessions::changes`] gives:
 /// this is armed before the model is read, and a session that appears in the gap has to wake the
 /// loop rather than land on nobody.
 struct HerdChanges {
     set: watch::Receiver<u64>,
     each: Vec<SessionChanges>,
+    docker: Option<watch::Receiver<u64>>,
+    adopted: Option<watch::Receiver<u64>>,
 }
 
 fn herd_changes(sessions: &Sessions) -> HerdChanges {
@@ -506,13 +537,20 @@ fn herd_changes(sessions: &Sessions) -> HerdChanges {
                 )
             })
             .collect(),
+        docker: sessions.primary().docker.as_ref().map(|d| d.subscribe()),
+        adopted: sessions.primary().adopted.as_ref().map(|a| a.subscribe()),
     }
 }
 
 /// Wakes on the first of them any session reports, or on the set of sessions itself moving, so
 /// they land on the wire at once rather than at the next sweep.
 async fn wait_for_change(watches: &mut HerdChanges) {
-    let HerdChanges { set, each } = watches;
+    let HerdChanges {
+        set,
+        each,
+        docker,
+        adopted,
+    } = watches;
     let empty = each.is_empty();
     let waits = each.iter_mut().map(|(topology, health, watchers)| {
         Box::pin(async move {
@@ -534,6 +572,8 @@ async fn wait_for_change(watches: &mut HerdChanges) {
     tokio::select! {
         _ = moved(set) => {}
         _ = any => {}
+        _ = maybe_moved(docker) => {}
+        _ = maybe_moved(adopted) => {}
     }
 }
 
@@ -804,6 +844,9 @@ async fn build_model(
             // what it is running and whether its operator allowed it to ask.
             update: update.map(str::to_string),
             detail: health.detail.clone(),
+            docker: session.docker.as_ref().and_then(|d| d.reported()),
+            containers: containers(&session),
+            parent: None,
         });
         // A herdr restart keeps its workspaces and panes (probe #70), so an outage marks the node
         // offline and leaves the last-known panes standing rather than emptying the herd under a
@@ -1023,9 +1066,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::bootstrap("testnode");
         config.muffit.enabled = Some(false);
+        config.docker.enabled = Some(false);
         config.herdr.socket = dir.path().join("herdr.sock").display().to_string();
         config.native.root = dir.path().join("native").display().to_string();
-        let sessions = Sessions::open(&config);
+        let sessions = Sessions::open(&config, dir.path());
 
         let mut changes = herd_changes(&sessions);
         assert!(sessions.apply(Ok(vec![SessionEntry {

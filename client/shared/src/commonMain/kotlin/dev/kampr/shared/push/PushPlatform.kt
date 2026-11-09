@@ -24,12 +24,13 @@ sealed interface PushCapability {
 
 enum class PushPermission { Default, Granted, Denied }
 
-// One tag per notification kind, matching `kampr_push::note::Kind::tag` and the service worker's.
+// One tag per notification kind (blocked, done, and a container adoption that is failing), matching `kampr_push::note::Kind::tag` and the service worker's.
 // Two tags is two slots in the shade: whatever arrives last under a tag is the only thing showing
 // for that kind, so a finished agent sharing the blocked tag would take a live question off the
 // phone.
 const val TAG_BLOCKED = "kampr.blocked"
 const val TAG_DONE = "kampr.done"
+const val TAG_ADOPTION = "kampr.adoption"
 
 // The payload version this client can read, sent with every subscription.
 //
@@ -37,7 +38,7 @@ const val TAG_DONE = "kampr.done"
 // one: a client with a single notification slot posts whatever arrives into it, so a node that
 // sent it a `done` would take a live question off the phone. Raise it only alongside the code
 // that actually handles the new kind. Must match `kampr_push::note::VERSION`.
-const val PUSH_PAYLOAD_VERSION = 3
+const val PUSH_PAYLOAD_VERSION = 4
 
 // A browser's PushSubscription, in the shape `/api/push/subscribe` takes.
 data class PushEnrolment(
@@ -74,7 +75,7 @@ interface PushPlatform {
     // herd for itself the herd is fresher, so a prompt answered anywhere — at the desk, in the
     // TUI, on another phone — comes down without waiting for a push to say so.
     //
-    // Two slots, reconciled independently, because they empty for different reasons: a question
+    // Each slot is reconciled independently, because they empty for different reasons: a question
     // is answered anywhere in the herd, and a finish is *read* — which is a fact this device
     // holds alone (`SeenDone`) and never tells the node, since clearing herdr's own marker would
     // take a focus op and that is the operator's press (rule 3).
@@ -82,7 +83,7 @@ interface PushPlatform {
     // It only ever takes one down. Re-posting a shrunken summary would mean reproducing the
     // node's own title and body shaping in every client, and the resync push already does that
     // from the one place that holds the questions.
-    fun reconcile(anyBlocked: Boolean, anyDone: Boolean)
+    fun reconcile(anyBlocked: Boolean, anyDone: Boolean, anyAdoptionFailing: Boolean)
 }
 
 expect fun createPushPlatform(): PushPlatform
@@ -95,5 +96,5 @@ class NoPush(private val why: PushCapability = PushCapability.Unsupported) : Pus
     override suspend fun subscribe(vapidKey: String): PushEnrolment? = null
     override suspend fun unsubscribe(): String? = null
     override suspend fun enrolment(): PushEnrolment? = null
-    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean) = Unit
+    override fun reconcile(anyBlocked: Boolean, anyDone: Boolean, anyAdoptionFailing: Boolean) = Unit
 }
