@@ -142,6 +142,7 @@ mod tests {
         assert!(parse(&cut).is_err());
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn the_test_binary_itself_reads_as_this_machines_architecture() {
         let elf = read(&std::env::current_exe().unwrap()).unwrap();
