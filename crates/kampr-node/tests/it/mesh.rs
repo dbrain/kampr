@@ -1080,9 +1080,7 @@ async fn revoke_elsewhere(home: &Home, needle: &str) {
 }
 
 fn kampr_binary() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let candidate = exe.parent()?.parent()?.join("kampr");
-    candidate.is_file().then_some(candidate)
+    Some(kampr_testkit::target_binary("kampr")).filter(|p| p.is_file())
 }
 
 /// The link a hub already has is the one revocation has to bite, and the operator who revokes is

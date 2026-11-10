@@ -47,7 +47,10 @@ fn build() -> Result<PathBuf, String> {
     if !status.success() {
         return Err(format!("cargo build --target {target} failed"));
     }
-    let binary = target_dir().join(&target).join("debug").join("kampr");
+    let binary = crate::keeper::target_dir()
+        .join(&target)
+        .join("debug")
+        .join("kampr");
     match binary.is_file() {
         true => Ok(binary),
         false => Err(format!("no kampr at {}", binary.display())),
@@ -100,14 +103,4 @@ fn sysroot(arch: &str) -> Result<PathBuf, String> {
             root.display()
         )),
     }
-}
-
-fn target_dir() -> PathBuf {
-    let exe = std::env::current_exe().expect("the test binary");
-    let mut dir = exe.parent().expect("a target directory").to_path_buf();
-    if dir.ends_with("deps") {
-        dir.pop();
-    }
-    dir.pop();
-    dir
 }

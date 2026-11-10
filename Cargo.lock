@@ -3095,6 +3095,7 @@ dependencies = [
  "kampr-keep",
  "libc",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

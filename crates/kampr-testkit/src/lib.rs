@@ -18,7 +18,7 @@ mod keepers;
 pub mod release;
 mod static_kampr;
 
-pub use keeper::{kampr, keeper};
+pub use keeper::{kampr, keeper, target_binary};
 pub use keepers::stop_keepers;
 pub use static_kampr::static_kampr;
 
