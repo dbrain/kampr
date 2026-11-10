@@ -40,6 +40,7 @@ import dev.kampr.shared.ui.LocalManage
 import dev.kampr.shared.ui.ManageIo
 import dev.kampr.shared.ui.MenuAnchor
 import dev.kampr.shared.ui.RAIL_WIDTH
+import dev.kampr.shared.ui.shortCount
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Wire
 import kotlinx.coroutines.CoroutineScope
@@ -238,6 +239,34 @@ class HerdDockerTest {
         find("Containers, 2 running").performClick()
         find("Muffit sessions, 1").performClick()
         assertEquals(listOf(HOST to Area.Containers, HOST to Area.Muffit), picked)
+    }
+
+    @Test
+    fun aCountShowsUpToNinetyNineAndThenNinePlus() {
+        assertEquals(listOf("0", "9", "10", "99", "9+", "9+"), listOf(0, 9, 10, 99, 100, 1234).map(::shortCount))
+    }
+
+    @Test
+    fun aTabIsTheSameWidthWhateverItsCount() = runComposeUiTest {
+        var running by mutableStateOf(1)
+        setContent {
+            val containers = (0 until running).joinToString(",") { """{"id":"c$it","name":"c$it","image":"i","state":"running"}""" }
+            val herd = (
+                Wire.decode(
+                    """{"t":"herd","nodes":[{"id":"$HOST","name":"front","kind":"local","online":true,"docker":true,
+                       "containers":[$containers]}],"panes":[]}""",
+                ) as ServerMsg.Herd
+                ).let { Herd(it.nodes, it.panes, known = true) }
+            CompositionLocalProvider(LocalTokens provides phoneTokens(), LocalManage provides Opened()) {
+                Box(Modifier.size(420.dp, 1200.dp)) { HerdPortrait(herd, ConnectionStatus.Live("full"), NOW, 12.0, emptyList(), {}, null) }
+            }
+        }
+        val widths = listOf(1, 8, 42, 99, 250).map { n ->
+            running = n
+            waitForIdle()
+            find("Containers, $n running").getUnclippedBoundsInRoot().let { it.right - it.left }
+        }
+        assertEquals(1, widths.toSet().size, "$widths")
     }
 
     @Test

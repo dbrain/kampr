@@ -11,6 +11,7 @@ import dev.kampr.shared.model.groups
 import dev.kampr.shared.wire.HerdDelta
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.PendingOption
 import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.Run
 import dev.kampr.shared.wire.ServerMsg
@@ -178,6 +179,28 @@ class ModelTest {
     // blocked pane carries nothing at all — the question is not readable yet. So a reconnect onto
     // a pane that is blocked again shows the previous connection's question until the retry lands,
     // and answering it lands on a pane with nothing matching to answer.
+    @Test
+    fun aTriageRowCarriesTheIdOfTheQuestionItShows() {
+        val store = KamprStore()
+        store.accept(ServerMsg.Herd(listOf(NodeInfo("n1", "one", kind = "local")), listOf(pane("n1/p1", "n1", "blocked"))))
+        store.accept(ServerMsg.Pending("n1/p1", "Allow Bash?", emptyList(), "hook", id = "toolu_1"))
+        assertEquals("toolu_1", store.triage().single().questionId)
+
+        store.accept(ServerMsg.Pending("n1/p1", "Apply this patch?", emptyList(), "screen"))
+        assertNull(store.triage().single().questionId)
+    }
+
+    @Test
+    fun aTriageRowForAQuestionOnlyTheTerminalCanAnswerOffersNoApproval() {
+        val store = KamprStore()
+        store.accept(ServerMsg.Herd(listOf(NodeInfo("n1", "one", kind = "local")), listOf(pane("n1/p1", "n1", "blocked"))))
+        store.accept(ServerMsg.Pending("n1/p1", "Fill the form", emptyList(), "hook", id = "q1"))
+        assertFalse(store.triage().single().approvable)
+
+        store.accept(ServerMsg.Pending("n1/p1", "Allow Bash?", listOf(PendingOption("1", "Yes")), "hook", id = "q2"))
+        assertTrue(store.triage().single().approvable)
+    }
+
     @Test
     fun aDroppedSocketTakesEveryPanesPendingQuestionWithIt() {
         val store = KamprStore()

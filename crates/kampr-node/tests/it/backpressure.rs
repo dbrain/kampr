@@ -73,6 +73,19 @@ fn setup(queue: usize) -> (Arc<PaneRegistry>, mpsc::Sender<PaneEvent>, Arc<Outbo
     (registry, tx, outbox, wire)
 }
 
+fn unserved_hooks() -> Arc<kampr_node::hooks::Hooks> {
+    let mut config = kampr_node::Config::bootstrap("backpressure");
+    config.muffit.enabled = Some(false);
+    config.docker.enabled = Some(false);
+    config.herdr.socket = "/nonexistent/kampr-test.sock".into();
+    config.herdr.binary = "/nonexistent/kampr-test-herdr".into();
+    config.native.root = "/nonexistent/native".into();
+    let state = std::path::Path::new("/nonexistent/state");
+    let sessions = kampr_node::sessions::Sessions::open(&config, state);
+    let herd = watch::channel(Arc::new(HerdModel::default())).1;
+    kampr_node::hooks::Hooks::new(&config, state, sessions, herd, Default::default())
+}
+
 fn spawn_pump(
     registry: Arc<PaneRegistry>,
     wire: Arc<Wire>,
@@ -89,6 +102,7 @@ fn spawn_pump(
         scrollback: false,
         reflow: None,
         changes: Default::default(),
+        hooks: unserved_hooks(),
     }));
     (handle, herd_tx)
 }

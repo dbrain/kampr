@@ -54,6 +54,14 @@ fn path(chars: &[[libc::c_char; 32]; 32]) -> Option<PathBuf> {
     (!bytes.is_empty()).then(|| PathBuf::from(OsStr::from_bytes(&bytes)))
 }
 
+fn image(pid: u32) -> Option<String> {
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let n = unsafe { libc::proc_pidpath(pid as libc::c_int, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    let n = usize::try_from(n).ok().filter(|&n| n > 0)?;
+    let path = String::from_utf8_lossy(&buf[..n]).into_owned();
+    Some(path.rsplit('/').next().unwrap_or_default().to_string())
+}
+
 /// Readable only for a process of our own uid, which every process a node watches is.
 fn args(pid: u32) -> Option<Args> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
@@ -117,6 +125,24 @@ impl Table for Darwin {
         } else {
             name
         })
+    }
+
+    // macOS takes `comm` from the file a symlink resolved to, so Claude's installer link
+    // `~/.local/bin/claude -> versions/2.1.308` runs as `2.1.308`. argv[0] is the link's own name
+    // when the image really is `comm`'s file and argv[0] was not rewritten into a title.
+    fn name(&self, pid: u32) -> Option<String> {
+        let comm = self.comm(pid)?;
+        let typed = args(pid)
+            .and_then(|a| a.argv.into_iter().next())
+            .map(|a| String::from_utf8_lossy(&a).into_owned())
+            .unwrap_or_default();
+        let typed = typed.rsplit('/').next().unwrap_or_default();
+        let linked = !typed.is_empty()
+            && typed != comm
+            && !typed.starts_with('-')
+            && !typed.contains([' ', ':'])
+            && image(pid).is_some_and(|image| image.starts_with(&comm));
+        Some(if linked { typed.to_string() } else { comm })
     }
 
     fn cwd(&self, pid: u32) -> Option<PathBuf> {

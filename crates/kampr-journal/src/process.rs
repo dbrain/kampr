@@ -101,6 +101,32 @@ pub fn comm(pid: u32) -> Option<String> {
     kampr_proc::here().comm(pid)
 }
 
+const HARNESSES: &[&str] = &[
+    crate::claude::AGENT,
+    crate::codex::AGENT,
+    crate::omp::AGENT,
+    crate::omp::PI_AGENT,
+    crate::agy::AGENT,
+];
+
+/// Matched on the process name and on the first two words of its command line, because an npm
+/// install runs a harness as `node …/codex`, omp runs under `bun`, and macOS names a process after
+/// the file its symlink resolved to: Claude's installer links `claude` to `versions/2.1.308`.
+pub fn harness_named(comm: &str, argv: &[String]) -> Option<&'static str> {
+    std::iter::once(comm)
+        .chain(argv.iter().take(2).map(|a| stem(a)))
+        .find_map(|n| HARNESSES.iter().find(|h| **h == n).copied())
+}
+
+pub fn harness_of(pid: u32) -> Option<&'static str> {
+    harness_named(&comm(pid)?, &kampr_proc::here().argv(pid).unwrap_or_default())
+}
+
+fn stem(arg: &str) -> &str {
+    let base = arg.rsplit('/').next().unwrap_or(arg);
+    base.split_once('.').map_or(base, |(stem, _)| stem)
+}
+
 /// Whether this host answers questions about a process at all.
 ///
 /// A pid with no start time means two different things, and only one of them is a harness that
@@ -182,4 +208,30 @@ pub(crate) fn parse_rfc3339(stamp: &str) -> Option<SystemTime> {
         false => SystemTime::UNIX_EPOCH - Duration::from_secs(seconds.unsigned_abs()),
     };
     Some(whole + Duration::from_nanos(at.nanosecond() as u64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::harness_named;
+
+    #[test]
+    fn a_harness_is_known_by_its_name_or_by_what_its_runtime_was_handed() {
+        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (comm, args, want) in [
+            ("claude", argv(&["claude", "--resume"]), Some("claude")),
+            ("2.1.308", argv(&["claude", "--resume"]), Some("claude")),
+            ("sh", argv(&["/bin/sh", "/tmp/work/claude", "x"]), Some("claude")),
+            (
+                "node",
+                argv(&["node", "/usr/lib/node_modules/@openai/codex/bin/codex.js"]),
+                Some("codex"),
+            ),
+            ("bun", argv(&["bun", "/home/x/.bun/bin/omp"]), Some("omp")),
+            ("bash", argv(&["bash", "-l"]), None),
+            ("sh", argv(&["sh", "-c", "claude"]), None),
+            ("node", argv(&["node", "server.js", "claude"]), None),
+        ] {
+            assert_eq!(harness_named(comm, &args), want, "{comm} {args:?}");
+        }
+    }
 }

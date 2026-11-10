@@ -72,6 +72,10 @@ private class Session {
         store.accept(ServerMsg.ConvoTurn(PANE_ID, listOf(Turn("a${n++}", "assistant", blocks = listOf(Block.Md(text))))))
     }
 
+    fun heard(text: String) {
+        store.accept(ServerMsg.ConvoHeard(PANE_ID, text))
+    }
+
     fun queued(vararg texts: String) {
         store.accept(ServerMsg.ConvoFacets(PANE_ID, Facets(queued = texts.map { Queued(it) })))
     }
@@ -312,6 +316,79 @@ class SendingTurnTest {
         waitForIdle()
         assertEquals(0, count("not seen yet"))
         assertEquals(1, count("start with the tests"))
+    }
+
+    // docs/12 W11: Claude's `UserPromptSubmit` says the harness took the words (#631), so the card
+    // is the operator's turn from then on — never "sending", never "not seen yet" however long the
+    // record takes — and the record still replaces it.
+    @Test
+    fun aReplyTheHarnessHeardIsTheOperatorsTurnUntilItsRecordReplacesIt() = runComposeUiTest {
+        val session = Session()
+        setContent { Screen(session) }
+
+        send("start with the tests")
+        runOnIdle { session.heard("start with the tests\n") }
+        waitForIdle()
+        assertEquals(0, count("sending…"))
+        assertEquals(1, count("you"))
+
+        mainClock.advanceTimeBy(UNSEEN_AFTER_MS + 1_000)
+        waitForIdle()
+        assertEquals(0, count("not seen yet"))
+        onNodeWithContentDescription("Resend this reply").assertDoesNotExist()
+        onNodeWithContentDescription("Dismiss this reply").assertDoesNotExist()
+
+        runOnIdle { session.recorded("start with the tests") }
+        waitForIdle()
+        assertEquals(1, count("start with the tests"), "the reply is drawn twice, or not at all")
+        assertEquals(1, count("you"))
+    }
+
+    @Test
+    fun aReplyFlaggedNotSeenIsDeliveredWhenTheHarnessHearsIt() = runComposeUiTest {
+        val session = Session()
+        setContent { Screen(session) }
+
+        send("are you there")
+        mainClock.advanceTimeBy(UNSEEN_AFTER_MS + 1_000)
+        waitForIdle()
+        assertEquals(1, count("not seen yet"))
+
+        runOnIdle { session.heard("are you there") }
+        waitForIdle()
+        assertEquals(0, count("not seen yet"))
+        onNodeWithContentDescription("Resend this reply").assertDoesNotExist()
+    }
+
+    // A slash command's record never matches what was typed, so a heard one that nothing retires
+    // goes when the window does — removed, not flagged: the harness said it took it.
+    @Test
+    fun aHeardReplyWhoseRecordNeverComesGoesAfterTheWindow() = runComposeUiTest {
+        val session = Session()
+        setContent { Screen(session) }
+
+        send("/compact")
+        runOnIdle { session.heard("/compact") }
+        waitForIdle()
+        assertEquals(1, count("/compact"))
+
+        mainClock.advanceTimeBy(UNSEEN_AFTER_MS + 1_000)
+        waitForIdle()
+        assertEquals(0, count("/compact"))
+        assertEquals(0, count("not seen yet"))
+    }
+
+    @Test
+    fun aHeardReplyGoesWhenTheAnswerToItArrives() = runComposeUiTest {
+        val session = Session()
+        setContent { Screen(session) }
+
+        send("/cost")
+        runOnIdle { session.heard("/cost") }
+        waitForIdle()
+        runOnIdle { session.answered("Total cost: $0.42") }
+        waitForIdle()
+        assertEquals(0, count("/cost"))
     }
 
     @Test

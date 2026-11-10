@@ -1,6 +1,7 @@
 //! herdr's structure ops on Kampr sessions: workspaces, tabs, agents, worktrees and layouts kept by
 //! the node, so herdr is the optional extra rather than the only way to have any (docs/17).
 
+use crate::hooks::launch;
 use crate::manage::{ManageError, ManageOp, Manager, native_argv, native_geometry};
 use kampr_core::tile::{Split, WHOLE, ratio};
 use kampr_native::{LayoutNode, NativeProvider, NewSession, PREFIX, TAB_PREFIX, WORKSPACE_PREFIX};
@@ -79,7 +80,13 @@ impl Manager<'_> {
                     .unwrap_or_else(|| "workspace".to_string());
                 let workspace = native.new_workspace(&name).map_err(failed)?;
                 let pane = self
-                    .start(native, op, native_argv(op), op.cwd.clone(), Some(&workspace))
+                    .start(
+                        native,
+                        op,
+                        native_argv(op, self.claude_settings),
+                        op.cwd.clone(),
+                        Some(&workspace),
+                    )
                     .await?;
                 Ok(
                     json!({ "pane": { "pane_id": pane }, "workspace_id": format!("{WORKSPACE_PREFIX}{workspace}") }),
@@ -90,7 +97,13 @@ impl Manager<'_> {
                     .workspace_at(native, op)
                     .ok_or_else(|| ManageError::BadRequest("tab.create needs a workspace".into()))?;
                 let pane = self
-                    .start(native, op, native_argv(op), op.cwd.clone(), Some(&workspace))
+                    .start(
+                        native,
+                        op,
+                        native_argv(op, self.claude_settings),
+                        op.cwd.clone(),
+                        Some(&workspace),
+                    )
                     .await?;
                 Ok(json!({ "pane": { "pane_id": pane }, "tab_id": kampr_native::tab_of(&pane) }))
             }
@@ -228,7 +241,11 @@ impl Manager<'_> {
             .find_map(|(k, path)| (k == kind).then_some(path))
             .ok_or_else(|| ManageError::BadRequest(format!("{kind} is not installed on this node")))?;
         let mut argv = vec![binary.display().to_string()];
-        argv.extend(op.args.clone().unwrap_or_default());
+        argv.extend(launch::args(
+            kind,
+            op.args.clone().unwrap_or_default(),
+            self.claude_settings,
+        ));
         let beside = self.local_at(op).filter(|l| l.starts_with(PREFIX));
         let cwd = op.cwd.clone().or_else(|| {
             let pane = beside.as_deref()?;
@@ -307,7 +324,7 @@ impl Manager<'_> {
             .start(
                 native,
                 op,
-                native_argv(op),
+                native_argv(op, self.claude_settings),
                 Some(path.to_string()),
                 Some(&workspace),
             )

@@ -12,6 +12,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.unit.dp
@@ -152,6 +153,50 @@ class PendingContextTest {
         waitForIdle()
         onNodeWithText("Tick what you want").assertExists()
         onNodeWithContentDescription("Send 0 answers").assertIsNotEnabled()
+    }
+
+    // docs/12 W11: a hook question says what it would act on, which a permission dialog read off
+    // the screen never could, and says where it came from.
+    private val hooked = ServerMsg.Pending(
+        pane = PANE_ID,
+        question = "Run the workspace tests",
+        header = "Bash",
+        source = "hook",
+        context = "cargo test --workspace --all-targets",
+        options = listOf(PendingOption("1", "Yes"), PendingOption("2", "Yes, and don't ask again for cargo test"), PendingOption("3", "No")),
+    )
+
+    @Test
+    fun aHookQuestionDrawsWhatItWouldActOnAndSaysWhoAsked() = runComposeUiTest {
+        setContent(strip(hooked))
+        waitForIdle()
+        onNodeWithText("cargo test --workspace --all-targets").assertExists()
+        onNodeWithText("Asked by Claude through Kampr's hooks", substring = true).assertExists()
+        onNodeWithContentDescription("Answer 3, No").assertExists()
+    }
+
+    // A command a screen long must not push the answers off a phone: it scrolls in its own box.
+    @Test
+    fun aLongContextLeavesTheAnswersOnScreen() = runComposeUiTest {
+        val long = (1..200).joinToString("\n") { "echo line $it of a very long heredoc that goes on" }
+        setContent(strip(hooked.copy(context = long)))
+        waitForIdle()
+        val screen = onRoot().fetchSemanticsNode().boundsInRoot
+        val box = onNodeWithText(long).fetchSemanticsNode().boundsInRoot
+        val no = onNodeWithContentDescription("Answer 3, No").fetchSemanticsNode().boundsInRoot
+        assertTrue(no.bottom <= screen.bottom, "the last answer is at ${no.bottom}, below the screen at ${screen.bottom}")
+        assertTrue(box.top < no.top, "the context is not above the answers")
+    }
+
+    @Test
+    fun aHookQuestionTakingSeveralAnswersStillSendsThem() = runComposeUiTest {
+        var submitted = 0
+        setContent(strip(TICKED.copy(source = "hook", context = null), onSubmit = { submitted += 1 }))
+        waitForIdle()
+        onNodeWithContentDescription("Send 2 answers").performSemanticsAction(SemanticsActions.OnClick)
+        waitForIdle()
+        assertEquals(1, submitted)
+        onNodeWithText("Takes several answers", substring = true).assertExists()
     }
 
     // A node that has never heard of any of this sends what it always sent, and the card is the

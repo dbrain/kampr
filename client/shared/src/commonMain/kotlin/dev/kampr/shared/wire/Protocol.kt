@@ -332,12 +332,14 @@ data class HerdDelta(
 // the harness writes a description against every option of an `AskUserQuestion` and Kampr used to
 // publish the names alone, so answering from a phone was choosing between four words with nothing
 // to choose on. `chosen` is whether it is ticked, and only ever moves on a `multi` question.
+// `text` is an option answered with words the operator types, which ride on its `answer`.
 @Serializable
 data class PendingOption(
     val key: String,
     val label: String,
     val detail: String? = null,
     val chosen: Boolean = false,
+    val text: Boolean = false,
 )
 
 // The header of something a transcript mentions but never carries: a pasted screenshot is ~730 KB
@@ -605,6 +607,27 @@ sealed interface ServerMsg {
         // ticks a box and the dialog stays up until something commits it (#421) — so a client that
         // ignores this offers a press that looks like an answer and is not.
         val multi: Boolean = false,
+        // What the request would act on — a command, a path, a URL — where the node knows it.
+        val context: String? = null,
+        // The question's own handle, where the node has one: an answer carries it back so a press
+        // made on a question that has since been replaced is refused rather than taken.
+        val id: String? = null,
+    ) : ServerMsg {
+        // An MCP server's form: Claude would block its own form if Kampr held it, so the node
+        // publishes it with nothing to press.
+        val terminalOnly: Boolean get() = source == "hook" && options.isEmpty()
+    }
+
+    // The harness took this prompt (Claude's `UserPromptSubmit`, #631), seconds before its record.
+    data class ConvoHeard(val pane: String, val text: String) : ServerMsg
+
+    // docs/12 W11. `state` is an open string: a value this client does not know is offered nothing.
+    data class ClaudeHooks(
+        val pane: String,
+        val state: String,
+        val scope: String? = null,
+        val ask: Boolean = false,
+        val project: String? = null,
     ) : ServerMsg
 
     data class Managed(
@@ -697,14 +720,14 @@ sealed interface ClientMsg {
 
     data class InputKeys(val pane: String, val keys: List<String>) : ClientMsg
 
-    data class Answer(val pane: String, val key: String) : ClientMsg
+    data class Answer(val pane: String, val key: String, val id: String? = null, val text: String? = null) : ClientMsg
 
     // Commits a question that takes several answers, once the ones wanted are ticked. A frame of
     // its own rather than a flag on `answer`, because `answer`'s key is required and reinterpreting
     // a field every installed node already reads is the one thing this wire does not do. The keys
     // are the node's: which ones commit is a measurement, and a phone already installed cannot be
     // corrected when a harness changes its mind.
-    data class AnswerSubmit(val pane: String) : ClientMsg
+    data class AnswerSubmit(val pane: String, val id: String? = null) : ClientMsg
 
     data class ConvoLoad(val pane: String, val before: String?) : ClientMsg
 

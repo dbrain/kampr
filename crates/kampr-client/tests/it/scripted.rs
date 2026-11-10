@@ -576,6 +576,101 @@ async fn caps_names_the_agent_kinds_the_node_has_rather_than_a_list_a_client_com
     );
 }
 
+#[tokio::test]
+async fn a_hooked_question_its_acknowledgement_and_the_hooks_offer_arrive_as_events() {
+    let mut fake = Fake::start().await;
+    let client = fake.client();
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    conn.greet(json!([node("01JNODE", "scripted")]), json!([]));
+    until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+    let pane = "01JNODE/w1:p1";
+
+    conn.send(json!({
+        "t": "pending", "pane": pane, "question": "Run the tests?", "header": "Bash",
+        "source": "hook", "context": "cargo nextest run -p kampr-tui",
+        "options": [{ "key": "1", "label": "Yes" }, { "key": "3", "label": "No" }]
+    }));
+    let asked = until(&mut events, |e| match e {
+        Event::Pending(p) => Some(p),
+        _ => None,
+    })
+    .await;
+    assert_eq!(asked.source, "hook");
+    assert_eq!(asked.context.as_deref(), Some("cargo nextest run -p kampr-tui"));
+    assert_eq!(asked.id, None, "an old node names no question");
+
+    conn.send(json!({
+        "t": "pending", "pane": pane, "question": "Run the tests?", "source": "hook", "id": "q7",
+        "options": [{ "key": "1", "label": "Yes" }, { "key": "3", "label": "No, say why", "text": true }]
+    }));
+    let named = until(&mut events, |e| match e {
+        Event::Pending(p) => Some(p),
+        _ => None,
+    })
+    .await;
+    assert_eq!(named.id.as_deref(), Some("q7"));
+    assert_eq!(
+        named.options.iter().map(|o| o.text).collect::<Vec<_>>(),
+        [false, true],
+        "an option answered with typed words says so"
+    );
+
+    conn.send(json!({ "t": "convo.heard", "pane": pane, "text": "ship it" }));
+    let heard = until(&mut events, |e| match e {
+        Event::ConvoHeard { pane, text } => Some((pane, text)),
+        _ => None,
+    })
+    .await;
+    assert_eq!(heard, (pane.to_string(), "ship it".to_string()));
+
+    conn.send(json!({
+        "t": "claude.hooks", "pane": pane, "state": "stale", "scope": "project",
+        "ask": true, "project": "/home/dbrain/dev/kampr"
+    }));
+    let hooks = until(&mut events, |e| match e {
+        Event::ClaudeHooks(hooks) => Some(hooks),
+        _ => None,
+    })
+    .await;
+    assert_eq!(hooks.pane, pane);
+    assert_eq!(hooks.state, "stale");
+    assert_eq!(hooks.scope.as_deref(), Some("project"));
+    assert!(hooks.ask);
+    assert_eq!(hooks.project.as_deref(), Some("/home/dbrain/dev/kampr"));
+
+    conn.send(json!({ "t": "claude.hooks", "pane": pane, "state": "absent", "ask": false }));
+    let bare = until(&mut events, |e| match e {
+        Event::ClaudeHooks(hooks) => Some(hooks),
+        _ => None,
+    })
+    .await;
+    assert_eq!((bare.scope, bare.project, bare.ask), (None, None, false));
+
+    assert!(client.answer_submit(pane, None));
+    assert_eq!(conn.recv().await, json!({ "t": "answer.submit", "pane": pane }));
+    assert!(client.answer_submit(pane, Some("q7")));
+    assert_eq!(
+        conn.recv().await,
+        json!({ "t": "answer.submit", "pane": pane, "id": "q7" })
+    );
+    assert!(client.answer(pane, "1", None, None));
+    assert_eq!(
+        conn.recv().await,
+        json!({ "t": "answer", "pane": pane, "key": "1" })
+    );
+    assert!(client.answer(pane, "1", Some("q7"), None));
+    assert_eq!(
+        conn.recv().await,
+        json!({ "t": "answer", "pane": pane, "key": "1", "id": "q7" })
+    );
+    assert!(client.answer(pane, "3", Some("q7"), Some("split the module first")));
+    assert_eq!(
+        conn.recv().await,
+        json!({ "t": "answer", "pane": pane, "key": "3", "id": "q7", "text": "split the module first" })
+    );
+}
+
 /// A node that turns every token away at the handshake, as one does for a revoked or expired
 /// device.
 async fn refusing() -> String {

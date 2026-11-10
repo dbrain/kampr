@@ -11,7 +11,7 @@ use futures_util::{SinkExt, StreamExt};
 use kampr_client::{Client, Event, PendingOption, Policy, Role, Session, Via};
 use kampr_core::Backoff;
 use kampr_term::{Cell, CellAttrs, Color};
-use kampr_tui::app::{App, Layout, Options, Placed};
+use kampr_tui::app::{App, Chips, Layout, Options, Placed};
 use kampr_tui::image::Images;
 use kampr_tui::mouse::{Click, Link, Menu, Mouse};
 use kampr_tui::render::fit::{Pan, Placement};
@@ -368,23 +368,27 @@ fn a_pending_prompt_sends_only_a_key_it_offered() {
             ..PendingOption::default()
         },
     ];
-    let rects = vec![Rect::new(0, 0, 8, 1), Rect::new(8, 0, 8, 1)];
+    let chips = Chips {
+        pane: "01JNODE/w1:p1".into(),
+        options,
+        rects: vec![Rect::new(0, 0, 8, 1), Rect::new(8, 0, 8, 1)],
+        submit: None,
+        id: Some("q7".into()),
+    };
     assert_eq!(
-        mouse.answer("01JNODE/w1:p1", &options, &rects, (9, 0), Role::Full),
+        mouse.answer(&chips, (9, 0), Role::Full),
         Click::Answer {
             pane: "01JNODE/w1:p1".into(),
-            key: "2".into()
+            key: "2".into(),
+            id: Some("q7".into()),
         }
     );
     assert_eq!(
-        mouse.answer("01JNODE/w1:p1", &options, &rects, (20, 0), Role::Full),
+        mouse.answer(&chips, (20, 0), Role::Full),
         Click::None,
         "nothing is offered outside an option, and an Enter is never synthesised (#43)"
     );
-    assert_eq!(
-        mouse.answer("01JNODE/w1:p1", &options, &rects, (9, 0), Role::Readonly),
-        Click::None
-    );
+    assert_eq!(mouse.answer(&chips, (9, 0), Role::Readonly), Click::None);
 }
 
 #[test]

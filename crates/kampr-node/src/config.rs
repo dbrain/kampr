@@ -45,6 +45,16 @@ pub struct Config {
     pub muffit: Muffit,
     #[serde(default)]
     pub docker: Docker,
+    #[serde(default)]
+    pub hooks: Hooks,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hooks {
+    /// Empty is `hooks.sock` in the node's private runtime directory.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub socket: String,
 }
 
 /// The Docker daemon on this machine (docs/19).
@@ -597,6 +607,7 @@ impl Config {
             native: Native::default(),
             muffit: Muffit::default(),
             docker: Docker::default(),
+            hooks: Hooks::default(),
         }
     }
 

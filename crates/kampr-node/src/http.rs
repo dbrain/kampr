@@ -905,6 +905,10 @@ async fn warm(
         herd.pane(pane).map(|p| p.agent_status) == Some(kampr_core::provider::AgentStatus::Blocked)
     };
     if let Some(pane) = query.pane.as_deref()
+        && let Some(asked) = node.hooks.question(pane)
+    {
+        body["pending"] = serde_json::to_value(crate::hooks::pending(pane, Some(asked))).unwrap_or_default();
+    } else if let Some(pane) = query.pane.as_deref()
         && blocked(pane)
         && let Some((session, local)) = node.resolve(pane)
         && let Some(link) = session.muffit_link(&local)

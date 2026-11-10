@@ -97,7 +97,7 @@ async fn an_agent_starts_as_a_kampr_session_beside_the_pane_and_only_where_it_is
         let bin = PathBuf::from(&c.native.worktrees).with_file_name("bin");
         std::fs::create_dir_all(&bin).unwrap();
         let fake = bin.join("claude");
-        std::fs::write(&fake, "#!/bin/sh\necho \"fake claude $*\"\nexec cat\n").unwrap();
+        std::fs::write(&fake, "#!/bin/sh\necho \"fake claude $1\"\nexec cat\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         c.fleet.path = format!("{}:/usr/bin:/bin", bin.display());

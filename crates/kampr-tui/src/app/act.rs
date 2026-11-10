@@ -181,19 +181,45 @@ impl App {
         }
         // **A prompt's keys are only the prompt's while the box is empty.** Once there is a draft,
         // `1` is a character somebody is writing and not an answer to a question behind it.
-        if self.composer.empty(&pane)
+        if self.composer.idle(&pane)
             && let crossterm::event::KeyCode::Char(c) = key.code
             && let Some(offered) = self.convo.answer(&pane, c)
         {
-            // Only the key that was offered. The node decides whether a submit key follows, per
-            // harness, and an Enter is never synthesised (#43).
-            self.client.answer(&pane, &offered);
+            let id = self.convo.pending(&pane).and_then(|p| p.id.clone());
+            self.press(&pane, &offered, id);
+            return true;
+        }
+        if self.composer.idle(&pane)
+            && key.code == crossterm::event::KeyCode::Enter
+            && key.modifiers.is_empty()
+            && self.convo.pending(&pane).is_some_and(|p| p.multi)
+        {
+            let id = self.convo.pending(&pane).and_then(|p| p.id.clone());
+            self.submit(&pane, id.as_deref());
+            return true;
+        }
+        if key.modifiers == crossterm::event::KeyModifiers::ALT
+            && key.code == crossterm::event::KeyCode::Char('o')
+            && self.convo.open_context(&pane)
+        {
+            self.teardown();
+            return true;
+        }
+        let role = self.client.state().role;
+        if key.modifiers == crossterm::event::KeyModifiers::ALT
+            && let crossterm::event::KeyCode::Char(c) = key.code
+            && let Some(choice) = self.convo.hook_key(&pane, c, role)
+        {
+            self.hooks(&pane, choice.act);
             return true;
         }
         // **Back out of a launched conversation before the box gets the key.** A draft the
         // composer would have cleared is kept: the reader is leaving a surface, not abandoning
         // what they were writing to the pane underneath it.
-        if key.code == crossterm::event::KeyCode::Esc && self.convo.leave_launched(&pane) {
+        if key.code == crossterm::event::KeyCode::Esc
+            && self.composer.answering(&pane).is_none()
+            && self.convo.leave_launched(&pane)
+        {
             return true;
         }
         // The transcript's own scrolling, which is a different surface from the pane's ring and
@@ -230,7 +256,76 @@ impl App {
                 self.reply(&pane, &text);
                 true
             }
+            crate::convo::Typed::Answer(answering, text) => {
+                if !self
+                    .client
+                    .answer(&pane, &answering.key, answering.id.as_deref(), Some(&text))
+                {
+                    self.note("not delivered — the socket is down");
+                }
+                true
+            }
         }
+    }
+
+    /// Only the key that was offered. The node decides whether a submit key follows, per harness,
+    /// and an Enter is never synthesised (#43). An option answered with words opens the box for
+    /// them instead, and sends nothing until they are written.
+    pub(super) fn press(&mut self, pane: &str, key: &str, id: Option<String>) {
+        let Some(pending) = self.convo.pending(pane) else {
+            return;
+        };
+        let Some(option) = pending.options.iter().find(|o| o.key == key) else {
+            return;
+        };
+        if !option.text {
+            self.client.answer(pane, key, id.as_deref(), None);
+            return;
+        }
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        let answering = crate::convo::Answering {
+            key: key.to_string(),
+            label: option.label.clone(),
+            id,
+            multi: pending.multi,
+        };
+        self.composer.answer_with(pane, answering);
+    }
+
+    pub(super) fn submit(&mut self, pane: &str, id: Option<&str>) {
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        if !self.convo.submittable(pane) {
+            self.note("tick an answer first");
+            return;
+        }
+        if !self.client.answer_submit(pane, id) {
+            self.note("not delivered — the socket is down");
+        }
+    }
+
+    pub(super) fn hooks(&mut self, pane: &str, act: crate::convo::Hooking) {
+        use crate::convo::Hooking;
+        let op = match act {
+            Hooking::Later => {
+                self.convo.later(pane);
+                return;
+            }
+            Hooking::Install(mode) => {
+                serde_json::json!({ "op": "claude.hooks.install", "at": pane, "mode": mode })
+            }
+            Hooking::Never => serde_json::json!({ "op": "claude.hooks.decline", "at": pane }),
+        };
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        self.send_manage(op);
     }
 
     /// The text, then the carriage return, as **two** messages — so a harness that debounces sees
@@ -655,6 +750,9 @@ impl App {
             View::Conversation => View::Terminal,
         };
         self.views.insert(pane.clone(), next);
+        if next == View::Conversation {
+            self.convo.reopened(&pane);
+        }
         self.teardown();
         let name = match next {
             View::Terminal => "terminal",

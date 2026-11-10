@@ -29,18 +29,7 @@ struct Chain {
 impl Drop for Chain {
     fn drop(&mut self) {
         drop(self.child.take());
-        kill_keepers(&self.grand.path().join("native"));
-    }
-}
-
-fn kill_keepers(root: &Path) {
-    for session in kampr_keep::list(root).unwrap_or_default() {
-        if let Some(keeper) = session.keeper() {
-            unsafe {
-                libc::kill(-(keeper.child as i32), libc::SIGKILL);
-                libc::kill(keeper.keeper as i32, libc::SIGKILL);
-            }
-        }
+        kampr_testkit::stop_keepers(&self.grand.path().join("native"));
     }
 }
 

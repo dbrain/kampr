@@ -120,6 +120,8 @@ pub struct PendingOption {
     pub detail: Option<String>,
     /// Whether it is ticked, on a question that takes several answers.
     pub chosen: bool,
+    /// Answered with words the operator types, sent as the answer's `text`.
+    pub text: bool,
 }
 
 /// What a node can be asked to make, as opposed to what it can do — the answer to a `caps`
@@ -156,9 +158,13 @@ pub struct Pending {
     ///
     /// **A press means something different here.** On a single-answer question the key this
     /// client sends answers it and the dialog closes; on this one the same key *ticks a box* and
-    /// the dialog stays up until it is committed (#421). This client has no commit affordance, so
-    /// what it can honestly do is say so rather than let a chip read as an answer.
+    /// the dialog stays up until `answer.submit` commits it (#421).
     pub multi: bool,
+    /// What a hook-owned request would act on: a command, a path, a URL, or its input as JSON.
+    pub context: Option<String>,
+    /// Which question this is, where the node names one. An answer carries it back so the node can
+    /// refuse a press aimed at a question that has since been replaced.
+    pub id: Option<String>,
 }
 
 impl Pending {
@@ -166,6 +172,18 @@ impl Pending {
     pub fn outstanding(&self) -> bool {
         self.question.is_some()
     }
+}
+
+/// Where Kampr's Claude hooks stand for a pane's Claude. `state` and `scope` are open strings: a
+/// word this build does not know offers nothing rather than a guess.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ClaudeHooks {
+    pub pane: String,
+    pub state: String,
+    pub scope: Option<String>,
+    pub ask: bool,
+    pub project: Option<String>,
 }
 
 /// One page of a transcript, envelope decoded and turns left as they arrived.
@@ -281,6 +299,12 @@ pub enum Event {
         clear: Option<String>,
     },
     Pending(Pending),
+    /// Claude's own hook saying it accepted this prompt, ahead of the transcript's record of it.
+    ConvoHeard {
+        pane: String,
+        text: String,
+    },
+    ClaudeHooks(ClaudeHooks),
     /// The answer to a `caps` request: the agent kinds this node knows and the sessions it has.
     Caps(NodeCaps),
     /// A `managed` ack nothing was waiting on — one sent without an `rid`, or one whose caller

@@ -12,7 +12,7 @@ mod upgrade;
 pub use ctl::{borrow, claim_size, close, state};
 pub use dir::{
     Ending, Exit, Host, HostGuard, How, Image, KeeperInfo, SessionDir, Size, Spec, attach_holder, list,
-    list_tree, make_private_dir, new_id, register_host, root, view_holder,
+    list_tree, make_private_dir, new_id, register_host, root, runtime, view_holder,
 };
 pub use keeper::{HANDOVER, UNWATCHED, serve};
 pub use launch::{Launch, UNIT_PREFIX, spawn, unit_name};

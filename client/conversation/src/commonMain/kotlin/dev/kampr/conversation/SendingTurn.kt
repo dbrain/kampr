@@ -12,7 +12,8 @@ import dev.kampr.shared.wire.Turn
 
 // `turn.kind`s this client writes and the wire never carries, for a reply it has sent and the
 // harness has not yet been seen to take. Not a record, and not queued either: nothing on the pane
-// has said it has the words at all.
+// has said it has the words at all. A delivered one has none — the harness said it took the words
+// (`convo.heard`), so it is the operator's turn until its record takes its place.
 const val SENDING = "sending"
 const val UNDELIVERED = "undelivered"
 const val UNSEEN = "unseen"
@@ -25,6 +26,7 @@ fun sendingTurn(send: PendingSend): Turn = Turn(
         PendingSend.State.Sending -> SENDING
         PendingSend.State.Undelivered -> UNDELIVERED
         PendingSend.State.Unseen -> UNSEEN
+        PendingSend.State.Delivered -> null
     },
 )
 
@@ -40,7 +42,7 @@ fun SendingCard(
     onDismiss: () -> Unit,
 ) {
     val turn = sendingTurn(send)
-    if (send.state == PendingSend.State.Sending) {
+    if (send.state == PendingSend.State.Sending || send.state == PendingSend.State.Delivered) {
         TurnView(turn, "", emptyList(), {}, attachments = attachments, now = now, agent = agent)
         return
     }

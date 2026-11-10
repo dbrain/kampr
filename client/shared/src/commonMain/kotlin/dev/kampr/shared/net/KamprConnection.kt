@@ -65,7 +65,12 @@ class KamprConnection(
     private val liveness: Liveness = Liveness(),
 ) {
     private var loop: Job? = null
-    private var outbox = Channel<ClientMsg>(Channel.BUFFERED)
+
+    // Unbounded because the browser is one thread: a burst of typing is all queued before the pump
+    // runs once, and a bounded queue dropped the overflow of a live socket as lost keystrokes. A
+    // socket that stops draining is found by the silence deadline, and `discardTyping` drops what
+    // it was holding.
+    private var outbox = Channel<ClientMsg>(Channel.UNLIMITED)
     private var live = false
 
     // A pane can be on screen twice at once — the pane screen and any number of mosaic cells —
@@ -97,7 +102,7 @@ class KamprConnection(
         scope.launch {
             loop?.cancelAndJoin()
             endpoint = target
-            outbox = Channel(Channel.BUFFERED)
+            outbox = Channel(Channel.UNLIMITED)
             if (foreground == null) {
                 foreground = watchForeground { shown ->
                     store.looked(shown)
@@ -337,9 +342,8 @@ class KamprConnection(
         }
     }
 
-    // A full outbox is the backlog a heartbeat exists to find, so a dropped ping is left dropped.
-    // Stamping a send that did not happen would only turn the next round trip into a lie about the
-    // latency, and the silence deadline above is what notices either way.
+    // A closed outbox takes no ping, and stamping a send that did not happen would turn the next
+    // round trip into a lie about the latency.
     private fun ping() {
         val n = ++pingSeq
         if (outbox.trySend(ClientMsg.Ping(n)).isSuccess) pingSentAt[n] = liveness.monotonic()

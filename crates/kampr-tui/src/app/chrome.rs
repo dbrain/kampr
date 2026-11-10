@@ -46,6 +46,9 @@ pub struct Chips {
     pub pane: String,
     pub options: Vec<PendingOption>,
     pub rects: Vec<Rect>,
+    pub submit: Option<Rect>,
+    /// The question these chips were drawn for, so a click answers that one and no later one.
+    pub id: Option<String>,
 }
 
 /// The rectangles the last frame actually drew, so a click resolves against what is on screen
@@ -64,6 +67,7 @@ pub struct Layout {
     /// The herd view's pane rows — the triage screen a desk cannot draw.
     pub herd: Vec<(String, Rect)>,
     pub chips: Vec<Chips>,
+    pub hooks: Vec<(String, crate::convo::HookChoice, Rect)>,
     /// An attachment's marker: pane, id, and the row it was drawn on.
     pub attachments: Vec<(String, String, Rect)>,
     pub status: Rect,
@@ -478,7 +482,12 @@ impl App {
                     pane: pane.to_string(),
                     options: pending.options.clone(),
                     rects: marks.options,
+                    submit: marks.submit,
+                    id: pending.id.clone(),
                 });
+            }
+            for (choice, rect) in marks.hooks {
+                layout.hooks.push((pane.to_string(), choice, rect));
             }
             for (id, rect) in marks.attachments {
                 layout.attachments.push((pane.to_string(), id, rect));

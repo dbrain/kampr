@@ -269,5 +269,22 @@
     "op": "docker.release",
     "node": "01JNODE",
     "id": "f49c60fac115"
+  },
+  "claude.hooks.install": {
+    "t": "manage",
+    "op": "claude.hooks.install",
+    "at": "01JNODE/w3:p2",
+    "mode": "user"
+  },
+  "claude.hooks.install.project": {
+    "t": "manage",
+    "op": "claude.hooks.install",
+    "at": "01JNODE/w3:p2",
+    "mode": "project"
+  },
+  "claude.hooks.decline": {
+    "t": "manage",
+    "op": "claude.hooks.decline",
+    "at": "01JNODE/w3:p2"
   }
 }

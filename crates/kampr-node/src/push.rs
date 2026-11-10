@@ -168,6 +168,7 @@ struct PushCtx {
     push: Arc<Push>,
     store: Store,
     sessions: Arc<Sessions>,
+    hooks: Arc<crate::hooks::Hooks>,
     herd: watch::Receiver<Arc<HerdModel>>,
     queues: Queues,
 }
@@ -180,6 +181,7 @@ pub fn start(
     vapid: Option<Arc<Vapid>>,
     store: Store,
     sessions: Arc<Sessions>,
+    hooks: Arc<crate::hooks::Hooks>,
     herd: watch::Receiver<Arc<HerdModel>>,
 ) -> (Arc<Push>, Vec<tokio::task::JoinHandle<()>>) {
     let Some(vapid) = vapid else {
@@ -201,6 +203,7 @@ pub fn start(
         push: push.clone(),
         store,
         sessions,
+        hooks,
         herd,
         queues,
     };
@@ -213,11 +216,12 @@ async fn run(ctx: PushCtx) {
         push,
         store,
         sessions,
+        hooks,
         herd,
         queues,
     } = ctx;
     let feeds = push.changes.clone().expect("a live push channel has a feed");
-    let watcher = tokio::spawn(watch_herd(herd, sessions, feeds));
+    let watcher = tokio::spawn(watch_herd(herd, sessions, hooks, feeds));
     // A window per kind, not one: a `done` landing beside a `blocked` must not hold the question
     // back, and none may be folded into another's payload.
     let quiet = tokio::spawn(pipeline(push.clone(), store.clone(), queues.done));
@@ -257,7 +261,12 @@ async fn pipeline(push: Arc<Push>, store: Store, mut changes: mpsc::Receiver<Cha
 /// **One pass over the herd, two sets, two baselines.** They are tracked separately so a change
 /// one kind could not queue never advances the other's baseline, and so a herd rebuild that moved
 /// only one of them wakes only the devices that kind reaches.
-async fn watch_herd(mut herd: watch::Receiver<Arc<HerdModel>>, sessions: Arc<Sessions>, out: Feeds) {
+async fn watch_herd(
+    mut herd: watch::Receiver<Arc<HerdModel>>,
+    sessions: Arc<Sessions>,
+    hooks: Arc<crate::hooks::Hooks>,
+    out: Feeds,
+) {
     let mut previously: HashMap<Kind, HashSet<String>> = HashMap::new();
     loop {
         if herd.changed().await.is_err() {
@@ -298,7 +307,7 @@ async fn watch_herd(mut herd: watch::Receiver<Arc<HerdModel>>, sessions: Arc<Ses
                     agent: pane.agent.clone(),
                     label: pane.label.clone().or_else(|| pane.workspace.clone()),
                     title: pane.title.clone(),
-                    detail: detail_for(kind, pane, &sessions).await,
+                    detail: detail_for(kind, pane, &sessions, &hooks).await,
                 });
             }
             // Newest first: a batch is titled by its first agent, and the one that just changed
@@ -363,9 +372,14 @@ fn status_for(kind: Kind) -> AgentStatus {
 /// 30.7 MB one (#409), inside a 900 ms window, for every pane that finished at once. The working
 /// directory is already in the herd model, tells three simultaneous agents apart, and is not a
 /// guess about what the agent did.
-async fn detail_for(kind: Kind, pane: &PaneEntry, sessions: &Sessions) -> Option<String> {
+async fn detail_for(
+    kind: Kind,
+    pane: &PaneEntry,
+    sessions: &Sessions,
+    hooks: &crate::hooks::Hooks,
+) -> Option<String> {
     match kind {
-        Kind::Blocked => question_for(sessions, &pane.id, pane.agent.as_deref()).await,
+        Kind::Blocked => question_for(sessions, hooks, &pane.id, pane.agent.as_deref()).await,
         Kind::Done => pane.cwd.as_deref().map(|cwd| home_relative(cwd, home())),
         Kind::Adoption => None,
     }
@@ -390,7 +404,15 @@ fn home_relative(path: &str, home: Option<&str>) -> String {
 
 /// The question, read the same way the `pending` message reads it — off the screen, because
 /// Claude publishes nothing about a pending request until after it is answered (probe #42).
-async fn question_for(sessions: &Sessions, global: &str, agent: Option<&str>) -> Option<String> {
+async fn question_for(
+    sessions: &Sessions,
+    hooks: &crate::hooks::Hooks,
+    global: &str,
+    agent: Option<&str>,
+) -> Option<String> {
+    if let Some(asked) = hooks.question(global) {
+        return Some(asked.question);
+    }
     let session = sessions.route(global)?;
     let local = session.local_pane(global)?;
     if let Some(link) = session.muffit_link(&local) {
@@ -477,6 +499,7 @@ mod tests {
         config.native.keeper = kampr_testkit::keeper().display().to_string();
         config.native.launch = "detached".into();
         let sessions = Sessions::open(&config, std::path::Path::new("/nowhere/state"));
+        let hooks = crate::hooks::unserved();
         let native = sessions.primary().native.clone().expect("a native provider");
         let pane = native
             .create(kampr_native::NewSession {
@@ -490,7 +513,7 @@ mod tests {
         let global = sessions.primary().global_pane(&pane);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let asked = loop {
-            let asked = question_for(&sessions, &global, Some("claude")).await;
+            let asked = question_for(&sessions, &hooks, &global, Some("claude")).await;
             if asked.is_some() || tokio::time::Instant::now() > deadline {
                 break asked;
             }
@@ -520,6 +543,25 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn a_hooks_question_is_the_notifications_before_any_screen_is_read() {
+        let hooks = crate::hooks::unserved();
+        let pane = "01JHOOKED/n:01hooked";
+        hooks.asking(
+            pane,
+            &serde_json::json!({
+                "tool_name": "Bash", "tool_use_id": "toolu_push",
+                "tool_input": { "command": "rm -rf build", "description": "Clean the build" },
+            }),
+        );
+        assert_eq!(
+            question_for(&sessions(), &hooks, pane, Some("claude"))
+                .await
+                .as_deref(),
+            Some("Clean the build")
+        );
+    }
+
     struct Watched {
         herd: watch::Sender<Arc<HerdModel>>,
         blocked: mpsc::Receiver<Change>,
@@ -531,7 +573,7 @@ mod tests {
     fn watching(depth: usize) -> Watched {
         let (feeds, queues) = feeds(depth);
         let (herd, herd_rx) = watch::channel(Arc::new(HerdModel::default()));
-        let task = tokio::spawn(watch_herd(herd_rx, sessions(), feeds));
+        let task = tokio::spawn(watch_herd(herd_rx, sessions(), crate::hooks::unserved(), feeds));
         Watched {
             herd,
             blocked: queues.blocked,

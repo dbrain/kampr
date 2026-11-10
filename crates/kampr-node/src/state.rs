@@ -55,6 +55,7 @@ pub struct Node {
     /// Controllers held open on the operator's behalf by `pane.size`. Empty on every node that has
     /// never been asked to reshape a pane, which is nearly all of them.
     pub holds: Arc<crate::holds::PaneHolds>,
+    pub hooks: Arc<crate::hooks::Hooks>,
     pub auth: Arc<Auth>,
     pub push: Arc<crate::push::Push>,
     /// One per node, because the rate limit it exists for is per *desktop*: a Toaster made at the
@@ -126,10 +127,14 @@ impl Node {
             tokio::spawn(crate::sessions::discover(sessions.clone())),
         ]);
 
+        let (hooks, mut hook_tasks) =
+            crate::hooks::Hooks::start(&config, state_dir, sessions.clone(), herd.subscribe());
+        tasks.append(&mut hook_tasks);
         let (push, mut push_tasks) = crate::push::start(
             load_vapid(&config, state_dir, auth.tier()),
             auth.store().clone(),
             sessions.clone(),
+            hooks.clone(),
             herd.subscribe(),
         );
         tasks.append(&mut push_tasks);
@@ -147,6 +152,7 @@ impl Node {
             peers,
             convo_warmth: Arc::new(crate::warm::ConvoWarmth::default()),
             holds: Arc::new(crate::holds::PaneHolds::default()),
+            hooks,
             auth,
             push,
             toaster: crate::toast::Toaster::default(),
@@ -888,6 +894,7 @@ async fn build_model(
             // 34 us on a hit and 1.7 us on a pane that is not an agent, which is what makes it
             // affordable once per pane per rebuild.
             let marker = journals.marker(&processes);
+            watched.extend(marker.as_ref().and_then(|m| m.record.clone()));
             // And the name the session actually goes by, off the transcript the pane is already
             // known to be on — folded from the byte the last rebuild reached rather than read
             // whole. A pane with no transcript yet has only what the marker says.
@@ -1093,6 +1100,7 @@ mod tests {
             name_source: source.map(str::to_string),
             status: None,
             transcript: None,
+            record: None,
             started: kampr_journal::Started::Unknown,
         }
     }

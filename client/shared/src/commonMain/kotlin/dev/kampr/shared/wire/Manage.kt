@@ -22,6 +22,8 @@ enum class DockerAction(val wire: String) {
     Release("release"),
 }
 
+enum class HooksScope(val wire: String) { User("user"), Project("project") }
+
 enum class ZoomMode(val wire: String) { Toggle("toggle"), On("on"), Off("off") }
 
 // `Once` resizes and hands the PTY straight back; `Hold` keeps the claim so the size survives on a
@@ -281,6 +283,14 @@ sealed interface ManageOp {
     data class Docker(val action: DockerAction, val node: String, val id: String) : ManageOp {
         override val op: String get() = "docker.${action.wire}"
     }
+
+    data class ClaudeHooksInstall(val at: String, val mode: HooksScope) : ManageOp {
+        override val op: String get() = "claude.hooks.install"
+    }
+
+    data class ClaudeHooksDecline(val at: String) : ManageOp {
+        override val op: String get() = "claude.hooks.decline"
+    }
 }
 
 fun ManageOp.fields(): JsonObject = buildJsonObject {
@@ -435,6 +445,13 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
             put("node", node)
             put("id", id)
         }
+
+        is ManageOp.ClaudeHooksInstall -> {
+            put("at", at)
+            put("mode", mode.wire)
+        }
+
+        is ManageOp.ClaudeHooksDecline -> put("at", at)
     }
 }
 

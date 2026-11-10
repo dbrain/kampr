@@ -1175,12 +1175,55 @@ every other agent kind serves its transcript and nothing more.
   "header": "Indentation",              // the dialog's own title, absent where it draws none
   "multi": false,                       // whether it takes several answers at once
   "options": [ { "key": "1", "label": "Tabs", "detail": "Indent with tab characters." },
-               { "key": "2", "label": "Two spaces", "detail": "Indent with two spaces per level." } ],
-  "source": "screen" }                  // "transcript" | "screen"
+               { "key": "2", "label": "Two spaces", "detail": "Indent with two spaces per level." },
+               { "key": "3", "label": "Type something", "text": true } ],  // `text`: answered with words
+  "source": "screen",                   // "transcript" | "screen" | "hook"
+  "context": "echo probe > probe.txt", // what a hooked tool would act on; absent otherwise
+  "id": "toolu_01ABC" }                 // which question, on a hook's only; "<id>#<n>" per question of several
 ```
 `source` records where the question came from. Claude does **not** write a pending tool request to its
 transcript before approval, so its questions come from the screen; Codex does, so an unmatched tool
 call is its signal (probes #42, #43). **Clients must not care which.**
+
+**`source: "hook"` is Claude telling the node itself**, through a `PermissionRequest` hook the
+operator installed (`claude.hooks` below; [docs/12 W11](./12-harness-briefs.md)). The hook fires
+before the pane reports `blocked` and carries the tool's input, so nothing is read off the screen:
+a tool's card is `header` the tool, `question` its description (or `Allow <tool>?`), `context` the
+command, path, URL or query it would act on (otherwise its input as compact JSON, cut at 2000
+characters), and options `1` Yes, `2` "Yes, and …" naming the suggestions Claude made (only when it
+made some, [#625](./03-probe-log.md)), `3` No. An `AskUserQuestion` is one question at a time,
+`header` saying `· 2 of 3` where there are several. `answer` and `answer.submit` work exactly as
+they do for a screen question; the node replies to the hook rather than pressing keys. While a hook
+owns a pane's question the screen is never read for one; when a hook's question goes and the pane
+is still blocked, the screen is read again.
+
+Three more shapes come from hooks:
+
+- **A plan** (`ExitPlanMode`): `header` "Plan", `question` "Approve Claude's plan?", `context` the
+  plan itself (cut at 20 000 characters rather than 2000, since the plan is what is being read).
+  Options `1` "Yes, auto-accept edits", `2` "Yes, manually approve edits", `3` "No, tell Claude
+  what to change" with `text: true`; the words are what Claude revises the plan from, and `3`
+  without any declines it plainly ([#635](./03-probe-log.md)).
+- **A subagent's request**: `header` gains `· <agent type> subagent` (`Bash · general-purpose
+  subagent`). Claude draws no dialog for it on the main screen ([#636](./03-probe-log.md)), so it is
+  not let go when the pane stops being `blocked`.
+- **An MCP server's form** (elicitation): `header` `<server> · MCP`, `question` the server's
+  message, `context` its fields one per line (`Colour (colour) · string · required`), and **no
+  options**. A `pending` with a question and empty `options` means *answer at the terminal*: Claude
+  draws no form until the hook returns ([#637](./03-probe-log.md)), so the node never holds it, and
+  any `answer` on it is refused. It clears when the form is answered or dismissed at the desk.
+
+**`text: true` on an option means it is answered with words**, sent as `answer.text`. Every
+`AskUserQuestion` ends with one, `Type something` ([#639](./03-probe-log.md)): on a single-answer
+question the words are the answer, on a multiple-answer one they are committed after the ticked
+labels, joined with `", "` ([#634](./03-probe-log.md)), and a press with none is refused. Words sent
+on an option without `text` are refused (`bad_request`, "this answer takes no words") rather than
+dropped, so a client that got this wrong finds out.
+
+**Requests queue per pane.** Claude can hold several permission requests at once; the oldest is the
+one published, and the next is published when it is answered or let go. `id` is the request's
+`tool_use_id` (with `#<n>` for each question of a multi-question `AskUserQuestion`), and a client
+that sends it back on `answer` / `answer.submit` cannot have a late press land on the next request.
 
 **A prompt is cleared by the same message with `question: null, options: []`.** There is no separate
 "resolved" message — a client should treat null as "no prompt outstanding" and hide the strip.
@@ -1200,7 +1243,7 @@ offers a press that looks like an answer and silently is not.
 
 ### `answer.submit`
 ```jsonc
-client -> node  { "t": "answer.submit", "pane": "01J/w1:p1" }
+client -> node  { "t": "answer.submit", "pane": "01J/w1:p1", "id": "toolu_01ABC#1" }   // id optional
 ```
 
 Commits a question that takes several answers, once the operator has ticked the ones they want with
@@ -1335,6 +1378,48 @@ background shell's `tool_result` arrives *at launch*, within 300–400 ms, carry
 an asynchronous agent's says `async_launched`. Neither is an ending, so an outstanding call finds
 nothing. The ending is the harness's own completion notification — except for a synchronous agent,
 which never gets one and is closed by its own real result.
+
+### `convo.heard`
+```jsonc
+node -> client  { "t": "convo.heard", "pane": "01J/w1:p1", "text": "push the branch" }
+```
+
+Claude's own `UserPromptSubmit` hook saying a prompt was submitted, with its exact text
+([#631](./03-probe-log.md)), to every socket watching the pane's conversation. A client's sending
+card whose text matches it is delivered, drawn as the operator's turn, until the transcript's
+record replaces it. Only a hooked Claude sends it; a client must not wait for it.
+
+A hooked pane's **live turn** (`id: "live"`) is Claude's own `MessageDisplay` deltas for the message
+it is drawing, concatenated, rather than the screen's lift, and it is retired the same way.
+
+### `claude.hooks`
+```jsonc
+node -> client  { "t": "claude.hooks", "pane": "01J/w1:p1", "state": "absent",   // current|stale|absent
+                  "scope": "user",                // user|project, where Kampr's entries are; absent with none
+                  "ask": true,                    // false once the operator said never, on this node
+                  "project": "/home/me/dev/app" } // where a project install writes; absent with no cwd
+```
+
+Sent with a Claude pane's conversation when it opens and again after either op below. **current**
+is a settings file holding exactly the hooks this node would install, with this node's executable
+and socket; **stale** is Kampr entries that differ (a moved binary, a release that changed the
+set); **absent** is neither. A client offers to install on a pane that is not current while `ask`
+holds. A Claude this node started itself — herdr's `agent.start` or a Kampr session running
+`claude` — is handed the same hooks in `--settings`, so where no file holds them it is reported
+**current** with no `scope`, and is not offered the install.
+
+```jsonc
+{ "t":"manage", "op":"claude.hooks.install", "at":"01J/w1:p1", "mode":"user" }    // or "project"
+{ "t":"manage", "op":"claude.hooks.decline", "at":"01J/w1:p1" }
+```
+
+`user` writes `~/.claude/settings.json` (the node's journal home); `project` writes
+`<project>/.claude/settings.local.json`, the local file because the command names a path on this
+machine. Install rewrites the file in place, every key in its order, Kampr's old entries removed
+first, and removes Kampr's entries from the other scope. A file that is not JSON is refused with
+`bad_request` in words and left untouched. `decline` records `ask: false` in the node's state
+directory. Both need write, are audited, and go to the node that owns the pane. Each re-sends
+`claude.hooks` to the sockets watching a conversation on that node.
 
 ### `convo.composer`
 ```jsonc
@@ -1538,6 +1623,13 @@ the same path but is **not** an error and does not close anything — it arrives
 { "t": "answer",      "pane": "01J.../w3:p2", "key": "1" }
 // The NODE decides whether a submit key follows, per harness — Claude selects on the digit alone,
 // Codex needs Enter (probe #43). A client sends only the key it was offered in `pending.options`.
+{ "t": "answer",      "pane": "01J.../w3:p2", "key": "1", "id": "toolu_01ABC" }
+// Optional `id`: the `pending.id` the press was for. A node refuses a press whose `id` is not the
+// question standing now (`bad_request`, "that question has already been answered") and decides
+// nothing. `answer.submit` takes the same `id`. Absent is a press for whatever stands.
+{ "t": "answer",      "pane": "01J.../w3:p2", "key": "3", "text": "Mango, but only ripe ones" }
+// Optional `text`: the words for an option offered with `text: true` (`pending` above). Refused
+// on any other option. A node that predates it ignores the field.
 { "t": "convo.load",  "pane": "01J.../w3:p2", "before": "opaque" }
 
 // Search this pane's WHOLE scrollback. `backward` defaults to true, the way `/` does in a pager;
@@ -2401,7 +2493,7 @@ local one — `"<node_id>/<pane_id>"` was already the id, so the routing was alr
   Any node can hold peers, dial hubs, or both; a hub may itself be a peer of another hub.
 - **The link carries this protocol, backwards.** After the handshake the *hub* is the client: it
   sends `watch` / `unwatch` / `input` / `answer` / `manage` / `ping` and receives `hello` / `herd` /
-  `styles` / `grid.*` / `scrollback` / `pending` / `managed` / `pong`. The peer serves it with the
+  `styles` / `grid.*` / `scrollback` / `pending` / `convo.*` / `claude.hooks` / `managed` / `pong`. The peer serves it with the
   same session code that serves a browser, so every rule below — the role gate, the bounded queue,
   the purge policy, the audit line — applies at the mesh hop because it is the same code.
 

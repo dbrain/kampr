@@ -24,6 +24,8 @@ pub struct SessionMarker {
     /// harness has stopped writing to the terminal.
     pub status: Option<String>,
     pub transcript: Option<PathBuf>,
+    /// The file it was read from, rewritten in place on every status change (#344).
+    pub record: Option<PathBuf>,
     /// When *this run* of the harness started, from the marker's own `startedAt`.
     ///
     /// **The one fact the transcript does not hold, and the harness has been writing it all

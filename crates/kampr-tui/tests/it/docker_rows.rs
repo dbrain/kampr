@@ -399,7 +399,7 @@ fn a_docker_that_does_not_answer_is_offered_and_said_and_a_host_without_docker_h
 }
 
 #[test]
-fn the_switch_is_drawn_on_the_host_line_with_its_counts_capped_at_nine() {
+fn the_switch_is_drawn_on_the_host_line_with_its_counts_two_cells_wide() {
     let mut n = host("01JA", "front");
     n["docker"] = json!(true);
     n["containers"] = json!(
@@ -415,7 +415,7 @@ fn the_switch_is_drawn_on_the_host_line_with_its_counts_capped_at_nine() {
     let screen = painted(&rows, 40);
     let line = screen.lines().find(|l| l.contains("front")).unwrap_or_default();
     assert!(
-        line.contains("›_") && line.contains("▣ 9+") && line.contains("◉ 1"),
+        line.contains("›_") && line.contains("▣ 12 ") && line.contains("◉ 1  "),
         "{screen}"
     );
     assert!(
@@ -515,4 +515,48 @@ fn a_failing_adoption_is_listed_whatever_its_state_and_says_so() {
     let rows = sidebar::rows(&herd, Order::Grouped, None, &open, NOW, |_| None);
     let screen = painted(&rows, 40);
     assert_eq!(screen.matches("adoption failing").count(), 2, "{screen}");
+}
+
+fn host_line(running: usize) -> String {
+    let mut n = host("01JA", "front");
+    n["docker"] = json!(true);
+    n["containers"] = json!(
+        (0..running)
+            .map(|i| container(&format!("c{i:03}"), "running"))
+            .collect::<Vec<_>>()
+    );
+    let herd = herd(json!([n]), json!([term("01JA/w1:p1")]));
+    let rows = sidebar::rows(&herd, Order::Grouped, None, &Hosts::default(), NOW, |_| None);
+    let screen = painted(&rows, 40);
+    screen
+        .lines()
+        .find(|l| l.contains("front"))
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn a_count_holds_two_cells_and_past_ninety_nine_is_nine_plus() {
+    for (running, shown) in [
+        (1, "▣ 1 "),
+        (7, "▣ 7 "),
+        (42, "▣ 42"),
+        (99, "▣ 99"),
+        (100, "▣ 9+"),
+        (250, "▣ 9+"),
+    ] {
+        let line = host_line(running);
+        let cell: String = line[line.find("▣").unwrap()..].chars().take(4).collect();
+        assert_eq!(cell, shown, "{running} running");
+    }
+    let starts: Vec<usize> = [1, 7, 42, 250]
+        .map(|running| {
+            let line = host_line(running);
+            line[..line.find("›_").unwrap()].chars().count()
+        })
+        .to_vec();
+    assert!(
+        starts.windows(2).all(|w| w[0] == w[1]),
+        "the switch starts in the same column: {starts:?}"
+    );
 }

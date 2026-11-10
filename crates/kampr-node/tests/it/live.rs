@@ -4803,6 +4803,23 @@ async fn every_client_op_lands_on_a_real_herd() {
             Some("claude"),
             "herdr had labelled the pane and the node's herd never carried it",
         );
+        // The hooks ride in `--settings`, one argv entry, as herdr hands args over (#642).
+        match h.node.hooks.launch_settings() {
+            Some(settings) => {
+                let launched = std::fs::read_dir("/proc").unwrap().flatten().any(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|p| p.parse::<u32>().ok())
+                        .is_some_and(|pid| kampr_node::hooks::launch::started_with(pid, &settings))
+                });
+                assert!(
+                    launched,
+                    "no claude on this host was started with the node's hooks"
+                );
+            }
+            None => eprintln!("!!!! no private runtime directory, so no hooks to launch claude with !!!!"),
+        }
     }
 
     // worktree.create / worktree.open — Herdr's own git support, straight through.
@@ -4980,6 +4997,9 @@ async fn every_client_op_lands_on_a_real_herd() {
         "docker.remove",
         "docker.adopt",
         "docker.release",
+        // Driven against a native Claude in `native::hooks`.
+        "claude.hooks.install",
+        "claude.hooks.decline",
     ]
     .into_iter()
     .collect();

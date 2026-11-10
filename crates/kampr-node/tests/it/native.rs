@@ -17,6 +17,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 mod adopt;
 mod convo;
 mod docker;
+mod hooks;
 mod reflow;
 mod structure;
 
@@ -37,23 +38,7 @@ impl Drop for Harness {
         self.node.shutdown();
         self.server.abort();
         if let Some(home) = &self.home {
-            kill_keepers(&home.path().join("native"));
-        }
-    }
-}
-
-fn kill_keepers(root: &Path) {
-    let fleets = std::fs::read_dir(root.join("fleet"))
-        .into_iter()
-        .flatten()
-        .flatten();
-    let roots = std::iter::once(root.to_path_buf()).chain(fleets.map(|e| e.path()));
-    for session in roots.flat_map(|r| kampr_keep::list(&r).unwrap_or_default()) {
-        if let Some(keeper) = session.keeper() {
-            unsafe {
-                libc::kill(-(keeper.child as i32), libc::SIGKILL);
-                libc::kill(keeper.keeper as i32, libc::SIGKILL);
-            }
+            kampr_testkit::stop_keepers(&home.path().join("native"));
         }
     }
 }
@@ -127,6 +112,7 @@ impl Harness {
         config.native.keeper = kampr_testkit::keeper().display().to_string();
         config.native.launch = "detached".into();
         config.journals.home = home.path().display().to_string();
+        config.hooks.socket = home.path().join("hooks.sock").display().to_string();
         config.node_id = NODE.into();
         config.native.worktrees = home.path().join("worktrees").display().to_string();
         tweak(&mut config);
@@ -1337,6 +1323,42 @@ async fn a_claude_under_a_shell_has_its_conversation_title_and_marker_served() {
         again.is_empty(),
         "the conversation was sent again with nothing changed: {again:?}"
     );
+}
+
+/// Claude rewrites its marker in place (#344), which a directory watch on macOS never hears: only
+/// entries added and removed change a directory there, so the status waited for the 30 s sweep.
+#[tokio::test]
+async fn a_marker_rewritten_in_place_moves_the_pane_at_once() {
+    let h = Harness::start().await;
+    let home = h.home.as_ref().unwrap().path().to_path_buf();
+    let claude = fake_claude(&h.work(), "waiting");
+    let mut client = h.client().await;
+    let pane = client
+        .create(
+            &[
+                &claude.display().to_string(),
+                &home.display().to_string(),
+                "55555555-5555-4555-8555-555555555555",
+            ],
+            json!({ "cwd": h.work().display().to_string() }),
+        )
+        .await;
+    client.pane(&pane, |p| p["agent_status"] == "blocked").await;
+    let marker = std::fs::read_dir(home.join(".claude/sessions"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "json"))
+        .unwrap();
+    let said = std::fs::read_to_string(&marker).unwrap();
+    std::fs::write(&marker, said.replace("\"waiting\"", "\"idle\"")).unwrap();
+    client
+        .until_within("the marker's idle", Duration::from_secs(5), |c| {
+            c.panes
+                .get(&pane)
+                .filter(|p| p["agent_status"] == "idle")
+                .cloned()
+        })
+        .await;
 }
 
 /// A `claude` that has opened its session and written nothing yet: the marker names the session,

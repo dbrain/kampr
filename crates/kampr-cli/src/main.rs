@@ -1,6 +1,7 @@
 mod dirs;
 mod doctor;
 mod herdr_bin;
+mod hook;
 mod init;
 mod mesh;
 mod native;
@@ -188,6 +189,11 @@ enum Command {
     },
     #[command(hide = true)]
     Keep { dir: std::path::PathBuf },
+    #[command(hide = true)]
+    Hook {
+        #[arg(long)]
+        socket: std::path::PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -244,6 +250,10 @@ fn main() -> Result<()> {
     // attach takes its terminal's signals for itself.
     match cli.command {
         Some(Command::Keep { dir }) => kampr_keep::serve(&dir),
+        Some(Command::Hook { socket }) => {
+            hook::run(&socket);
+            Ok(())
+        }
         Some(Command::New {
             dirs,
             detached,
@@ -387,7 +397,11 @@ async fn run(cli: Cli) -> Result<()> {
             )
             .await
         }
-        Command::Keep { .. } | Command::New { .. } | Command::Ls { .. } | Command::Attach { .. } => {
+        Command::Keep { .. }
+        | Command::Hook { .. }
+        | Command::New { .. }
+        | Command::Ls { .. }
+        | Command::Attach { .. } => {
             unreachable!("served before the runtime starts")
         }
         Command::Service { action, dirs } => match action {

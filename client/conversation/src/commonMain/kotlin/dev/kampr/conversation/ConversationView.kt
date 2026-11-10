@@ -78,6 +78,7 @@ import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.talks
 import kotlinx.coroutines.delay
@@ -232,6 +233,9 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
 
     val scope = rememberCoroutineScope()
     val sending = pane.sends.all
+    // *Not now* is this client's alone and lasts until the conversation is opened again (W11).
+    var notNow by remember(pane.id) { mutableStateOf(false) }
+    val hooksOffer = pane.hooks.offered(io.readOnly)?.takeIf { !notNow }
 
     // Whether the keys left: a write with no socket to go down is dropped rather than queued, and
     // the pane counts it, so the count moving is the whole of the answer.
@@ -245,9 +249,21 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     for (send in sending) {
         key(send.id) {
             LaunchedEffect(send.state, send.at) {
-                if (send.state != PendingSend.State.Sending) return@LaunchedEffect
-                delay((send.at + UNSEEN_AFTER_MS - clock()).toLong().coerceAtLeast(0))
-                pane.sends.unseen(send.id)
+                when (send.state) {
+                    PendingSend.State.Sending -> {
+                        delay((send.at + UNSEEN_AFTER_MS - clock()).toLong().coerceAtLeast(0))
+                        pane.sends.unseen(send.id)
+                    }
+
+                    // From when it is seen heard rather than from the send: a reply queued behind
+                    // a long turn is heard long after it left. A reply to it retires it sooner.
+                    PendingSend.State.Delivered -> {
+                        delay(UNSEEN_AFTER_MS)
+                        pane.sends.expired(send.id)
+                    }
+
+                    else -> Unit
+                }
             }
         }
     }
@@ -394,7 +410,7 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // layout, and a wait that outlives the composition is resumed with nowhere to go — which in
     // this suite surfaces as an uncaught exception charged to whichever test runs next.
     var viewport by remember { mutableStateOf(0) }
-    LaunchedEffect(turns, viewport, trailing, sending.size) {
+    LaunchedEffect(turns, viewport, trailing, sending.size, hooksOffer != null) {
         if (following && (rows.isNotEmpty() || sending.isNotEmpty())) {
             listState.requestScrollToItem(rows.lastIndex + leading + trailing + sending.size, END_OF_THE_ITEM)
         }
@@ -608,6 +624,22 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
                                 DisableSelection { CatchingUpLine(said) }
                             }
                         }
+                        // In the list, at its foot, rather than over it: it must never cover the
+                        // question card or the reply box, and on a phone there is no band to spare.
+                        hooksOffer?.let { offer ->
+                            item(key = "claude-hooks") {
+                                DisableSelection {
+                                    HooksOffer(
+                                        offer,
+                                        asking = pane.hooks.asking,
+                                        refusal = pane.hooks.refusal,
+                                        onInstall = { mode -> pane.hooks.ask(ManageOp.ClaudeHooksInstall(pane.id, mode), io::send) },
+                                        onNotNow = { notNow = true },
+                                        onDecline = { pane.hooks.ask(ManageOp.ClaudeHooksDecline(pane.id), io::send) },
+                                    )
+                                }
+                            }
+                        }
                     }
                     // The header of whatever the reader is standing in the middle of, pinned where
                     // that turn's own header used to be, so putting a long message away never means
@@ -634,9 +666,10 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
                         PendingStrip(
                             it,
                             answering = answering(LocalConnectionStatus.current, pane.undelivered),
-                            onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key)) },
-                            onSubmit = { io.send(ClientMsg.AnswerSubmit(pane.id)) },
+                            onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key, it.id)) },
+                            onSubmit = { io.send(ClientMsg.AnswerSubmit(pane.id, it.id)) },
                             byKeys = info.paints,
+                            onWords = { key, words -> io.send(ClientMsg.Answer(pane.id, key, it.id, words)) },
                             modifier = Modifier.onSizeChanged { size -> strip = size.height },
                         )
                     }

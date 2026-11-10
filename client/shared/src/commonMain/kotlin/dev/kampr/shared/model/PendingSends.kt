@@ -21,10 +21,13 @@ class PendingSend(
     internal val key: String,
     internal val known: Set<String>,
     internal val queuedBefore: Int,
+    // The replies already on the pane when the harness said it took this one: any other is the
+    // answer to it, which retires a send whose own record never matches (a slash command's).
+    internal val replies: Set<String> = emptySet(),
 ) {
-    enum class State { Sending, Undelivered, Unseen }
+    enum class State { Sending, Undelivered, Unseen, Delivered }
 
-    internal fun with(state: State) = PendingSend(id, text, state, at, key, known, queuedBefore)
+    internal fun with(state: State, replies: Set<String> = this.replies) = PendingSend(id, text, state, at, key, known, queuedBefore, replies)
 }
 
 // Replies this client has sent and the harness has not yet been seen to take, held on the pane
@@ -59,6 +62,18 @@ class PendingSends {
         if (at >= 0) sends[at] = sends[at].with(PendingSend.State.Unseen)
     }
 
+    // The harness saying it took a prompt (`convo.heard`). Its record still retires the send, so a
+    // delivered one stays until then — drawn as the operator's turn rather than as a send.
+    fun acknowledged(text: String, turns: List<Turn>) {
+        val key = sentKey(text)
+        val at = sends.indexOfFirst { it.key == key && it.state != PendingSend.State.Delivered }
+        if (at >= 0) sends[at] = sends[at].with(PendingSend.State.Delivered, replies = repliesIn(turns))
+    }
+
+    fun expired(id: String) {
+        sends.removeAll { it.id == id && it.state == PendingSend.State.Delivered }
+    }
+
     fun dismiss(id: String) {
         sends.removeAll { it.id == id }
     }
@@ -78,6 +93,7 @@ class PendingSends {
             owed.remove(claim)
             sends.remove(claim)
         }
+        sends.removeAll { it.state == PendingSend.State.Delivered && answered(it, turns) }
         for (key in sends.map { it.key }.distinct()) {
             val waiting = queued.count { sentKey(it.text) == key } - owed.count { it.key == key }
             var taken = 0
@@ -103,6 +119,14 @@ class PendingSends {
         )
     }
 }
+
+// After the last reply it knew of, so a page of older turns paged in above is not the answer.
+private fun answered(send: PendingSend, turns: List<Turn>): Boolean {
+    val since = turns.indexOfLast { it.id in send.replies }
+    return turns.drop(since + 1).any { it.role != "user" && it.id != LIVE_TURN_ID && it.id !in send.replies }
+}
+
+private fun repliesIn(turns: List<Turn>): Set<String> = turns.filter { it.role != "user" && it.id != LIVE_TURN_ID }.mapTo(HashSet()) { it.id }
 
 private const val BRACKETED_CLOSE = "\u001b[201~"
 private val IMAGE_MARKER = Regex("""^\[Image #\d+]$""")

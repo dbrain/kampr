@@ -334,8 +334,8 @@ internal fun AppScaffold(
 
     SystemBack(state, breakpoint)
 
-    fun answer(paneId: String, key: String) {
-        state.connection.send(ClientMsg.Answer(paneId, key))
+    fun answer(paneId: String, key: String, id: String?) {
+        state.connection.send(ClientMsg.Answer(paneId, key, id))
     }
 
     // A sheet is modal, and a screen reader has no idea unless the screen behind it stops being
@@ -613,7 +613,7 @@ internal fun AppScaffold(
                             Screen.Herd, Screen.Mosaic -> HerdPortrait(
                                 herd, connectionStatus, now, localRtt, triage,
                                 state::openPane,
-                                if (readOnly) null else { paneId: String -> answer(paneId, "1") },
+                                if (readOnly) null else { paneId: String, id: String? -> answer(paneId, "1", id) },
                                 onResync = { state.connection.send(ClientMsg.Resync) },
                                 scroll = state.herdScroll,
                                 folds = state.folds,

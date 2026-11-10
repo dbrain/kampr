@@ -92,6 +92,7 @@ impl ClaudeAdapter {
             name_source: field("nameSource"),
             status: field("status"),
             transcript: self.find_by_id(id).ok(),
+            record: Some(record),
             started: started(&session),
         })
     }

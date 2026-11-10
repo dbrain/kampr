@@ -8,7 +8,7 @@ use crate::app::{Layout, Placed};
 use crate::mosaic::{Axis, Divider};
 use crate::render::grid;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use kampr_client::{PendingOption, Role};
+use kampr_client::Role;
 use kampr_term::Cell;
 use ratatui::layout::Rect;
 use std::collections::HashSet;
@@ -40,6 +40,15 @@ pub enum Click {
     Answer {
         pane: String,
         key: String,
+        id: Option<String>,
+    },
+    Submit {
+        pane: String,
+        id: Option<String>,
+    },
+    Hooks {
+        pane: String,
+        act: crate::convo::Hooking,
     },
     /// An attachment this terminal will not draw inline, asked for as a file.
     Save {
@@ -192,10 +201,18 @@ impl Mouse {
         }
         // The chips sit inside a pane's own rectangle, so they are asked before it is.
         for chips in &layout.chips {
-            match self.answer(&chips.pane, &chips.options, &chips.rects, at, role) {
+            match self.answer(chips, at, role) {
                 Click::None => {}
                 answered => return answered,
             }
+        }
+        if role.writes()
+            && let Some((pane, choice, _)) = layout.hooks.iter().find(|(_, _, rect)| inside(*rect, at))
+        {
+            return Click::Hooks {
+                pane: pane.clone(),
+                act: choice.act,
+            };
         }
         if let Some((pane, id)) = pick_attachment(&layout.attachments, at) {
             return Click::Save { pane, id };
@@ -477,24 +494,24 @@ impl Mouse {
     /// A pending prompt's options, hit-tested against the rectangles they were drawn in. **Only
     /// a key that was offered** — the node decides whether a submit key follows, per harness, and
     /// an Enter is never synthesised (#43).
-    pub fn answer(
-        &self,
-        pane: &str,
-        options: &[PendingOption],
-        rects: &[Rect],
-        at: (u16, u16),
-        role: Role,
-    ) -> Click {
+    pub fn answer(&self, chips: &crate::app::Chips, at: (u16, u16), role: Role) -> Click {
         if !role.writes() {
             return Click::None;
         }
-        for (option, rect) in options.iter().zip(rects) {
+        for (option, rect) in chips.options.iter().zip(&chips.rects) {
             if inside(*rect, at) {
                 return Click::Answer {
-                    pane: pane.to_string(),
+                    pane: chips.pane.clone(),
                     key: option.key.clone(),
+                    id: chips.id.clone(),
                 };
             }
+        }
+        if chips.submit.is_some_and(|rect| inside(rect, at)) {
+            return Click::Submit {
+                pane: chips.pane.clone(),
+                id: chips.id.clone(),
+            };
         }
         Click::None
     }

@@ -31,6 +31,8 @@ pub fn pending(pane: &str, prompt: Option<&PermissionPrompt>) -> ServerMsg {
         question: prompt.map(|p| p.action.clone()),
         header: prompt.map(|p| p.tool.clone()),
         multi: false,
+        context: None,
+        id: None,
         options: match prompt {
             Some(_) => ANSWERS
                 .iter()
@@ -39,6 +41,7 @@ pub fn pending(pane: &str, prompt: Option<&PermissionPrompt>) -> ServerMsg {
                     label: (*label).into(),
                     detail: None,
                     chosen: false,
+                    text: false,
                 })
                 .collect(),
             None => Vec::new(),

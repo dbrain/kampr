@@ -597,6 +597,11 @@ pub struct PendingOption {
     /// false on one that takes a single answer, where nothing is ticked until it is answered.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub chosen: bool,
+    /// Answered with words the operator types rather than by the press alone: an
+    /// `AskUserQuestion`'s own "Type something", or what to change about a plan. The `answer`
+    /// carries them as `text`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub text: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -604,6 +609,22 @@ pub struct PendingOption {
 pub enum PendingSource {
     Transcript,
     Screen,
+    Hook,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HooksState {
+    Current,
+    Stale,
+    Absent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HooksScope {
+    User,
+    Project,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -777,6 +798,24 @@ pub enum ServerMsg {
         /// a press that looks like an answer and silently is not.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         multi: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context: Option<String>,
+        /// Which question this is, on one a hook asked. An `answer` naming another is refused.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+    /// The harness's own word that a prompt was submitted, with its exact text (#631).
+    #[serde(rename = "convo.heard")]
+    ConvoHeard { pane: String, text: String },
+    #[serde(rename = "claude.hooks")]
+    ClaudeHooks {
+        pane: String,
+        state: HooksState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<HooksScope>,
+        ask: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
     },
     /// What the harness wrote down about the *session* rather than about any one turn — its own
     /// title for the conversation, how long each turn took, what is queued behind the one running,
@@ -939,7 +978,11 @@ pub enum ClientMsg {
     /// mind. Measured for Claude in #421 — a digit toggles, and it is `\u{1b}[C` then `\r` that
     /// commits — and absent for a harness nobody has probed, which refuses rather than guesses.
     #[serde(rename = "answer.submit")]
-    AnswerSubmit { pane: String },
+    AnswerSubmit {
+        pane: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
     #[serde(rename = "input")]
     Input {
         pane: String,
@@ -983,7 +1026,14 @@ pub enum ClientMsg {
         id: Option<String>,
     },
     #[serde(rename = "answer")]
-    Answer { pane: String, key: String },
+    Answer {
+        pane: String,
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
     #[serde(rename = "convo.load")]
     ConvoLoad { pane: String, before: Option<String> },
     /// A page of a conversation this pane's agent *launched*, named by the handle a `sub` block

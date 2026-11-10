@@ -56,6 +56,10 @@ const REFLOW_BACKSTOP: Duration = Duration::from_secs(30);
 const PENDING_RETRY: Duration = Duration::from_millis(500);
 const PENDING_ATTEMPTS: u32 = 12;
 
+// A hook reaches the node 150-275 ms after Claude spawns it on a 2016 Intel Mac and 4 ms on Linux
+// (#643): five times the Mac's worst, for a loaded machine.
+const HOOK_GRACE: Duration = Duration::from_millis(1500);
+
 /// How long input waits for a harness to start reading its keys.
 ///
 /// Claude 2.1.268 drew its composer 0.8-4.5 s after it was started, and a reply sent the frame
@@ -835,8 +839,10 @@ impl Session {
                 typed,
                 id,
             } => self.paste(&pane, &b64, name.as_deref(), typed, id).await,
-            ClientMsg::Answer { pane, key } => self.answer(&pane, &key).await,
-            ClientMsg::AnswerSubmit { pane } => self.answer_submit(&pane).await,
+            ClientMsg::Answer { pane, key, id, text } => {
+                self.answer(&pane, &key, id.as_deref(), text.as_deref()).await
+            }
+            ClientMsg::AnswerSubmit { pane, id } => self.answer_submit(&pane, id.as_deref()).await,
             ClientMsg::ConvoLoad { pane, before } => self.convo_load(&pane, before.as_deref()),
             ClientMsg::Find {
                 pane,
@@ -906,6 +912,7 @@ impl Session {
             scrollback,
             reflow,
             changes: crate::wake::native_changes(&session, &local),
+            hooks: self.node.hooks.clone(),
         }))];
         // Taken from the node rather than made here: on a re-watch this is the transcript already
         // found, already parsed and already folded, and taking it is what makes it this handle's
@@ -944,6 +951,7 @@ impl Session {
                 held,
                 followed: followed.clone(),
                 relayed: self.caller == Caller::Hub,
+                hooks: self.node.hooks.clone(),
             })));
         }
         self.panes.insert(
@@ -1945,7 +1953,7 @@ impl Session {
         }
     }
 
-    async fn answer(&mut self, pane: &str, key: &str) {
+    async fn answer(&mut self, pane: &str, key: &str, id: Option<&str>, text: Option<&str>) {
         if !self.may_write("answer", Some(pane)) {
             return;
         }
@@ -1953,9 +1961,32 @@ impl Session {
             self.audit("answer", Some(pane), Some(json!({ "key": key, "peer": true })));
             // The submit key is per harness and the *owning* node knows which harness this pane
             // is running, so the answer is relayed as an answer rather than pre-expanded here.
-            self.relay_to_peer(pane, json!({ "t": "answer", "pane": pane, "key": key }));
+            let mut relayed = json!({ "t": "answer", "pane": pane, "key": key });
+            if let Some(id) = id {
+                relayed["id"] = json!(id);
+            }
+            if let Some(text) = text {
+                relayed["text"] = json!(text);
+            }
+            self.relay_to_peer(pane, relayed);
             return;
         };
+        if let Some(answered) = self.node.hooks.answer(pane, key, id, text) {
+            self.audit(
+                "answer",
+                Some(pane),
+                Some(json!({ "key": key, "hook": true, "id": id, "text": text })),
+            );
+            if let Err(why) = answered {
+                self.wire.error(ErrorCode::BadRequest, &why, Some(pane));
+            }
+            return;
+        }
+        if text.is_some_and(|t| !t.trim().is_empty()) {
+            self.wire
+                .error(ErrorCode::BadRequest, "this answer takes no words", Some(pane));
+            return;
+        }
         if key.is_empty() || key.chars().count() > 2 {
             self.wire.error(
                 ErrorCode::BadRequest,
@@ -2073,15 +2104,30 @@ impl Session {
     /// own `Submit` control in a header row, reached sideways — so the sequence is right-arrow and
     /// then Enter. A harness nobody has measured this on is refused rather than guessed at, which
     /// leaves the operator answering at the pane instead of pressing something that does nothing.
-    async fn answer_submit(&mut self, pane: &str) {
+    async fn answer_submit(&mut self, pane: &str, id: Option<&str>) {
         if !self.may_write("answer.submit", Some(pane)) {
             return;
         }
         let Some((session, local)) = self.node.resolve(pane) else {
             self.audit("answer.submit", Some(pane), Some(json!({ "peer": true })));
-            self.relay_to_peer(pane, json!({ "t": "answer.submit", "pane": pane }));
+            let mut relayed = json!({ "t": "answer.submit", "pane": pane });
+            if let Some(id) = id {
+                relayed["id"] = json!(id);
+            }
+            self.relay_to_peer(pane, relayed);
             return;
         };
+        if let Some(submitted) = self.node.hooks.submit(pane, id) {
+            self.audit(
+                "answer.submit",
+                Some(pane),
+                Some(json!({ "hook": true, "id": id })),
+            );
+            if let Err(why) = submitted {
+                self.wire.error(ErrorCode::BadRequest, &why, Some(pane));
+            }
+            return;
+        }
         if session.muffit_link(&local).is_some() {
             self.wire.error(
                 ErrorCode::BadRequest,
@@ -2290,10 +2336,30 @@ impl Session {
                 return;
             }
         };
+        if let Some(done) = self.claude_hooks(&op, &session) {
+            match done {
+                Ok(()) => {
+                    let mut ack = json!({ "t": "managed", "op": op.op, "ok": true });
+                    if let Some(rid) = &rid {
+                        ack["rid"] = rid.clone();
+                    }
+                    self.wire.send_json(&ack);
+                }
+                Err(why) => self.refuse(
+                    &op.op,
+                    op.at.as_deref(),
+                    ErrorCode::BadRequest,
+                    &why,
+                    rid.as_ref(),
+                ),
+            }
+            return;
+        }
         // On the node that runs it, so a session made through a hub starts in that machine's home.
         if op.op == "muffit.create" && op.cwd.as_deref().is_none_or(str::is_empty) {
             op.cwd = Some(self.node.config.journal_home().display().to_string());
         }
+        let claude_settings = self.node.hooks.launch_settings();
         let manager = Manager {
             herdr: &session.herdr,
             node_id: &session.node_id,
@@ -2309,6 +2375,7 @@ impl Session {
             docker: primary.docker.as_ref(),
             holder: &kampr_keep::view_holder(&self.device.name),
             config: &self.node.config,
+            claude_settings: claude_settings.as_deref(),
         };
         match manager.run(&op).await {
             Ok(Managed { reply, settle }) => {
@@ -2353,6 +2420,39 @@ impl Session {
             }
             Err(e) => self.refuse(&op.op, op.at.as_deref(), e.code(), &e.to_string(), rid.as_ref()),
         }
+    }
+
+    fn claude_hooks(
+        &self,
+        op: &ManageOp,
+        session: &crate::sessions::SessionNode,
+    ) -> Option<Result<(), String>> {
+        let decline = match op.op.as_str() {
+            "claude.hooks.install" => false,
+            "claude.hooks.decline" => true,
+            _ => return None,
+        };
+        if decline {
+            return Some(self.node.hooks.decline());
+        }
+        let Some((at, local)) = op
+            .at
+            .as_deref()
+            .and_then(|at| Some((at, session.local_pane(at)?)))
+        else {
+            return Some(Err("claude.hooks.install names the pane it is for in at".into()));
+        };
+        let Some(pane) = self.node.herd().pane(at).cloned() else {
+            return Some(Err("no such pane".into()));
+        };
+        let project = convo::marker_of(&self.node.journals(), session, &local)
+            .and_then(|m| m.cwd)
+            .or_else(|| pane.cwd.map(std::path::PathBuf::from));
+        Some(
+            self.node
+                .hooks
+                .install(project.as_deref(), op.mode.as_deref().unwrap_or_default()),
+        )
     }
 
     /// A `fleet.run` the node accepted, written into this node's book.
@@ -3041,6 +3141,7 @@ pub struct PaneStreamCtx {
     /// The width a reflowed view was asked for, if one was.
     pub reflow: Option<u16>,
     pub changes: kampr_core::push::PaneChanges,
+    pub hooks: Arc<crate::hooks::Hooks>,
 }
 
 /// One pane's stream for one client.
@@ -3060,6 +3161,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
         scrollback,
         reflow,
         changes,
+        hooks,
     } = ctx;
     // A reflowed view is followed only while one can be served; otherwise this socket follows the
     // pane's own grid, which every other surface (pending, the composer) reads, and is told why.
@@ -3123,7 +3225,16 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
     let mut asked: Option<pending::Pending> = None;
     let mut ask = tokio::time::interval(PENDING_RETRY);
     ask.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    if blocked {
+    let mut hook_moved = hooks.subscribe();
+    // What a hook has asked on this pane, as last published here. While it stands the screen is
+    // not read for a question at all.
+    let mut hooked_ask = hooks.question(&herd_pane);
+    let mut grace: Option<tokio::time::Instant> = None;
+    if let Some(asked) = &hooked_ask {
+        if !wire.send(&crate::hooks::pending(&global, Some(asked.clone()))) {
+            return;
+        }
+    } else if blocked {
         asking = PENDING_ATTEMPTS;
         // Exactly one screen read, and only for a pane herdr already calls blocked. An unblocked
         // pane costs nothing here: `send_pending` finds nothing, matches what this socket has
@@ -3214,7 +3325,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
             }
             _ = recheck.tick(), if reflow.is_some() => {}
             _ = crate::wake::pulsed(&mut screen_moved), if reflow.is_some() => {}
-            _ = crate::wake::either(&mut frames, &mut status_moved), if asking > 0 => {
+            _ = crate::wake::either(&mut frames, &mut status_moved), if asking > 0 && hooked_ask.is_none() && grace.is_none() => {
                 let shown = registry
                     .screen(&following)
                     .and_then(|s| pending::detect_for(harness.as_deref(), &s.rows.join("\n")));
@@ -3225,7 +3336,7 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                     }
                 }
             }
-            _ = ask.tick(), if asking > 0 => {
+            _ = ask.tick(), if asking > 0 && hooked_ask.is_none() && grace.is_none() => {
                 asking -= 1;
                 match send_pending(&screen, &wire, &global, &local, harness.as_deref(), true, &mut asked).await {
                     None => return,
@@ -3254,6 +3365,44 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                     }
                 }
             }
+            _ = tokio::time::sleep_until(grace.unwrap_or_else(tokio::time::Instant::now)), if grace.is_some() => {
+                grace = None;
+                if hooked_ask.is_none() {
+                    match send_pending(&screen, &wire, &global, &local, harness.as_deref(), true, &mut asked).await {
+                        None => return,
+                        Some(published) => asking = keep_asking(published, asking),
+                    }
+                }
+            }
+            moved = hook_moved.changed() => {
+                if moved.is_err() {
+                    return;
+                }
+                let now = hooks.question(&herd_pane);
+                if now != hooked_ask {
+                    if !wire.send(&crate::hooks::pending(&global, now.clone())) {
+                        return;
+                    }
+                    // A dialog can outlive its hook — Claude's timeout, a killed hook — and is then
+                    // the screen's again. One the node itself answered is still drawn until Claude
+                    // repaints, and the pane still blocked until its status catches up, so reading
+                    // it would put an answered question back on every client.
+                    let answered = hooked_ask
+                        .as_ref()
+                        .and_then(|asked| asked.id.as_deref())
+                        .is_some_and(|id| hooks.decided(&herd_pane, id));
+                    asking = match now.is_none() && blocked && !answered {
+                        true => {
+                            ask.reset();
+                            PENDING_ATTEMPTS
+                        }
+                        false => 0,
+                    };
+                    hooked_ask = now;
+                    asked = None;
+                    grace = None;
+                }
+            }
             changed = herd.changed() => {
                 if changed.is_err() {
                     return;
@@ -3276,6 +3425,17 @@ pub async fn pump_pane(ctx: PaneStreamCtx) {
                 if now_blocked != blocked {
                     blocked = now_blocked;
                     asking = if blocked { PENDING_ATTEMPTS } else { 0 };
+                    grace = None;
+                    if hooked_ask.is_some() {
+                        asking = 0;
+                        continue;
+                    }
+                    // The hook's question arrives before the pane reports blocked (#623), so a
+                    // hooked pane's screen is read only once it has had the chance to.
+                    if blocked && hooks.hooked(&herd_pane) {
+                        grace = Some(tokio::time::Instant::now() + HOOK_GRACE);
+                        continue;
+                    }
                     match send_pending(&screen, &wire, &global, &local, harness.as_deref(), blocked, &mut asked).await {
                         None => return,
                         Some(published) => asking = keep_asking(published, asking),
@@ -3405,6 +3565,8 @@ async fn send_pending(
         question: found.as_ref().map(|f| f.question.clone()),
         header: found.as_ref().and_then(|f| f.header.clone()),
         multi: found.as_ref().is_some_and(|f| f.multi),
+        context: None,
+        id: None,
         options: found.map(|f| f.options).unwrap_or_default(),
         source: PendingSource::Screen,
     });
@@ -3785,6 +3947,7 @@ mod tests {
                 scrollback: self.scrollback,
                 reflow: self.reflow,
                 changes: Default::default(),
+                hooks: crate::hooks::unserved(),
             }))];
             self.panes.insert(
                 PANE.to_string(),

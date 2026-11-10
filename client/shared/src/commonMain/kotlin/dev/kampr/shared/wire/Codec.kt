@@ -141,6 +141,21 @@ object Wire {
                 source = obj.str("source") ?: "screen",
                 header = obj.str("header")?.takeIf { it.isNotBlank() },
                 multi = obj.bool("multi") ?: false,
+                context = obj.str("context")?.takeIf { it.isNotBlank() },
+                id = obj.str("id"),
+            )
+
+            "convo.heard" -> ServerMsg.ConvoHeard(
+                pane = obj.str("pane") ?: return null,
+                text = obj.str("text") ?: return null,
+            )
+
+            "claude.hooks" -> ServerMsg.ClaudeHooks(
+                pane = obj.str("pane") ?: return null,
+                state = obj.str("state") ?: return null,
+                scope = obj.str("scope"),
+                ask = obj.bool("ask") ?: false,
+                project = obj.str("project"),
             )
 
             "managed" -> ServerMsg.Managed(
@@ -231,11 +246,14 @@ object Wire {
             put("t", "answer")
             put("pane", msg.pane)
             put("key", msg.key)
+            msg.id?.let { put("id", it) }
+            msg.text?.let { put("text", it) }
         }
 
         is ClientMsg.AnswerSubmit -> buildJsonObject {
             put("t", "answer.submit")
             put("pane", msg.pane)
+            msg.id?.let { put("id", it) }
         }
 
         is ClientMsg.DoneRead ->

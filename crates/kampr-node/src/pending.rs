@@ -20,6 +20,8 @@ pub struct Pending {
     /// asked for, and "now" is a fresh read at the moment of the press rather than whatever the
     /// last frame said.
     pub cursor: Option<usize>,
+    pub context: Option<String>,
+    pub id: Option<String>,
 }
 
 /// **The cursor is deliberately not part of this.** `send_pending` sends a frame when the reading
@@ -32,6 +34,8 @@ impl PartialEq for Pending {
             && self.options == other.options
             && self.header == other.header
             && self.multi == other.multi
+            && self.context == other.context
+            && self.id == other.id
     }
 }
 
@@ -209,6 +213,7 @@ pub fn detect_marked(screen: &str) -> Option<Pending> {
             // start with the box border rather than with the spaces that test looks for.
             detail: detail_under(&inner, &cleaned, *row, at.get(index + 1).copied()),
             chosen: found.ticked.unwrap_or(false),
+            text: false,
         })
         .collect();
     Some(Pending {
@@ -217,6 +222,8 @@ pub fn detect_marked(screen: &str) -> Option<Pending> {
         multi,
         options,
         cursor,
+        context: None,
+        id: None,
     })
 }
 
@@ -310,6 +317,8 @@ pub fn detect(screen: &str) -> Option<Pending> {
                 multi,
                 options,
                 cursor: None,
+                context: None,
+                id: None,
             });
         }
     }
@@ -622,6 +631,7 @@ mod tests {
                 label: "Yes".into(),
                 detail: None,
                 chosen: false,
+                text: false,
             }
         );
         assert_eq!(p.options[1].key, "2");

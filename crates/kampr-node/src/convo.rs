@@ -1,6 +1,7 @@
 use crate::herd::HerdModel;
 use crate::sessions::SessionNode;
 use crate::wire::Wire;
+use hooked::HookedLive;
 use kampr_core::PaneRegistry;
 use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
@@ -16,6 +17,7 @@ use tokio::time::Instant;
 use tracing::debug;
 use wake::{Dirs, Paced, Tail};
 
+mod hooked;
 mod wake;
 
 /// Turns in a page, as a floor rather than a ceiling. A client pages backwards from the cursor
@@ -320,6 +322,7 @@ pub struct ConvoCtx {
     /// Whether the far end of this socket is a hub relaying to clients of its own rather than a
     /// screen. See [`reopened`].
     pub relayed: bool,
+    pub hooks: Arc<crate::hooks::Hooks>,
 }
 
 /// One pane's transcript for one client: the initial page, then the tail.
@@ -342,8 +345,14 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         held,
         followed,
         relayed,
+        hooks,
     } = ctx;
     let journal = warm.lock().unwrap().journal.clone();
+    let mut hook_moved = hooks.subscribe();
+    let mut installs = hooks.subscribe_installs();
+    let mut heard = hooks.heard();
+    let mut hooked_live = HookedLive::default();
+    let mut hooks_told: Option<(Option<PathBuf>, Option<u32>)> = None;
 
     let mut tail = Tail::default();
     let mut sub = Tail::default();
@@ -353,6 +362,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut follow = Paced::new(FOLLOW_FLOOR);
     let mut desk_read = Paced::new(DESK_FLOOR);
     let mut desk_blank = 0usize;
+    let mut desk_dialog = false;
     let mut live_read = Paced::new(LIVE_POLL);
     let mut screen_facets = Paced::new(LIVE_POLL);
     let mut look = Paced::new(RETRY_EVERY);
@@ -571,7 +581,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     inherited = false;
                     *journal.lock().unwrap() = Some(fresh);
                     warm.lock().unwrap().opened = opened.clone();
-                    if !deliver(&journal, &wire, &global, &held, &path, relayed).await
+                    if !deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live).await
                         || !publish_facets(
                             &warm,
                             &journals,
@@ -594,7 +604,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // fold that already exist, which is the whole of what warmth buys.
         if std::mem::take(&mut inherited)
             && let Some(path) = opened.clone()
-            && (!deliver(&journal, &wire, &global, &held, &path, relayed).await
+            && (!deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live).await
                 || !publish_facets(
                     &warm,
                     &journals,
@@ -665,6 +675,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         live.stop();
                         turns.insert(0, kampr_journal::retired());
                     }
+                    hooked_live.record(&turns);
+                    if hooked_live.superseded() {
+                        turns.insert(0, kampr_journal::retired());
+                    }
                     holding(&held, &turns);
                     let revised = ServerMsg::ConvoTurn {
                         pane: global.clone(),
@@ -716,12 +730,19 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // a walk of the rows and no I/O — and published only when it moves. Not held for a
         // transcript: the reply box takes this up as it is typed, and a fresh session's first
         // message is typed before anything is written down.
+        // The box is redrawn when a dialog closes, often before the pane stops being blocked, and
+        // that frame was read as no box: the dialog going is a read of its own.
+        let dialog = asking || hooks.question(&herd_pane).is_some();
+        if dialog != desk_dialog {
+            desk_dialog = dialog;
+            desk_read.owe();
+        }
         if composer.is_some() && desk_read.due() {
             if wire.outbox().congested() {
                 desk_read.owe_after(DESK_POLL);
             } else {
                 desk_read.ran();
-                let line = desk_line(&panes, &local, composer);
+                let line = desk_line(&panes, &local, composer, now.agent.as_deref(), dialog);
                 // A box is published as gone only after `GONE_AFTER` readings without it, because
                 // Claude's caret leaves the box for the frame it repaints in (#552). Those readings
                 // are taken at the old poll's pace even when no further frame comes, or a box that
@@ -741,6 +762,8 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // A preview is the one thing on this socket that can be dropped without loss: the record
         // behind it is still coming, and a client that is already behind does not want a fifth
         // revision of a message it has not drawn yet.
+        // A hooked pane's live turn is what Claude said it drew (#628), never the screen's lift.
+        let hooked = hooks.hooked(&herd_pane);
         let reading_live = opened.is_some() && (live_now || screen_status.is_some());
         if reading_live && (!was_live || asking != was_asking) {
             live_read.owe();
@@ -767,11 +790,14 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         if let Some(reader) = screen_status {
                             screen_seen = reader(&borrowed);
                         }
-                        let seen = journal
-                            .lock()
-                            .unwrap()
-                            .as_ref()
-                            .and_then(|j| j.preview(&borrowed));
+                        let seen = match hooked {
+                            true => None,
+                            false => journal
+                                .lock()
+                                .unwrap()
+                                .as_ref()
+                                .and_then(|j| j.preview(&borrowed)),
+                        };
                         live.observe(seen, asking)
                     }
                     None => live.stop(),
@@ -782,6 +808,29 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 if screen_seen != before {
                     screen_facets.owe();
                 }
+            }
+        }
+
+        let change = match hooked && opened.is_some() {
+            true => hooked_live.next(hooks.live(&herd_pane)),
+            false => hooked_live.next(None),
+        };
+        if send_live(&wire, &global, change, &held).is_err() {
+            return;
+        }
+
+        if now.agent.as_deref() == Some("claude") {
+            let marker = describe(&local);
+            let claude = marker.as_ref().map(|m| m.pid);
+            let project = marker
+                .and_then(|m| m.cwd)
+                .or_else(|| now.cwd.clone().map(PathBuf::from));
+            let told = (project, claude);
+            if hooks_told.as_ref() != Some(&told) {
+                if !wire.send(&hooks.frame(&global, told.0.as_deref(), claude)) {
+                    return;
+                }
+                hooks_told = Some(told);
             }
         }
 
@@ -836,6 +885,26 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
             _ = wake::until(owed) => {}
             _ = tokio::time::sleep_until(resolve_at) => {}
+            moved = hook_moved.changed() => {
+                if moved.is_err() {
+                    return;
+                }
+            }
+            moved = installs.changed() => {
+                if moved.is_err() {
+                    return;
+                }
+                hooks_told = None;
+            }
+            said = heard.recv() => match said {
+                Ok((pane, text)) if pane == herd_pane => {
+                    if !wire.send(&ServerMsg::ConvoHeard { pane: global.clone(), text }) {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                _ => {}
+            },
         }
     }
 }
@@ -898,6 +967,7 @@ async fn deliver(
     held: &Held,
     transcript: &Path,
     relayed: bool,
+    live: &mut HookedLive,
 ) -> bool {
     // What the client is holding *of this transcript*, when this node knows. A page for a
     // transcript it is already showing merges into it; every other page replaces it. Read before
@@ -917,6 +987,9 @@ async fn deliver(
     let _ = drain(journal).await;
     match reopened(journal, pane, showing_already.as_deref(), relayed) {
         Some(first) if wire.send(&first) => {
+            if let ServerMsg::Convo { turns, .. } | ServerMsg::ConvoTurn { turns, .. } = &first {
+                live.record(turns);
+            }
             // The other half of the same blind spot: which shape went out, and how much of it. A
             // page and a revision are the difference between a client drawing the conversation and
             // a client merging into one it is assumed to already have, and a pane reported as
@@ -1057,9 +1130,23 @@ fn waiting(
 /// client, because it is a per-harness *measurement* and the node is where measurements live — a
 /// phone already installed cannot be corrected when a harness changes its mind about what empties
 /// a box, and the three harnesses served here do not agree on it in the first place.
-fn desk_line(panes: &PaneRegistry, local: &str, reader: Option<ComposerReader>) -> Option<Composed> {
+fn desk_line(
+    panes: &PaneRegistry,
+    local: &str,
+    reader: Option<ComposerReader>,
+    agent: Option<&str>,
+    dialog: bool,
+) -> Option<Composed> {
     let reader = reader?;
+    if dialog {
+        return None;
+    }
     let screen = panes.screen(local)?;
+    // Claude marks a dialog's focused option with the box's own `❯`, so the option rows under it
+    // read as a half-typed line; a dialog drawn where the box was is not one.
+    if crate::pending::detect_for(agent, &screen.rows.join("\n")).is_some() {
+        return None;
+    }
     let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
     reader(&rows, screen.caret, screen.frame)
 }

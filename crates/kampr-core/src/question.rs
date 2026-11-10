@@ -219,6 +219,7 @@ fn confirm(prompt: &str) -> Option<Shape> {
             label: part.to_string(),
             detail: None,
             chosen: false,
+            text: false,
         });
     }
 
@@ -288,12 +289,14 @@ mod tests {
                         label: "Y".into(),
                         detail: None,
                         chosen: false,
+                        text: false,
                     },
                     PendingOption {
                         key: "n".into(),
                         label: "n".into(),
                         detail: None,
                         chosen: false,
+                        text: false,
                     },
                 ],
                 default_key: Some("y".into()),

@@ -25,7 +25,7 @@ fn pane(id: &str) -> String {
 }
 
 struct Harness {
-    _home: tempfile::TempDir,
+    home: tempfile::TempDir,
     node: Arc<Node>,
     origin: String,
     server: tokio::task::JoinHandle<()>,
@@ -35,6 +35,7 @@ impl Drop for Harness {
     fn drop(&mut self) {
         self.node.shutdown();
         self.server.abort();
+        kampr_testkit::stop_keepers(&self.home.path().join("native"));
     }
 }
 
@@ -77,7 +78,7 @@ impl Harness {
             }
         });
         Self {
-            _home: home,
+            home,
             node,
             origin,
             server,
@@ -715,7 +716,7 @@ async fn muffit_create_makes_a_pane_and_close_stops_it() {
     assert_eq!(hello["caps"]["muffit"], json!(true), "{hello}");
     let node = client.until("this node", |c| c.nodes.get(NODE).cloned()).await;
     assert_eq!(node["muffit"], json!(true), "{node}");
-    let home = h._home.path().display().to_string();
+    let home = h.home.path().display().to_string();
     let cases = [
         (
             json!({ "op": "muffit.create", "cwd": "/srv/work", "prompt": "fix the parser" }),

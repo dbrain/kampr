@@ -482,7 +482,7 @@ fun TriageList(
     items: List<TriageItem>,
     compact: Boolean,
     onOpen: (String) -> Unit,
-    onApprove: ((String) -> Unit)?,
+    onApprove: ((String, String?) -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
@@ -534,7 +534,7 @@ fun TriageList(
                     "Needs you"
                 },
                 onOpen = { onOpen(item.pane.id) },
-                onApprove = onApprove?.let { approve -> { approve(item.pane.id) } },
+                onApprove = onApprove?.takeIf { item.approvable }?.let { approve -> { approve(item.pane.id, item.questionId) } },
             )
         }
         if (items.size > TRIAGE_SHOWN) {

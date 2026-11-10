@@ -224,13 +224,23 @@ impl Host {
 pub fn root() -> io::Result<PathBuf> {
     let root = match std::env::var_os("KAMPR_KEEP_ROOT") {
         Some(root) => PathBuf::from(root),
-        None => match std::env::var_os("XDG_RUNTIME_DIR") {
-            Some(run) => PathBuf::from(run).join("kampr").join("s"),
-            None => PathBuf::from(format!("/tmp/kampr-{}", rustix::process::getuid().as_raw())).join("s"),
-        },
+        None => runtime_path().join("s"),
     };
     make_private_dir(&root)?;
     Ok(root)
+}
+
+pub fn runtime() -> io::Result<PathBuf> {
+    let dir = runtime_path();
+    make_private_dir(&dir)?;
+    Ok(dir)
+}
+
+fn runtime_path() -> PathBuf {
+    match std::env::var_os("XDG_RUNTIME_DIR") {
+        Some(run) => PathBuf::from(run).join("kampr"),
+        None => PathBuf::from(format!("/tmp/kampr-{}", rustix::process::getuid().as_raw())),
+    }
 }
 
 pub fn make_private_dir(path: &Path) -> io::Result<()> {

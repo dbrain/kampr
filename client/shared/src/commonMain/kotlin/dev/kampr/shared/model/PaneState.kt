@@ -324,6 +324,8 @@ class PaneState(val id: String, val styles: StyleTable) {
 
     val sends = PendingSends()
 
+    val hooks = ClaudeHooksOffer()
+
     // The node's answer to the last transcript search on this pane. On the pane rather than on the
     // store, because it is read where the transcript is: a result set naming turn ids belongs to
     // one transcript, and handing it to another pane's view would aim at turns it has never heard
@@ -551,5 +553,6 @@ class PaneState(val id: String, val styles: StyleTable) {
         // pane carries nothing, so a reconnect would triage the previous connection's question and
         // answer it into a pane with nothing matching to answer.
         pending = null
+        hooks.dropped()
     }
 }

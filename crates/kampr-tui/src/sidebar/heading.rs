@@ -15,7 +15,7 @@ pub(super) struct Heading<'a> {
 
 fn count(n: usize) -> String {
     match n {
-        0..=9 => n.to_string(),
+        0..=99 => format!("{n:<2}"),
         _ => "9+".into(),
     }
 }

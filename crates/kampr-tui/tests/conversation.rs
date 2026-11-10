@@ -25,6 +25,9 @@ use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 
+#[path = "conversation/answers.rs"]
+mod answers;
+
 const BEAT: Duration = Duration::from_secs(2);
 /// Long enough for a frame the client wrote to reach the scripted node over a loopback socket,
 /// and the window a "nothing was sent" assertion waits out.
@@ -2249,4 +2252,430 @@ async fn a_hit_that_will_not_parse_is_dropped_rather_than_taking_the_answer_down
     let screen = painted(&mut app, 90, 20);
     assert!(screen.contains("1 of 41 (first 1)"), "{screen}");
     assert!(screen.contains("the scrollbar column"), "{screen}");
+}
+
+// ---- a question Claude's own hooks asked, and the offer to install them ----------------------
+
+fn hooked(pane: &str, multi: bool, context: Option<&str>, options: Value) -> Event {
+    Event::Pending(
+        serde_json::from_value(json!({
+            "pane": pane, "question": "Allow Bash?", "header": "Bash", "options": options,
+            "source": "hook", "multi": multi, "context": context
+        }))
+        .expect("a pending"),
+    )
+}
+
+#[test]
+fn what_a_hooked_question_would_act_on_is_one_line_clipped_to_the_width() {
+    let mut convo = Convo::new();
+    let command = format!("cargo nextest run -p kampr-tui {}", "--verbose ".repeat(12));
+    convo.absorb(&hooked(
+        PANE,
+        false,
+        Some(&command),
+        json!([{ "key": "1", "label": "Yes" }]),
+    ));
+    let narrow = screen(&mut convo, 40, 12);
+    let at = row_of(&narrow, "cargo nextest run");
+    let line = narrow.lines().nth(at).expect("the row").trim_end();
+    assert!(line.ends_with('…'), "clipped with an ellipsis:\n{narrow}");
+    assert!(
+        row_of(&narrow, "Allow Bash?") < at && at < row_of(&narrow, " 1 "),
+        "between the question and its keys:\n{narrow}"
+    );
+
+    convo.absorb(&hooked(
+        PANE,
+        false,
+        Some("rm -rf target\nrm -rf node_modules"),
+        json!([{ "key": "1", "label": "Yes" }]),
+    ));
+    let wide = screen(&mut convo, 80, 12);
+    let at = row_of(&wide, "rm -rf target");
+    assert!(
+        wide.lines()
+            .nth(at)
+            .is_some_and(|l| l.contains("rm -rf target …") && l.trim_end().ends_with("alt+o reads it all")),
+        "a second line is said to exist rather than dropped:\n{wide}"
+    );
+    assert!(
+        !wide.contains("node_modules"),
+        "and is never a row of its own:\n{wide}"
+    );
+
+    convo.absorb(&hooked(
+        PANE,
+        false,
+        None,
+        json!([{ "key": "1", "label": "Yes" }]),
+    ));
+    let bare = screen(&mut convo, 80, 12);
+    assert_eq!(
+        row_of(&bare, "Allow Bash?") + 1,
+        row_of(&bare, " 1 "),
+        "no context, no row:\n{bare}"
+    );
+}
+
+async fn blocked_on(
+    conn: &mut Conn,
+    app: &mut App,
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    frame: Value,
+) {
+    conn.send(frame);
+    pump(app, events, |e| matches!(e, Event::Pending(_))).await;
+    painted(app, 110, 24);
+    let _ = conn.heard().await;
+}
+
+fn multi(chosen: bool) -> Value {
+    json!({
+        "t": "pending", "pane": PANE, "question": "Which suites?", "multi": true, "source": "hook",
+        "options": [{ "key": "1", "label": "unit", "chosen": chosen }, { "key": "2", "label": "live" }]
+    })
+}
+
+fn submits(frames: &[Value]) -> usize {
+    frames.iter().filter(|f| f["t"] == json!("answer.submit")).count()
+}
+
+#[tokio::test]
+async fn a_question_that_takes_several_answers_is_committed_from_here_once_something_is_ticked() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    let mut app = app(&client);
+    conn.greet(json!([entry(PANE, Some("claude"), "blocked", true)]));
+    pump(&mut app, &mut events, |e| matches!(e, Event::Prefs { .. })).await;
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+
+    blocked_on(&mut conn, &mut app, &mut events, multi(false)).await;
+    let screen = painted(&mut app, 110, 24);
+    assert!(!screen.contains("submit in the pane"), "{screen}");
+    assert!(
+        app.layout.chips[0].submit.is_none(),
+        "nothing ticked, nothing to commit"
+    );
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let frames = conn.heard().await;
+    assert_eq!(submits(&frames), 0, "{frames:?}");
+    assert!(
+        !frames.iter().any(|f| f["t"] == json!("input")),
+        "and the Enter is not handed to the dialog either: {frames:?}"
+    );
+
+    blocked_on(&mut conn, &mut app, &mut events, multi(true)).await;
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("Submit"), "{screen}");
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let frames = conn.heard().await;
+    assert_eq!(
+        frames.iter().find(|f| f["t"] == json!("answer.submit")),
+        Some(&json!({ "t": "answer.submit", "pane": PANE })),
+        "{frames:?}"
+    );
+
+    let chip = app.layout.chips[0]
+        .submit
+        .expect("a submit chip once something is ticked");
+    let click = app.mouse.hit(down(chip.x, chip.y), &app.layout, Role::Full);
+    app.clicked(click);
+    assert_eq!(submits(&conn.heard().await), 1, "the chip commits it too");
+    let click = app.mouse.hit(down(chip.x, chip.y), &app.layout, Role::Readonly);
+    app.clicked(click);
+    assert_eq!(
+        submits(&conn.heard().await),
+        0,
+        "and never for a read-only device"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+    app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    let frames = conn.heard().await;
+    assert_eq!(submits(&frames), 0, "a draft's Enter sends the draft: {frames:?}");
+}
+
+fn hooks(state: &str, scope: Option<&str>, ask: bool, project: Option<&str>) -> Value {
+    json!({ "t": "claude.hooks", "pane": PANE, "state": state, "scope": scope, "ask": ask, "project": project })
+}
+
+fn hooks_event(frame: Value) -> Event {
+    Event::ClaudeHooks(serde_json::from_value(frame).expect("claude.hooks"))
+}
+
+fn drawn_as(convo: &mut Convo, role: Role) -> String {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 120, 12));
+    let area = buf.area;
+    convo.render(&mut buf, area, PANE, &PHOSPHOR, &mut Images::default(), role);
+    rows(&buf).join("\n")
+}
+
+type Offered<'a> = (&'a str, Value, Role, bool, Vec<&'a str>, Vec<&'a str>);
+
+#[test]
+fn the_offer_to_install_hooks_is_one_strip_line_with_the_choices_its_state_allows() {
+    let project = Some("/home/dbrain/dev/kampr");
+    let install = [
+        "Install for all projects",
+        "Install for kampr",
+        "Not now",
+        "Don't ask again",
+    ];
+    let cases: Vec<Offered> = vec![
+        (
+            "absent",
+            hooks("absent", None, true, project),
+            Role::Full,
+            false,
+            install.to_vec(),
+            vec!["Update"],
+        ),
+        (
+            "absent with no project",
+            hooks("absent", None, true, None),
+            Role::Full,
+            false,
+            vec!["Install for all projects", "Not now", "Don't ask again"],
+            vec!["Install for kampr", "alt+p"],
+        ),
+        (
+            "stale",
+            hooks("stale", Some("project"), true, project),
+            Role::Full,
+            false,
+            vec!["Update", "Not now", "Don't ask again"],
+            vec!["Install for"],
+        ),
+        (
+            "current",
+            hooks("current", Some("user"), true, project),
+            Role::Full,
+            false,
+            vec![],
+            install.to_vec(),
+        ),
+        (
+            "told never",
+            hooks("absent", None, false, project),
+            Role::Full,
+            false,
+            vec![],
+            install.to_vec(),
+        ),
+        (
+            "read-only",
+            hooks("absent", None, true, project),
+            Role::Readonly,
+            false,
+            vec![],
+            install.to_vec(),
+        ),
+        (
+            "a question is up",
+            hooks("absent", None, true, project),
+            Role::Full,
+            true,
+            vec!["Allow Bash?"],
+            install.to_vec(),
+        ),
+    ];
+    for (name, frame, role, asking, shown, hidden) in cases {
+        let mut convo = Convo::new();
+        convo.absorb(&hooks_event(frame));
+        if asking {
+            convo.absorb(&hooked(
+                PANE,
+                false,
+                None,
+                json!([{ "key": "1", "label": "Yes" }]),
+            ));
+        }
+        let screen = drawn_as(&mut convo, role);
+        for want in shown {
+            assert!(screen.contains(want), "{name}: {want:?} is missing:\n{screen}");
+        }
+        for unwanted in hidden {
+            assert!(
+                !screen.contains(unwanted),
+                "{name}: {unwanted:?} is shown:\n{screen}"
+            );
+        }
+        let offers = screen.lines().filter(|l| l.contains("Not now")).count();
+        assert!(offers <= 1, "{name}: one line, not {offers}:\n{screen}");
+    }
+}
+
+#[test]
+fn the_hooks_offer_does_not_survive_the_socket_that_carried_it() {
+    let mut convo = Convo::new();
+    convo.absorb(&hooks_event(hooks("absent", None, true, None)));
+    assert!(drawn_as(&mut convo, Role::Full).contains("Not now"));
+    convo.absorb(&Event::Disconnected {
+        reason: "gone".into(),
+    });
+    assert!(!drawn_as(&mut convo, Role::Full).contains("Not now"));
+}
+
+fn manage_op(mut frame: Value) -> Value {
+    frame.as_object_mut().expect("an object").remove("rid");
+    frame
+}
+
+fn manage_ops(frames: &[Value]) -> Vec<Value> {
+    frames
+        .iter()
+        .filter(|f| f["t"] == json!("manage"))
+        .cloned()
+        .map(manage_op)
+        .collect()
+}
+
+async fn offered(
+    conn: &mut Conn,
+    app: &mut App,
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    frame: Value,
+) -> String {
+    conn.send(frame);
+    pump(app, events, |e| matches!(e, Event::ClaudeHooks(_))).await;
+    painted(app, 120, 24)
+}
+
+#[tokio::test]
+async fn each_hooks_choice_sends_its_own_op_by_key_and_by_click() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    let mut app = app(&client);
+    conn.greet(json!([entry(PANE, Some("claude"), "idle", true)]));
+    pump(&mut app, &mut events, |e| matches!(e, Event::Prefs { .. })).await;
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+    let absent = hooks("absent", None, true, Some("/home/dbrain/dev/kampr"));
+    let alt = |c| KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT);
+    let install =
+        |mode: &str| json!({ "t": "manage", "op": "claude.hooks.install", "at": PANE, "mode": mode });
+    let decline = json!({ "t": "manage", "op": "claude.hooks.decline", "at": PANE });
+
+    let cases = [
+        (absent.clone(), 'i', install("user")),
+        (absent.clone(), 'p', install("project")),
+        (
+            hooks("stale", Some("project"), true, None),
+            'u',
+            install("project"),
+        ),
+        (hooks("stale", Some("user"), true, None), 'u', install("user")),
+        (absent.clone(), 'd', decline.clone()),
+    ];
+    for (frame, key, want) in cases {
+        offered(&mut conn, &mut app, &mut events, frame.clone()).await;
+        app.key(alt(key));
+        assert_eq!(manage_op(conn.sent("manage").await), want, "alt+{key}");
+
+        let screen = offered(&mut conn, &mut app, &mut events, frame).await;
+        let (_, _, chip) = app
+            .layout
+            .hooks
+            .iter()
+            .find(|(_, choice, _)| choice.key == key)
+            .cloned()
+            .unwrap_or_else(|| panic!("no chip for alt+{key}:\n{screen}"));
+        let click = app.mouse.hit(down(chip.x, chip.y), &app.layout, Role::Full);
+        app.clicked(click);
+        assert_eq!(manage_op(conn.sent("manage").await), want, "a click on alt+{key}");
+    }
+
+    let screen = offered(&mut conn, &mut app, &mut events, absent.clone()).await;
+    assert!(screen.contains("Not now"), "{screen}");
+    for c in "ip".chars() {
+        app.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+    assert_eq!(
+        app.composer.text(PANE),
+        "ip",
+        "a bare letter is the box's, offer or none"
+    );
+    assert!(manage_ops(&conn.heard().await).is_empty());
+    app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    app.key(alt('n'));
+    assert!(
+        manage_ops(&conn.heard().await).is_empty(),
+        "not now is this client's alone"
+    );
+    let later = painted(&mut app, 120, 24);
+    assert!(
+        app.layout.hooks.is_empty() && !later.contains("Not now"),
+        "{later}"
+    );
+
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+    let reopened = painted(&mut app, 120, 24);
+    assert!(
+        reopened.contains("Not now") && app.layout.hooks.len() == 4,
+        "until the conversation is reopened:\n{reopened}"
+    );
+}
+
+fn asked(id: Option<&str>, multi: bool) -> Value {
+    with_id(
+        json!({
+            "t": "pending", "pane": PANE, "question": "Allow Bash?", "multi": multi, "source": "hook",
+            "options": [{ "key": "1", "label": "Yes", "chosen": multi }, { "key": "3", "label": "No" }]
+        }),
+        id,
+    )
+}
+
+fn with_id(mut frame: Value, id: Option<&str>) -> Value {
+    if let Some(id) = id {
+        frame["id"] = json!(id);
+    }
+    frame
+}
+
+/// A press names the question it answers, so the node can refuse one aimed at a question that has
+/// since been replaced; a node that sends no id is answered exactly as before.
+#[tokio::test]
+async fn a_press_names_the_question_it_answers_and_an_old_node_is_sent_no_id() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    let mut app = app(&client);
+    conn.greet(json!([entry(PANE, Some("claude"), "blocked", true)]));
+    pump(&mut app, &mut events, |e| matches!(e, Event::Prefs { .. })).await;
+    app.key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+    app.key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::SHIFT));
+
+    for id in [Some("q7"), None] {
+        let answer = with_id(json!({ "t": "answer", "pane": PANE, "key": "1" }), id);
+        let submit = with_id(json!({ "t": "answer.submit", "pane": PANE }), id);
+
+        blocked_on(&mut conn, &mut app, &mut events, asked(id, false)).await;
+        app.key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));
+        assert_eq!(conn.sent("answer").await, answer, "a key, id {id:?}");
+
+        let chip = app.layout.chips[0].rects[0];
+        let click = app.mouse.hit(down(chip.x, chip.y), &app.layout, Role::Full);
+        app.clicked(click);
+        assert_eq!(conn.sent("answer").await, answer, "a click, id {id:?}");
+
+        blocked_on(&mut conn, &mut app, &mut events, asked(id, true)).await;
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(conn.sent("answer.submit").await, submit, "enter, id {id:?}");
+
+        let chip = app.layout.chips[0].submit.expect("a submit chip");
+        let click = app.mouse.hit(down(chip.x, chip.y), &app.layout, Role::Full);
+        app.clicked(click);
+        assert_eq!(conn.sent("answer.submit").await, submit, "the chip, id {id:?}");
+    }
 }

@@ -33,17 +33,7 @@ impl Drop for Harness {
     fn drop(&mut self) {
         self.node.shutdown();
         self.server.abort();
-        let fleets = std::fs::read_dir(self.home.path().join("native").join("fleet"));
-        for root in fleets.into_iter().flatten().flatten() {
-            for session in kampr_keep::list(&root.path()).unwrap_or_default() {
-                if let Some(keeper) = session.keeper() {
-                    unsafe {
-                        libc::kill(-(keeper.child as i32), libc::SIGKILL);
-                        libc::kill(keeper.keeper as i32, libc::SIGKILL);
-                    }
-                }
-            }
-        }
+        kampr_testkit::stop_keepers(&self.home.path().join("native"));
     }
 }
 

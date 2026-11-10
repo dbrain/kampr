@@ -139,6 +139,20 @@ async fn the_terminal_running_the_tui_is_the_session_s_pane() {
 }
 
 #[tokio::test]
+async fn a_node_that_goes_takes_the_terminals_it_started_with_it() {
+    let fake = Fake::start(vec![]).await;
+    let h = Harness::start(&fake).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = h.client().await;
+    let (_, pid) = client.terminal(dir.path()).await;
+    let alive = |pid: u32| unsafe { libc::kill(pid as i32, 0) } == 0;
+    assert!(alive(pid));
+    drop(client);
+    drop(h);
+    eventually("the terminal gone", || (!alive(pid)).then_some(())).await;
+}
+
+#[tokio::test]
 async fn a_tui_elsewhere_or_in_no_terminal_here_links_nothing() {
     let fake = Fake::start(vec![]).await;
     let h = Harness::start(&fake).await;

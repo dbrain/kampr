@@ -323,10 +323,13 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
             label: "Yes".into(),
             detail: None,
             chosen: false,
+            text: false,
         }],
         source: PendingSource::Screen,
         header: None,
         multi: false,
+        context: None,
+        id: None,
     })
     .unwrap();
     assert_eq!(asked["t"], "pending");
@@ -342,7 +345,7 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
     );
     let frame = asked.as_object().unwrap();
     assert!(
-        !frame.contains_key("header") && !frame.contains_key("multi"),
+        !frame.contains_key("header") && !frame.contains_key("multi") && !frame.contains_key("context"),
         "{asked}"
     );
 
@@ -353,6 +356,8 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
         source: PendingSource::Transcript,
         header: None,
         multi: false,
+        context: None,
+        id: None,
     })
     .unwrap();
     assert!(cleared["question"].is_null());

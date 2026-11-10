@@ -1,5 +1,5 @@
 use crate::dial::{self, Socket};
-use crate::frames::{ConvoPage, Event, Failure, Hello, Managed, NodeCaps, Pending, Role};
+use crate::frames::{ClaudeHooks, ConvoPage, Event, Failure, Hello, Managed, NodeCaps, Pending, Role};
 use crate::herd::Herd;
 use crate::pane::PaneState;
 use crate::resolve::Session;
@@ -166,6 +166,15 @@ impl Drop for Client {
     }
 }
 
+/// An older node has no id to name and would read an unknown one as a stranger's question, so an
+/// absent id is left out rather than sent as null.
+fn question(mut message: Value, id: Option<&str>) -> Value {
+    if let Some(id) = id {
+        message["id"] = json!(id);
+    }
+    message
+}
+
 impl Client {
     pub fn start(session: Session) -> Self {
         Self::with_policy(session, Policy::default())
@@ -281,8 +290,17 @@ impl Client {
 
     /// The node decides whether a submit key follows, per harness, so only a key that was offered
     /// in `pending.options` may be sent and an Enter is never synthesised.
-    pub fn answer(&self, pane: &str, key: &str) -> bool {
-        self.send(json!({ "t": "answer", "pane": pane, "key": key }))
+    pub fn answer(&self, pane: &str, key: &str, id: Option<&str>, text: Option<&str>) -> bool {
+        let mut message = question(json!({ "t": "answer", "pane": pane, "key": key }), id);
+        if let Some(text) = text {
+            message["text"] = json!(text);
+        }
+        self.send(message)
+    }
+
+    /// Commits the ticks on a question that takes several answers.
+    pub fn answer_submit(&self, pane: &str, id: Option<&str>) -> bool {
+        self.send(question(json!({ "t": "answer.submit", "pane": pane }), id))
     }
 
     /// Search this pane's whole **transcript** — the conversation the harness recorded, which is
@@ -472,6 +490,8 @@ impl Inner {
             "convo.facets" => self.convo_facets(&message),
             "convo.composer" => self.convo_composer(&message),
             "pending" => self.pending(message),
+            "convo.heard" => self.convo_heard(&message),
+            "claude.hooks" => self.claude_hooks(message),
             "caps" => self.node_caps(message),
             "managed" => self.managed(message),
             "error" => self.error(message),
@@ -749,6 +769,22 @@ impl Inner {
     fn pending(&self, message: Value) {
         if let Ok(pending) = serde_json::from_value::<Pending>(message) {
             self.emit(Event::Pending(pending));
+        }
+    }
+
+    fn convo_heard(&self, message: &Value) {
+        let (Some(pane), Some(text)) = (message["pane"].as_str(), message["text"].as_str()) else {
+            return;
+        };
+        self.emit(Event::ConvoHeard {
+            pane: pane.to_string(),
+            text: text.to_string(),
+        });
+    }
+
+    fn claude_hooks(&self, message: Value) {
+        if let Ok(hooks) = serde_json::from_value::<ClaudeHooks>(message) {
+            self.emit(Event::ClaudeHooks(hooks));
         }
     }
 

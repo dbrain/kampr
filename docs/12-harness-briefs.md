@@ -734,6 +734,233 @@ not be mistaken for a fix for it.
 
 ---
 
+## W11 — Claude tells Kampr what it is asking, through its own hooks
+
+The operator's report: the conversation is *"decent for anything that is committed to the session
+file, a bit janky for streaming responses and sending messages, a bit janky for permission requests
+(kinda sorta maybe works but gets detected for random things sometimes) and shows random text"*.
+All three janky halves are screen reads — the dialog, the painted reply, the composer — and Claude
+Code has a channel that says each of them outright while its TUI keeps running.
+
+**Why hooks and not the SDK.** The SDK's structured stream exists only under `--print`, which
+replaces the TUI, and Kampr's sessions are terminals a person also sits at. `--remote-control`
+proves the CLI can stream SDK-shaped events from a running TUI, but only to Anthropic's backend,
+signed and attested ([#633](./03-probe-log.md)). Hooks run beside the TUI, are documented, and are
+the operator's own configuration. Neither the SDK nor any hook carries a running command's output
+([#632](./03-probe-log.md)), so the screen stays the only source for that, and for dialogs no hook
+announces (trust, rewind, shell mode).
+
+**What was measured** (rows #623-#642, Claude Code 2.1.311):
+
+| Fact | Row | Consequence |
+|---|---|---|
+| `PermissionRequest` fires for every permission dialog and every `AskUserQuestion`, with the tool's input and `permission_suggestions`, while the TUI draws the dialog | [#623](./03-probe-log.md) | A structured card with nothing read off the screen; the desk can still answer |
+| The hook's reply decides the dialog; a question is answered with `updatedInput.answers` keyed by question text | [#624](./03-probe-log.md) | No keystroke grammar, no multi-answer submit sequence |
+| `updatedPermissions` = the request's own suggestions is the dialog's "always" | [#625](./03-probe-log.md) | The second option is offered only when there are suggestions |
+| A keyboard answer leaves the hook running to its timeout; `PostToolUse` follows an allow within ~50 ms; **Esc fires nothing** | [#626](./03-probe-log.md) | The node must release a held hook itself, and must also clear on the pane leaving `blocked` |
+| A hook that exits without deciding leaves the dialog standing | [#627](./03-probe-log.md) | Failing open is free |
+| `MessageDisplay` sends each completed paragraph as raw markdown, synchronously, at the TUI's own granularity, seconds before the transcript record | [#628](./03-probe-log.md) | The live turn without a screen read; the reply must be immediate |
+| Settings edited mid-session apply at the next event, no restart, no approval (project-local measured, user not) | [#629](./03-probe-log.md) | Install and update take effect in running sessions |
+| The command is run by a shell; `[ -x <bin> ] && exec <bin> …; exit 0` is silent when the binary is gone | [#630](./03-probe-log.md) | An uninstalled Kampr never puts a hook error on the operator's screen |
+| `UserPromptSubmit` carries the exact text at submit | [#631](./03-probe-log.md) | A sent message is acknowledged by the harness, not inferred |
+| Plan approval is a `PermissionRequest` for `ExitPlanMode`; a bare `allow` is ignored, `allow` with the request's own input approves, `setMode` picks the mode left for, `deny`'s message is what the plan is revised from | [#635](./03-probe-log.md) | A plan card of its own; the old tool card's Yes did nothing |
+| A subagent's request carries `agent_type` and draws no dialog on the main screen | [#636](./03-probe-log.md) | The card says whose it is, and the pane's status does not release it |
+| An MCP elicitation fires `Elicitation`, and Claude draws no form until that hook returns | [#637](./03-probe-log.md) | Kampr must never hold it |
+| `{}` from that hook draws the form at once; the desk's answer and Esc fire `ElicitationResult` | [#638](./03-probe-log.md) | Shown as answer-at-the-terminal, cleared by its result |
+| Words that are none of a question's labels reach the model as its "Type something" would | [#639](./03-probe-log.md) | Free text from a phone |
+| User-scope hooks apply mid-session too; the same command in two scopes runs once | [#640](./03-probe-log.md), [#641](./03-probe-log.md) | `--settings` at launch beside an install fires nothing twice |
+| herdr's `agent.start` hands `args` over verbatim, one argv entry each | [#642](./03-probe-log.md) | The settings JSON needs no quoting on that path |
+
+### The channel
+
+`kampr hook --socket <path>` is what Claude runs. It reads the event from stdin, writes it to the
+node's hook socket, half-closes, and prints whatever the node answers (often nothing) before
+exiting 0. Any failure — no socket, refused, node gone — is exit 0 with no output, which is "no
+decision" to Claude (#627). It runs before tokio starts, like `keep`.
+
+The socket is `hooks.sock` in the node's private runtime directory (`kampr-keep`'s `dir` rules:
+`$XDG_RUNTIME_DIR/kampr`, 0700, ancestors checked), overridable in config. The node checks the
+peer's uid with `SO_PEERCRED` and refuses any other. **Routing is by process, not by id**: the
+peer's pid is looked for in each local pane's process tree, and a session id remembered against a
+pane is used again only while the peer is still inside that pane — `claude --resume` of the same
+session in another pane is another pane's. A pane is *hooked* only while the Claude that sent its
+hooks is still running in it, so a pane that goes on to run anything else gets its screen reads
+back. An event from a Claude no pane hosts is answered with nothing at once.
+
+A unix socket's path is capped near 104-108 bytes. Under a runtime directory deep enough to pass
+that, the node logs that it cannot serve hooks and starts anyway.
+
+### What the installed hooks are
+
+One command for every event, the node's own executable and socket baked in:
+
+```
+[ -x '<exe>' ] && '<exe>' hook --socket '<socket>' 2>/dev/null; exit 0
+```
+
+Not `exec`: with it the trailing `exit 0` never runs, and a binary that does not know `hook` — a
+rollback to an older release — exits 2, which Claude reads as *block* (a prompt erased, a request
+denied). Kampr's earlier `exec` form is recognised as Kampr's and reported stale.
+
+Events: `PermissionRequest` (timeout 3600 s), `PostToolUse`, `PostToolUseFailure`,
+`PermissionDenied` (matcher `*`), `UserPromptSubmit`, `MessageDisplay`, `Elicitation`,
+`ElicitationResult` (timeout 5 s), `Stop`, `StopFailure`, `SessionEnd` (timeout 10 s). Adding the
+two elicitation events made every earlier install read **stale**, so it is offered the Update. An entry is Kampr's when its command runs a `kampr`
+executable with `hook --socket`. Installed hooks are **current** when a file holds exactly that set
+with exactly that command, **stale** when it holds Kampr entries that differ (a moved binary, a
+release that changed the set), **absent** otherwise.
+
+- **user**: `~/.claude/settings.json` (the journals home), every Claude this user runs.
+- **project**: `<project>/.claude/settings.local.json`, where the project is the Claude session's
+  own `cwd` from its marker, else the pane's. The local file, not `settings.json`, because the
+  command holds a path on this machine and must never be committed for a team.
+
+Installing writes the chosen file — parsed and rewritten in place, every key the operator had kept
+in its order, Kampr's old entries removed first — and removes Kampr's entries from the other scope,
+so no event fires twice. A file that is not valid JSON is refused in words and left untouched. A
+settings file that is a symlink (a dotfiles checkout) is written through to its target, and stays a
+link.
+
+### The permission card
+
+A `PermissionRequest` makes a hook-owned question on the pane, `source: "hook"`:
+
+- **A tool**: `header` is the tool name, `question` its `description` (or "Allow <tool>?"),
+  `context` is what it would act on — a Bash command, a file path, a URL, a query, otherwise the
+  input as compact JSON, capped. Options `1` Yes, `2` "Yes, and …" naming the suggestions (only
+  when there are any), `3` No. `1` replies `allow`, `2` `allow` with `updatedPermissions`, `3`
+  `deny` with "Declined from Kampr".
+- **`AskUserQuestion`**: one question at a time, `header` its own (with "· 2 of 3" when there are
+  several), options its labels with descriptions as `detail`, `multi` from `multiSelect`. A press
+  answers a single-answer question and moves on; on a multi one it ticks, and `answer.submit`
+  commits. After the last, the reply is `allow` with `updatedInput {questions, answers}`, several
+  labels joined with `", "` as the harness itself does (#634). Every question ends with a `Type
+  something` option carrying `text: true`: its press brings the operator's words in `answer.text`,
+  which are the answer on a single-answer question and follow the ticked labels on a multi one
+  (#639, #634). That press without words is refused ("that answer needs words").
+- **A plan** (`ExitPlanMode`): `header` "Plan", `question` "Approve Claude's plan?", `context` the
+  plan (capped at 20 000 characters, not 2000: it is the thing being read). `1` "Yes, auto-accept
+  edits" and `2` "Yes, manually approve edits" reply `allow` with `updatedInput` the request's own
+  `tool_input` and `updatedPermissions` a session `setMode` to `acceptEdits` or `default`; `3` "No,
+  tell Claude what to change" (`text: true`) replies `deny` with the operator's words, or "Declined
+  from Kampr" with none. The tool card this replaces answered a bare `allow`, which Claude ignores:
+  the card went and the dialog stayed (#635).
+- **A subagent's request** has `agent_type`, and its `header` says so: `Bash · general-purpose
+  subagent`. It queues behind the main agent's like any other, but it is drawn nowhere on the main
+  screen (#636), so it is never let go by the pane leaving `blocked`; its tool's result, the session
+  moving on, the hook going and the pane going still release it.
+
+Words sent on an option without `text` are refused, not dropped, so a client that gets it wrong is
+told.
+
+Requests queue per pane and the oldest is shown; each carries an `id`, and a press that names an
+`id` which is no longer the one shown is refused, so a tap meant for a request answered at the desk
+cannot approve the one that replaced it.
+
+While a hook owns the pane's question, the screen is not read for one. When a hooked pane goes
+`blocked`, the screen read waits briefly for the hook's question before falling back, because the
+hook arrives first (#623) and the screen read is where *"detected for random things"* comes from.
+When a hook's question goes away while the pane is still `blocked` — Claude timed the hook out, or
+it was killed — the screen is read again, because the dialog may still be standing (#627). Not
+when the node itself answered it: that dialog stays drawn until Claude repaints and the pane stays
+`blocked` until its status catches up, and reading it then flashed an answered question back onto
+every client as a screen card.
+
+The pane's half-typed line (`convo.composer`) is not read while a dialog stands: not while a hook's
+question is up or the pane is `blocked`, and not while the screen shows a dialog at all. Claude
+marks a dialog's focused option with the box's own `❯`, so the options under it read as text
+typed into the box and filled the reply box with them. The box is read again as soon as that
+ends, since Claude often redraws it before the pane stops being `blocked`.
+
+It is released — the held hook answered with nothing, `question: null` published — on the reply,
+on `PostToolUse`/`PostToolUseFailure`/`PermissionDenied` for its `tool_use_id`, on the session's
+next `UserPromptSubmit`, `Stop`, `StopFailure` or `SessionEnd`, on the hook's connection closing,
+on the pane leaving `blocked` (Esc, #626) and on the pane going away. Push notifications and the
+warm resume read the hook's question before the screen's.
+
+### An MCP server's form is answered at the terminal
+
+`Elicitation` is not a `PermissionRequest`, and Claude waits on its hook before drawing the form at
+all (#637): a node holding it the way it holds a permission leaves the desk with nothing to answer
+for as long as it holds. So the node replies with nothing at once, which draws the form (#638), and
+publishes a hook question with `header` `<server> · MCP`, `question` the server's message, `context`
+the requested fields one per line (title and name, type, `required`) and **no options**. A question
+with no options is the clients' cue to say *answer it at the terminal*; a press on it is refused.
+Answering the form from Kampr would mean holding the hook and so hiding the form at the desk, and
+a form is usually typed into, which is the desk's job.
+
+It is cleared by `ElicitationResult`, which fires for any answer at the desk, Esc included (#638),
+and by the session's next `UserPromptSubmit`, `Stop`, `StopFailure` or `SessionEnd`. Not by the
+pane's status: the result says when it is over. While it stands the screen is not read for a
+question, as for any hook's.
+
+### Claudes Kampr starts
+
+A Claude the node launches itself — herdr's `agent.start` with kind `claude` (args are handed over
+verbatim, #642), a Kampr session's `agent.start` with kind `claude`, and `native.create` whose argv
+starts with a `claude` binary or whose command line's first word is one — is given `--settings
+'<json>'` holding exactly the hooks an install writes, the same command strings. One that also has
+them installed runs each hook once (#641), so the two never fire an event twice. On a command line
+the flag goes straight after that first word, shell-quoted, so `claude --resume; echo done` keeps
+its meaning. Nothing is added once the operator has said **Don't ask again**.
+
+Such a pane is told `claude.hooks` **current** with no `scope` when no settings file holds Kampr's
+hooks, and is offered nothing: the Claude whose pid the session marker names has its own
+`/proc/<pid>/cmdline` read for `--settings` followed by exactly this node's JSON. A stale install
+beside it is still reported stale, since that one fires a second, different command.
+
+### The live turn and the acknowledgement
+
+`MessageDisplay` deltas, concatenated per `message_id`, are the pane's live turn whenever the pane
+is hooked; the screen lift stays for a pane that is not. It is retired exactly as today, when the
+transcript supersedes it, and a conversation opened after the record landed is checked against the
+journal so the same words are never drawn twice. The node replies at once and never sets
+`displayContent`.
+
+`UserPromptSubmit` publishes `convo.heard {pane, text}`. A client's sending card that matches it
+becomes delivered — drawn as the operator's turn, not "sending" — until the transcript's record
+replaces it, or a newer reply arrives, or the 45 s window passes: a slash command is heard and never
+recorded as the text that was sent.
+
+### Asking to install
+
+`claude.hooks {pane, state, scope?, ask, project?}` is sent with a Claude pane's conversation when
+it opens and after either op below: `state` current/stale/absent, `scope` where Kampr's entries are,
+`ask` false once the operator has said never, `project` the directory a project install would
+write under. The conversation pane offers, on a Claude pane that is not current while `ask` holds:
+
+- absent: **Install for all projects** (user), **Install for <project>** (project), **Not now**,
+  **Don't ask again**;
+- stale: **Update** (in the scope it is in), **Not now**, **Don't ask again**.
+
+`manage claude.hooks.install {at: pane, mode: "user"|"project"}` installs; `manage
+claude.hooks.decline {at: pane}` records never for this node, in its state directory. *Not now* is
+the client's alone and lasts until the conversation is reopened. Both ops need write and are
+audited; a remote pane's op goes to the node that owns it.
+
+### Wire
+
+All additive (04):
+
+- `pending.source` gains `"hook"`; `pending.context?: string`; `pending.id?: string` on a hook's
+  question, and `answer.id?` / `answer.submit.id?` naming the question a press was for.
+- `pending.options[].text?: bool`, an option answered with words, and `answer.text?: string`
+  carrying them. A hook question with no options is answered at the terminal.
+- `convo.heard {pane, text}`.
+- `claude.hooks {pane, state: "current"|"stale"|"absent", scope?: "user"|"project", ask: bool,
+  project?: string}`.
+- `manage` ops `claude.hooks.install` (`at`, `mode`) and `claude.hooks.decline` (`at`).
+- The hub passes `convo.heard` and `claude.hooks` through like `pending`.
+
+### Not done by this
+
+- A hooked session's command output still comes off the screen (#632).
+- Answering an MCP form from Kampr: the hook that could answer it is the one that hides it (#637).
+- A `claude` reached through anything but its own name on a command line (`env claude`, `cd x &&
+  claude`, an alias) is not given `--settings`; it is offered the install like any other.
+
+---
+
 ## What was built
 
 Recorded here rather than in a commit message because the brief is what a reader arrives at, and a

@@ -27,7 +27,7 @@ impl std::ops::Deref for Fleet {
 impl Drop for Fleet {
     fn drop(&mut self) {
         if let Some(root) = &self.root {
-            kill_keepers(root.path());
+            kampr_testkit::stop_keepers(root.path());
         }
     }
 }
@@ -154,17 +154,6 @@ fn config(root: &Path) -> NativeConfig {
         NativeConfig::new(Some(root.to_path_buf()), Some(kampr_testkit::keeper())).expect("a config");
     config.launch = Some(Launch::Detached);
     config
-}
-
-fn kill_keepers(root: &Path) {
-    for session in kampr_keep::list(root).unwrap_or_default() {
-        if let Some(keeper) = session.keeper() {
-            unsafe {
-                libc::kill(-(keeper.child as i32), libc::SIGKILL);
-                libc::kill(keeper.keeper as i32, libc::SIGKILL);
-            }
-        }
-    }
 }
 
 pub fn sh(script: &str) -> Job {

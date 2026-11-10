@@ -4,11 +4,17 @@ import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.net.Endpoint
 import dev.kampr.shared.net.KamprConnection
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.Wire
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -16,6 +22,35 @@ import kotlin.test.assertTrue
 private const val PANE = "01JNODE/w1:p1"
 
 class OutboxTest {
+    // The browser is one thread: a burst of keystrokes is queued before the pump runs once, and a
+    // reply box mirroring 110 characters typed at once lost 44 of them on a live socket.
+    @Test
+    fun aBurstOfTypingOnALiveSocketArrivesWholeAndInOrder() {
+        val node = StubNode()
+        node.start()
+        val thread = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val scope = CoroutineScope(SupervisorJob() + thread)
+        val store = KamprStore()
+        val connection = KamprConnection(scope, store)
+        val typed = (0 until 110).map { "k${it % 10}" }
+        try {
+            runBlocking {
+                store.pane(PANE)
+                connection.connect(Endpoint("http://127.0.0.1:${node.port}"))
+                until("hello") { store.hello.value != null }
+                withContext(thread) { typed.forEach { connection.send(ClientMsg.InputText(PANE, it)) } }
+                val want = typed.joinToString("")
+                until("the burst to arrive") { arrived(node) == want }
+                assertEquals(0, store.pane(PANE).undelivered, "a live socket counted a burst of typing as lost")
+            }
+        } finally {
+            connection.disconnect()
+            scope.cancel()
+            thread.close()
+            node.stop()
+        }
+    }
+
     // The audit killed the node mid-typing: 136 of 200 keystrokes vanished with no signal, and the
     // 64 that fitted in the outbox were replayed into the live shell twenty seconds later.
     @Test
@@ -137,3 +172,8 @@ class OutboxTest {
         scope.cancel()
     }
 }
+
+private fun arrived(node: StubNode): String = node.received
+    .map { Wire.json.parseToJsonElement(it).jsonObject }
+    .filter { it["t"]?.jsonPrimitive?.content == "input" }
+    .joinToString("") { it["text"]?.jsonPrimitive?.content.orEmpty() }

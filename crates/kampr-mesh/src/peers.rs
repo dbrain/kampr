@@ -645,8 +645,8 @@ impl Peers {
             "grid.reset" => link.grid_reset(&message),
             "grid.patch" => link.grid_patch(&message),
             "scrollback" => link.scrollback(&message),
-            "pending" | "convo" | "convo.turn" | "convo.facets" | "convo.composer" | "find"
-            | "convo.find" | "pasted" => link.passthrough(&message),
+            "pending" | "convo" | "convo.turn" | "convo.facets" | "convo.composer" | "convo.heard"
+            | "claude.hooks" | "find" | "convo.find" | "pasted" => link.passthrough(&message),
             "error" => link.error(&message),
             "managed" => link.managed(message),
             "att.open" | "att.chunk" | "att.end" | "att.error" => link.attachment(&message),

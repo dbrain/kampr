@@ -14,10 +14,12 @@ pub mod alloc;
 pub mod docker;
 pub mod elf;
 mod keeper;
+mod keepers;
 pub mod release;
 mod static_kampr;
 
 pub use keeper::{kampr, keeper};
+pub use keepers::stop_keepers;
 pub use static_kampr::static_kampr;
 
 use std::path::{Path, PathBuf};

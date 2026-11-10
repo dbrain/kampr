@@ -30,6 +30,11 @@ pub trait Table {
     fn argv(&self, pid: u32) -> Option<Vec<String>>;
     /// The kernel's short name, which herdr labels a pane with (#75).
     fn comm(&self, pid: u32) -> Option<String>;
+    /// What a person would call the program: `comm`, except where the kernel names it after
+    /// something they never typed.
+    fn name(&self, pid: u32) -> Option<String> {
+        self.comm(pid)
+    }
     fn cwd(&self, pid: u32) -> Option<PathBuf>;
     /// The foreground process group of the terminal `pid` is attached to.
     fn tpgid(&self, pid: u32) -> Option<u32>;

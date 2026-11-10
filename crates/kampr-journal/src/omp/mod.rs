@@ -329,6 +329,7 @@ impl JournalAdapter for OmpAdapter {
                 // `pi_status`.
                 status: None,
                 transcript: found.transcript,
+                record: None,
                 started: process.started,
             });
         }
@@ -348,6 +349,7 @@ impl JournalAdapter for OmpAdapter {
                 // terminal title, and that is read where the title is — see `title_status`.
                 status: None,
                 transcript: found.transcript,
+                record: None,
                 started: process.started,
             })
         })

@@ -121,3 +121,26 @@ async fn a_job_the_herd_was_told_of_is_taken_back_even_if_it_ended_between_looks
         changes_to(&provider, &pane, None).await;
     }
 }
+
+/// macOS names a process after the file its symlink resolved to, so Claude's installed
+/// `~/.local/bin/claude` ran as `2.1.308` (its `versions/` file); the job is what was typed.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_job_run_through_a_symlink_is_named_by_the_link() {
+    let (root, provider, pane) = shell().await;
+    let link = root.0.path().join("widget");
+    std::os::unix::fs::symlink(which("cat"), &link).expect("a link");
+    provider
+        .write_pane(&pane, Input::Bytes(format!("{}\r", link.display()).into_bytes()))
+        .await
+        .expect("typed");
+    changes_to(&provider, &pane, Some("widget")).await;
+}
+
+fn which(program: &str) -> std::path::PathBuf {
+    std::env::var("PATH")
+        .unwrap_or_default()
+        .split(':')
+        .map(|dir| std::path::Path::new(dir).join(program))
+        .find(|p| p.is_file())
+        .expect("on PATH")
+}

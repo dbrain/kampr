@@ -1,9 +1,6 @@
 use kampr_core::procfs::{self, is_shell};
 use kampr_journal::process::{self, PaneProcess};
-use kampr_journal::{agy, claude, codex, omp};
 use kampr_proc::Table;
-
-const HARNESSES: &[&str] = &[claude::AGENT, codex::AGENT, omp::AGENT, omp::PI_AGENT, agy::AGENT];
 
 pub(crate) struct Foreground {
     pub pid: u32,
@@ -20,7 +17,7 @@ pub(crate) fn foreground(child: u32) -> Option<Foreground> {
     };
     Some(Foreground {
         pid,
-        name: process::comm(pid)?,
+        name: kampr_proc::here().name(pid)?,
         argv: cmdline(pid),
     })
 }
@@ -35,19 +32,17 @@ pub(crate) fn job(fg: &Foreground) -> Option<String> {
         .jobs
         .into_iter()
         .next()
-        .map(|job| job.name)
+        .map(|job| kampr_proc::here().name(job.pid).unwrap_or(job.name))
 }
 
-/// Matched on the process name and on the first two words of its command line, because an npm
-/// install runs a harness as `node …/codex` and omp runs under `bun`. Searched breadth first below
-/// the job, so a wrapper script (or a shell under it) is looked through and the shallowest match
-/// wins: a harness's own children are not the harness.
+/// Searched breadth first below the job, so a wrapper script (or a shell under it) is looked
+/// through and the shallowest match wins: a harness's own children are not the harness.
 pub(crate) fn harness(fg: &Foreground) -> Option<(&'static str, PaneProcess)> {
-    if let Some(name) = named(&fg.name, &fg.argv) {
+    if let Some(name) = process::harness_named(&fg.name, &fg.argv) {
         return Some((name, PaneProcess::look_up(fg.pid)));
     }
     descendants(fg.pid).into_iter().skip(1).find_map(|pid| {
-        let name = named(&process::comm(pid)?, &cmdline(pid))?;
+        let name = process::harness_named(&process::comm(pid)?, &cmdline(pid))?;
         Some((name, PaneProcess::look_up(pid)))
     })
 }
@@ -66,17 +61,6 @@ pub(crate) fn descendants(root: u32) -> Vec<u32> {
     found
 }
 
-fn named(comm: &str, argv: &[String]) -> Option<&'static str> {
-    std::iter::once(comm)
-        .chain(argv.iter().take(2).map(|a| stem(a)))
-        .find_map(|n| HARNESSES.iter().find(|h| **h == n).copied())
-}
-
-fn stem(arg: &str) -> &str {
-    let base = arg.rsplit('/').next().unwrap_or(arg);
-    base.split_once('.').map_or(base, |(stem, _)| stem)
-}
-
 fn cmdline(pid: u32) -> Vec<String> {
     kampr_proc::here().argv(pid).unwrap_or_default()
 }
@@ -87,7 +71,7 @@ pub(crate) fn cwd(pid: u32) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{foreground, job, named};
+    use super::{foreground, job};
     use std::os::unix::process::CommandExt;
     use std::time::{Duration, Instant};
 
@@ -162,24 +146,6 @@ mod tests {
         unsafe {
             libc::close(master);
             libc::close(slave);
-        }
-    }
-
-    #[test]
-    fn a_harness_is_known_by_its_name_or_by_what_its_runtime_was_handed() {
-        let argv = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        for (comm, args, want) in [
-            ("claude", argv(&["claude", "--resume"]), Some("claude")),
-            (
-                "node",
-                argv(&["node", "/usr/lib/node_modules/@openai/codex/bin/codex.js"]),
-                Some("codex"),
-            ),
-            ("bun", argv(&["bun", "/home/x/.bun/bin/omp"]), Some("omp")),
-            ("bash", argv(&["bash", "-l"]), None),
-            ("node", argv(&["node", "server.js", "claude"]), None),
-        ] {
-            assert_eq!(named(comm, &args), want, "{comm} {args:?}");
         }
     }
 }

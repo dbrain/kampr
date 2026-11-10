@@ -12,6 +12,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -38,14 +42,16 @@ private val OPTIONS_CEILING = 320.dp
 // closes; on one that takes several it ticks a box and the dialog stays up until something commits
 // it (#421). Naming that here rather than at each call site is what stops the two reading alike.
 private fun pressLabel(option: PendingOption, multi: Boolean): String = when {
-    !multi -> "Answer ${option.key}, ${option.label}"
+    !multi || option.text -> "Answer ${option.key}, ${option.label}"
     option.chosen -> "Untick ${option.label}"
     else -> "Tick ${option.label}"
 }
 
-// `pending.source` records whether the node lifted the question from the transcript or from the
-// screen. It is a provenance note, never a branch: the strip and the answer are identical either
-// way, and the node decides whether a submit key follows the one it is sent.
+// `pending.source` records whether the node lifted the question from the transcript, from the
+// screen or from Claude's own hook. It is a provenance note, never a branch: the strip and the
+// answer are identical either way — the footnote's words are the one thing it changes — and the
+// node decides what an answer becomes. The one exception is `terminalOnly`, a hook question the
+// node offers nothing to press on.
 @Composable
 fun PendingStrip(
     pending: ServerMsg.Pending,
@@ -54,9 +60,11 @@ fun PendingStrip(
     modifier: Modifier = Modifier,
     onSubmit: (() -> Unit)? = null,
     byKeys: Boolean = true,
+    onWords: ((key: String, words: String) -> Unit)? = null,
 ) {
     val tokens = Kampr.tokens
     val question = pending.question ?: return
+    var typing by remember(pending.id, question) { mutableStateOf<String?>(null) }
     val shape = RoundedCornerShape(tokens.radii.md)
     Column(
         modifier
@@ -80,6 +88,13 @@ fun PendingStrip(
                 pending.header?.let { LabelText(it, tokens.type.metaSmall, tokens.color.blocked) }
                 KText(question, tokens.type.bodyStrong, tokens.color.text, maxLines = 4)
             }
+        }
+
+        pending.context?.let { PendingContext(pending, it) }
+
+        if (pending.terminalOnly) {
+            KText("Answer this at the terminal.", tokens.type.micro, tokens.color.blocked, maxLines = 2)
+            return@Column
         }
 
         // A column, not a row of chips. **The descriptions are the point** — the operator's report
@@ -108,7 +123,18 @@ fun PendingStrip(
                             chip,
                         )
                         .touchable()
-                        .action(pressLabel(option, pending.multi), { onAnswer(option.key) }, chip, enabled = answering.enabled)
+                        .action(
+                            pressLabel(option, pending.multi),
+                            {
+                                when {
+                                    !option.text || onWords == null -> onAnswer(option.key)
+                                    typing == option.key -> typing = null
+                                    else -> typing = option.key
+                                }
+                            },
+                            chip,
+                            enabled = answering.enabled,
+                        )
                         .padding(horizontal = 12.dp, vertical = 9.dp),
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
@@ -124,7 +150,7 @@ fun PendingStrip(
                     ) {
                         // The tick is drawn rather than left in the label, because the node strips
                         // it out of the label to publish `chosen` and a reader still has to see it.
-                        if (pending.multi) {
+                        if (pending.multi && !option.text) {
                             KText(if (option.chosen) "☑" else "☐", tokens.type.buttonSmall, ink)
                         }
                         KText("${option.key} · ${option.label}", tokens.type.buttonSmall, ink, Modifier.weight(1f))
@@ -139,6 +165,21 @@ fun PendingStrip(
                     }
                 }
             }
+        }
+
+        // Outside the options' scroll, which is capped: inside it the field opened below the fold
+        // of five described options with its Send out of sight.
+        val wordsFor = pending.options.firstOrNull { it.key == typing }
+        if (wordsFor != null && onWords != null) {
+            PendingWords(
+                wordsFor,
+                enabled = answering.enabled,
+                onSend = { words ->
+                    onWords(wordsFor.key, words)
+                    typing = null
+                },
+                onCancel = { typing = null },
+            )
         }
 
         // Only on a question that takes several answers, and only where the node knows what
@@ -183,6 +224,7 @@ fun PendingStrip(
 private fun note(pending: ServerMsg.Pending, byKeys: Boolean): String = when {
     pending.multi -> "Takes several answers — tick what you want, then send."
     !byKeys -> "Asked by muffit, and answered to it directly."
+    pending.source == "hook" -> "Asked by Claude through Kampr's hooks, and answered to it directly."
     pending.source == "transcript" -> "Read from the transcript, answered by keys into the pane."
     else -> "Read from the pane, answered by keys into the pane."
 }
@@ -194,6 +236,8 @@ private fun spoken(pending: ServerMsg.Pending): String {
         val ticked = if (pending.multi && option.chosen) ", ticked" else ""
         listOfNotNull("${option.key} ${option.label}", option.detail).joinToString(". ") + ticked
     }
-    return "${title}The agent is asking: ${pending.question}$kind. " +
+    val about = pending.context?.let { "About: $it. " }.orEmpty()
+    if (pending.terminalOnly) return "${title}The agent is asking: ${pending.question}. ${about}Answer this at the terminal."
+    return "${title}The agent is asking: ${pending.question}$kind. $about" +
         "${pending.options.size} answers: $options"
 }

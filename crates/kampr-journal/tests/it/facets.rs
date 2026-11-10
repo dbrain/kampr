@@ -24,6 +24,7 @@ fn marker_named(name: &str, source: Option<&str>) -> SessionMarker {
         name_source: source.map(str::to_string),
         status: Some("busy".into()),
         transcript: None,
+        record: None,
         started: Started::Unknown,
     }
 }

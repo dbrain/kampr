@@ -186,6 +186,7 @@ fn option() -> PendingOption {
         label: "Yes".into(),
         detail: Some("d".into()),
         chosen: true,
+        text: true,
     }
 }
 
@@ -368,6 +369,19 @@ fn server() -> Vec<ServerMsg> {
             source: PendingSource::Screen,
             header: Some("h".into()),
             multi: true,
+            context: Some("c".into()),
+            id: Some("toolu_1".into()),
+        },
+        ServerMsg::ConvoHeard {
+            pane: pane(),
+            text: "t".into(),
+        },
+        ServerMsg::ClaudeHooks {
+            pane: pane(),
+            state: HooksState::Stale,
+            scope: Some(HooksScope::Project),
+            ask: true,
+            project: Some("/p".into()),
         },
         ServerMsg::ConvoFacets {
             pane: pane(),
@@ -413,7 +427,10 @@ fn client() -> Vec<ClientMsg> {
             reflow: Some(ReflowAsk { cols: 40 }),
         },
         ClientMsg::Unwatch { pane: pane() },
-        ClientMsg::AnswerSubmit { pane: pane() },
+        ClientMsg::AnswerSubmit {
+            pane: pane(),
+            id: Some("toolu_1".into()),
+        },
         ClientMsg::DoneRead {
             pane: pane(),
             at: Some("2026-10-14T09:00:00Z".into()),
@@ -436,6 +453,8 @@ fn client() -> Vec<ClientMsg> {
         ClientMsg::Answer {
             pane: pane(),
             key: "1".into(),
+            id: Some("toolu_1".into()),
+            text: Some("Mango".into()),
         },
         ClientMsg::ConvoLoad {
             pane: pane(),

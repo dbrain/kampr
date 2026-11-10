@@ -1,4 +1,5 @@
 use crate::caps::SessionEntry;
+use crate::hooks::launch;
 use kampr_core::wire::ErrorCode;
 use kampr_herdr::Herdr;
 use kampr_native::{NativeProvider, NewSession};
@@ -205,13 +206,13 @@ fn is_native_op(op: &str) -> bool {
 }
 
 /// `command` is a line for the login shell, `args` an argv; neither is the login shell itself.
-pub fn native_argv(op: &ManageOp) -> Vec<String> {
+pub fn native_argv(op: &ManageOp, claude_settings: Option<&str>) -> Vec<String> {
     let shell = kampr_native::login_shell();
     if let Some(line) = op.command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-        return vec![shell, "-lc".into(), line.to_string()];
+        return vec![shell, "-lc".into(), launch::line(line, claude_settings)];
     }
     match op.args.clone().filter(|a| !a.is_empty()) {
-        Some(argv) => argv,
+        Some(argv) => launch::argv(argv, claude_settings),
         None => vec![shell, "-l".into()],
     }
 }
@@ -322,6 +323,9 @@ pub struct Manager<'a> {
     /// Who a native `pane.size` names as the size's holder, `phone:<device>`.
     pub holder: &'a str,
     pub config: &'a crate::Config,
+    /// The hooks a Claude this node starts is handed in `--settings`, unless the operator said
+    /// never.
+    pub claude_settings: Option<&'a str>,
 }
 
 /// What a manage op produced, and — for a session op — the wait that has to finish before its
@@ -561,7 +565,7 @@ impl Manager<'_> {
             let (cols, rows) = native_geometry(op)?;
             let pane = native
                 .create(NewSession {
-                    argv: native_argv(op),
+                    argv: native_argv(op, self.claude_settings),
                     cwd: op.cwd.clone(),
                     label: op.label.clone(),
                     cols,
@@ -639,7 +643,7 @@ impl Manager<'_> {
         let failed = |e: anyhow::Error| ManageError::BadRequest(format!("{e:#}"));
         let made = native
             .create(NewSession {
-                argv: native_argv(op),
+                argv: native_argv(op, self.claude_settings),
                 cwd,
                 cols,
                 rows,
@@ -974,7 +978,7 @@ impl Manager<'_> {
                 self.call(
                     "agent.start",
                     json!({ "pane_id": pane, "kind": kind, "name": name,
-                            "args": op.args.clone().unwrap_or_default() }),
+                            "args": launch::args(kind, op.args.clone().unwrap_or_default(), self.claude_settings) }),
                 )
                 .await
             }

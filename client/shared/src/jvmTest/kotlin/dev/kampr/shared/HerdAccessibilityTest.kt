@@ -114,10 +114,24 @@ class HerdAccessibilityTest {
     fun aBlockedAgentInterrupts() = runComposeUiTest {
         val triage = listOf(TriageItem(HERD.panes.first(), "Approve edit to server.ts"))
         setContent {
-            Themed { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, triage, {}, {}) }
+            Themed { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, triage, {}, { _, _ -> }) }
         }
         onNodeWithContentDescription("Needs you", substring = true)
             .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Assertive))
+    }
+
+    @Test
+    fun aQuestionOnlyTheTerminalCanAnswerIsNotApprovedFromTheTriageRow() = runComposeUiTest {
+        val triage = listOf(
+            TriageItem(HERD.panes.first(), "Fill the form", "q1", approvable = false),
+            TriageItem(HERD.panes[1], "Allow Bash?", "q2"),
+        )
+        setContent {
+            Themed { HerdPortrait(HERD, ConnectionStatus.Live("full"), 0.0, 12.0, triage, {}, { _, _ -> }) }
+        }
+        waitForIdle()
+        val approvals = onAllNodesWithContentDescription("Approve, and answer", substring = true).fetchSemanticsNodes()
+        assertEquals(1, approvals.size, "a form only the terminal can fill was offered an Approve")
     }
 
     // A sheet that can only be dismissed by finding its scrim or its cross is a sheet a keyboard

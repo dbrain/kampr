@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish = false
 
+[dependencies]
+kampr-keep = { path = "../kampr-keep" }
+libc.workspace = true
+
 [dev-dependencies]
 serde_json.workspace = true
 

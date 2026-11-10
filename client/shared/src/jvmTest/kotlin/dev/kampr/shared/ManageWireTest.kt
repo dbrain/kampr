@@ -2,6 +2,7 @@ package dev.kampr.shared
 
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.DockerAction
+import dev.kampr.shared.wire.HooksScope
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.SizeMode
 import dev.kampr.shared.wire.SplitDirection
@@ -107,6 +108,9 @@ class ManageWireTest {
         "native.close" to ManageOp.NativeClose("01JNODE/n:01k8native"),
         "native.forget" to ManageOp.NativeForget("01JNODE/n:01k8native"),
         "native.desk" to ManageOp.NativeDesk("01JNODE/n:01k8native"),
+        "claude.hooks.install" to ManageOp.ClaudeHooksInstall("01JNODE/w3:p2", HooksScope.User),
+        "claude.hooks.install.project" to ManageOp.ClaudeHooksInstall("01JNODE/w3:p2", HooksScope.Project),
+        "claude.hooks.decline" to ManageOp.ClaudeHooksDecline("01JNODE/w3:p2"),
     ) + DockerAction.entries.associate { "docker.${it.wire}" to ManageOp.Docker(it, "01JNODE", "f49c60fac115") }
 
     private fun encoded(op: ManageOp) = Wire.json.parseToJsonElement(Wire.encode(ClientMsg.Manage(op))) as JsonObject

@@ -202,7 +202,9 @@ the rest of its life, in the same write as the screen change (#600): `idle`, `wo
 `blocked` with a `kind` (`permission`, `question`, `auth`) and the decoded message
 (`approve Bash: touch …`), `done`, `error` with its message, and `clear` when it exits. The marker
 carries `waitingFor` too but lags the screen by 3–20 ms and cannot tell done, idle and an error
-apart (#610). No hooks, no statusline script, nothing in the operator's settings. Answering changes
+apart (#610). This channel needs no hooks, no statusline script and nothing in the operator's
+settings; the hooks the operator may choose to install ([docs/12 W11](./12-harness-briefs.md)) carry
+the dialog and the reply themselves, beside it. Answering changes
 no drawn cell; it does drop the `✳`/`◐` glyph from Claude's window title (#601).
 
 - `kampr-native` answers the query in stream order with the rest (`answer.rs`), so ahead of its DA1

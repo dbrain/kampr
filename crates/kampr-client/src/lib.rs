@@ -28,8 +28,8 @@ pub mod resolve;
 pub use client::{Client, ManageError, Policy, State};
 pub use dial::{DialError, ws_url};
 pub use frames::{
-    Caps, ConvoPage, Event, Failure, Hello, Managed, NodeCaps, Pending, PendingOption, Role, Security,
-    SessionCaps,
+    Caps, ClaudeHooks, ConvoPage, Event, Failure, Hello, Managed, NodeCaps, Pending, PendingOption, Role,
+    Security, SessionCaps,
 };
 pub use herd::{Gone, Herd, NodeGroup};
 pub use pair::{Minted, PairError, Paired, mint, pair};

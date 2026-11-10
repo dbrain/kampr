@@ -166,7 +166,7 @@ fn a_native_create_is_routed_by_its_node_and_carries_what_to_run() {
     assert_eq!(typed.command.as_deref(), Some("claude --resume"));
     assert_eq!(typed.label.as_deref(), Some("review"));
     assert_eq!(
-        kampr_node::manage::native_argv(&op("native.create.args")),
+        kampr_node::manage::native_argv(&op("native.create.args"), None),
         vec!["htop".to_string(), "-d".into(), "10".into()]
     );
     let desk = op("native.create.desk");

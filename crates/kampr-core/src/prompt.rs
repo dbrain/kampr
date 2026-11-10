@@ -28,6 +28,7 @@ pub fn numbered_option(line: &str) -> Option<PendingOption> {
         label: label.to_string(),
         detail: None,
         chosen: false,
+        text: false,
     })
 }
 
@@ -139,6 +140,7 @@ pub fn numbered_run(line: &str) -> Vec<PendingOption> {
                 label: label.to_string(),
                 detail: None,
                 chosen: false,
+                text: false,
             });
         }
     }

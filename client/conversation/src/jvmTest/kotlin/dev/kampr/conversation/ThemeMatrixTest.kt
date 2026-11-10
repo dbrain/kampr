@@ -142,7 +142,7 @@ class ThemeMatrixTest {
     @Test
     fun herdSheet() = eachGround { ground ->
         sheet(phone.first, phone.second, ground, TypeScale.Phone, "herd") {
-            HerdPortrait(herd, ConnectionStatus.Live("full"), NOW, 4.0, triage, {}, {})
+            HerdPortrait(herd, ConnectionStatus.Live("full"), NOW, 4.0, triage, {}, { _, _ -> })
         }
     }
 

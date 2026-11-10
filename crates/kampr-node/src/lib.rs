@@ -23,6 +23,7 @@ pub mod git;
 pub mod herd;
 mod herd_files;
 pub mod holds;
+pub mod hooks;
 pub mod http;
 pub mod installer;
 pub mod lost;

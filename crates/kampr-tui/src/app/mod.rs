@@ -558,6 +558,7 @@ impl App {
                 self.settling = None;
                 self.note(reason.clone());
                 self.convo.absorb(event);
+                self.settle_answers();
             }
             // Not a second greeting: only the write affordances move, and they are gated on the
             // live role rather than on the one the greeting carried. A modal collecting an op a
@@ -601,8 +602,10 @@ impl App {
             | Event::ConvoTurn { .. }
             | Event::ConvoFacets { .. }
             | Event::ConvoComposer { .. }
+            | Event::ClaudeHooks(_)
             | Event::Pending(_) => {
                 self.convo.absorb(event);
+                self.settle_answers();
                 // **The walk to a hit is pages arriving one at a time.** A turn forty back is in
                 // a page this client has never held, and asking for the next one only as the last
                 // lands is what keeps the walk bounded by the transcript rather than by a loop.
@@ -667,6 +670,15 @@ impl App {
         self.rung.as_ref()
     }
 
+    fn settle_answers(&mut self) {
+        let convo = &self.convo;
+        self.composer.settle(|pane, answering| {
+            convo.pending(pane).is_some_and(|p| {
+                p.id == answering.id && p.options.iter().any(|o| o.text && o.key == answering.key)
+            })
+        });
+    }
+
     pub fn note(&mut self, text: impl Into<String>) {
         self.note = text.into();
         self.noted = std::time::Instant::now();
@@ -695,9 +707,9 @@ impl App {
             Click::Dismiss => self.switcher.close(),
             Click::Pair => self.open_pairing(),
             Click::OpenHerd => self.open(Screen::Herd),
-            Click::Answer { pane, key } => {
-                self.client.answer(&pane, &key);
-            }
+            Click::Answer { pane, key, id } => self.press(&pane, &key, id),
+            Click::Submit { pane, id } => self.submit(&pane, id.as_deref()),
+            Click::Hooks { pane, act } => self.hooks(&pane, act),
             Click::Save { pane, id } => self.save(&pane, &id),
             Click::Passthrough { pane, text } => {
                 self.client.typed(&pane, &text);

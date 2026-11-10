@@ -5,17 +5,19 @@
 //! true from the moment the harness opens rather than from the moment it first writes.
 
 mod composer;
+mod context;
 mod markdown;
 mod search;
 mod stamps;
+mod strip;
 
-pub use composer::{Composer, Typed};
+pub use composer::{Answering, Composer, Typed};
 pub use search::{Search, Took as Searched};
 
 use crate::image::{Attachment, Images};
 use crate::theme::Theme;
 use crossterm::event::{KeyCode, KeyEvent};
-use kampr_client::{Event, Pending, Role};
+use kampr_client::{ClaudeHooks, Event, Pending, Role};
 use kampr_core::wire::ConvoMatch;
 use markdown::markdown;
 use pulldown_cmark::Alignment;
@@ -28,6 +30,7 @@ use serde_json::Value;
 use stamps::{running_for, when};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
+use strip::{hooking, prompt, waiting};
 
 /// The node's reserved id for the message a harness is still writing. It is scraped off the
 /// pane's screen — hard-wrapped, markdown rendered away, clipped at the top once it outgrows the
@@ -231,11 +234,31 @@ pub(super) enum Piece {
     },
 }
 
+/// What a choice on the hooks offer does. An install's mode is the wire's own word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Hooking {
+    Install(&'static str),
+    Later,
+    Never,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HookChoice {
+    pub key: char,
+    pub label: String,
+    /// What the chip says when the whole sentence does not fit beside the others.
+    pub short: String,
+    pub act: Hooking,
+}
+
 /// The rectangles this surface drew that a click resolves against.
 #[derive(Debug, Clone, Default)]
 pub struct Marks {
     /// A pending prompt's option chips, in the order the prompt offered them.
     pub options: Vec<Rect>,
+    /// The chip that commits a question taking several answers, while something is ticked.
+    pub submit: Option<Rect>,
+    pub hooks: Vec<(HookChoice, Rect)>,
     /// An attachment's marker row, by id.
     pub attachments: Vec<(String, Rect)>,
 }
@@ -258,6 +281,7 @@ struct Transcript {
     cursor: Option<String>,
     more: bool,
     pending: Option<Pending>,
+    hooks: Option<ClaudeHooks>,
     /// What the operator has half-typed at the pane's own keyboard and not sent. `input` is
     /// `pane.send_text` and **appends**, so a reply sent from here joins onto this — which is
     /// invisible unless it is said. Empty arrives as `text: null` and takes the line down, the
@@ -476,6 +500,9 @@ struct Reading {
 pub struct Convo {
     panes: HashMap<String, Transcript>,
     launched: HashMap<String, Reading>,
+    /// Panes whose hooks offer was put off with *Not now*, which is this client's alone and lasts
+    /// until the conversation is opened again.
+    later: HashSet<String>,
 }
 
 impl std::fmt::Debug for Reading {
@@ -598,6 +625,10 @@ impl Convo {
                 let held = self.panes.entry(pending.pane.clone()).or_default();
                 held.pending = pending.outstanding().then(|| pending.clone());
                 held.laid = None;
+                self.follow_context(&pending.pane);
+            }
+            Event::ClaudeHooks(hooks) => {
+                self.panes.entry(hooks.pane.clone()).or_default().hooks = Some(hooks.clone());
             }
             // Nothing carried across a dropped socket is trustworthy, and a question least of
             // all: `pending` is published on a blocked-state edge, so the node's first attempt at
@@ -607,8 +638,11 @@ impl Convo {
             Event::Disconnected { .. } => {
                 for held in self.panes.values_mut() {
                     held.pending = None;
+                    held.hooks = None;
                     held.laid = None;
                 }
+                let panes: Vec<String> = self.launched.keys().cloned().collect();
+                panes.iter().for_each(|pane| self.follow_context(pane));
             }
             _ => {}
         }
@@ -754,6 +788,83 @@ impl Convo {
         self.panes.get(pane)?.pending.as_ref()
     }
 
+    /// Whether a question taking several answers has something ticked to commit.
+    pub fn submittable(&self, pane: &str) -> bool {
+        self.pending(pane)
+            .is_some_and(|p| p.multi && p.options.iter().any(|o| o.chosen))
+    }
+
+    /// **Not while a question is up**: its keys are the ones the operator is pressing, and the
+    /// strip's two rows are the question's.
+    pub fn hook_offer(&self, pane: &str, role: Role) -> Vec<HookChoice> {
+        let Some(held) = self.panes.get(pane) else {
+            return Vec::new();
+        };
+        let Some(hooks) = held.hooks.as_ref() else {
+            return Vec::new();
+        };
+        if !role.writes() || !hooks.ask || held.pending.is_some() || self.later.contains(pane) {
+            return Vec::new();
+        }
+        let choice = |key, label: String, short: &str, act| HookChoice {
+            key,
+            label,
+            short: short.to_string(),
+            act,
+        };
+        let mut choices = match (hooks.state.as_str(), hooks.scope.as_deref()) {
+            ("stale", Some("user")) => vec![choice('u', "Update".into(), "Update", Hooking::Install("user"))],
+            ("stale", Some("project")) => {
+                vec![choice(
+                    'u',
+                    "Update".into(),
+                    "Update",
+                    Hooking::Install("project"),
+                )]
+            }
+            ("absent" | "stale", _) => {
+                let mut install = vec![choice(
+                    'i',
+                    "Install for all projects".into(),
+                    "all projects",
+                    Hooking::Install("user"),
+                )];
+                if let Some(project) = hooks.project.as_deref().filter(|p| !p.is_empty()) {
+                    let name = project
+                        .trim_end_matches('/')
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(project);
+                    install.push(choice(
+                        'p',
+                        format!("Install for {name}"),
+                        name,
+                        Hooking::Install("project"),
+                    ));
+                }
+                install
+            }
+            _ => return Vec::new(),
+        };
+        choices.push(choice('n', "Not now".into(), "Not now", Hooking::Later));
+        choices.push(choice('d', "Don't ask again".into(), "Never", Hooking::Never));
+        choices
+    }
+
+    pub fn hook_key(&self, pane: &str, key: char, role: Role) -> Option<HookChoice> {
+        self.hook_offer(pane, role)
+            .into_iter()
+            .find(|choice| choice.key == key)
+    }
+
+    pub fn later(&mut self, pane: &str) {
+        self.later.insert(pane.to_string());
+    }
+
+    pub fn reopened(&mut self, pane: &str) {
+        self.later.remove(pane);
+    }
+
     /// The key to answer with, when the operator pressed one the prompt offered. **Never
     /// synthesises an Enter** — the node decides whether a submit key follows, per harness (#43).
     pub fn answer(&self, pane: &str, key: char) -> Option<String> {
@@ -851,24 +962,36 @@ impl Convo {
         // on its conversation before anything has been written — the gap between a session
         // starting and its first prompt — and an empty transcript that says so is the answer,
         // not a fall-through to the grid.
+        let offer = self.hook_offer(pane, role);
         let held = self.panes.entry(pane.to_string()).or_default();
         // **The strips stay the pane's** while a launched conversation is being read. The
         // question is the pane's to answer and the reply box types into the pane, so a subagent's
         // transcript borrows the screen and nothing else.
+        let mut lines = Vec::new();
+        if !held.running.is_empty() {
+            lines.push(outstanding(&held.running, theme));
+        }
+        if let Some(line) = held.desk.as_deref() {
+            lines.push(waiting(line, theme, area.width));
+        }
+        let mut hook_chips = Vec::new();
+        let hook_row = (!offer.is_empty()).then(|| {
+            let hooks = held.hooks.as_ref().map(|h| h.state.as_str()).unwrap_or_default();
+            let (line, chips) = hooking(hooks, &offer, theme, area.width);
+            lines.push(line);
+            hook_chips = chips;
+            lines.len() as u16 - 1
+        });
         let mut strip = held
             .pending
             .as_ref()
             .map(|p| prompt(p, theme, area.width))
             .unwrap_or_default();
-        if let Some(line) = held.desk.as_deref() {
-            strip.lines.insert(0, waiting(line, theme, area.width));
-            strip.chip_row += 1;
-        }
-        if !held.running.is_empty() {
-            strip.lines.insert(0, outstanding(&held.running, theme));
-            strip.chip_row += 1;
-        }
+        strip.chip_row += lines.len() as u16;
+        lines.append(&mut strip.lines);
+        strip.lines = lines;
         let rows = (strip.lines.len() as u16).min(area.height);
+        let below = area.y + area.height - rows;
         let mut body = Rect {
             height: area.height - rows,
             ..area
@@ -890,21 +1013,26 @@ impl Convo {
         let mut marks = held.paint(buf, body, pane, images, role);
         let chips = strip.chips;
         for (row, line) in strip.lines.into_iter().enumerate() {
-            let y = area.y + body.height + row as u16;
+            let y = below + row as u16;
             fill(buf, area.x, y, area.width, theme.blocked_bg);
             buf.set_line(area.x, y, &line, area.width);
         }
+        let at = |row: u16, (x, width): (u16, u16)| Rect {
+            x: area.x + x,
+            y: below + row,
+            width,
+            height: 1,
+        };
         // The chips are on one known line of the strip, which is only on screen if there was room.
         if rows > strip.chip_row {
-            let y = area.y + body.height + strip.chip_row;
-            marks.options = chips
+            marks.options = chips.into_iter().map(|chip| at(strip.chip_row, chip)).collect();
+            marks.submit = strip.submit.map(|chip| at(strip.chip_row, chip));
+        }
+        if let Some(row) = hook_row.filter(|row| rows > *row) {
+            marks.hooks = offer
                 .into_iter()
-                .map(|(x, width)| Rect {
-                    x: area.x + x,
-                    y,
-                    width,
-                    height: 1,
-                })
+                .zip(hook_chips)
+                .map(|(choice, chip)| (choice, at(row, chip)))
                 .collect();
         }
         marks
@@ -1440,121 +1568,6 @@ fn diff(path: Option<&str>, text: &str, width: u16, theme: &Theme, out: &mut Vec
     }
 }
 
-/// The strip, and where each option's key chip landed so a click can answer it.
-#[derive(Default)]
-struct Strip {
-    lines: Vec<Line<'static>>,
-    chips: Vec<(u16, u16)>,
-    /// Which of [`Self::lines`] the chips were laid on. A row rather than a constant because the
-    /// desk line stands above the prompt and moves it.
-    chip_row: u16,
-}
-
-/// A line the operator left at the pane's own keyboard. Dim rather than alarming: it is context for
-/// the reply about to be appended to it, not a fault.
-fn waiting(line: &str, theme: &Theme, width: u16) -> Line<'static> {
-    // At least one character of the line survives however narrow the pane is: a bare ellipsis
-    // says a line is waiting and refuses to say anything about it.
-    let room = (width.saturating_sub(16) as usize).max(2);
-    let shown: String = match line.chars().count() > room {
-        true => line.chars().take(room - 1).chain(['…']).collect(),
-        false => line.to_string(),
-    };
-    Line::from(vec![
-        Span::styled(
-            " at the desk ".to_string(),
-            Style::default().fg(theme.on_accent).bg(theme.working),
-        ),
-        Span::styled(format!(" {shown}"), Style::default().fg(theme.dim)),
-    ])
-}
-
-/// The chips land on the second line, which is what [`Strip::chip_row`] carries out to the caller.
-fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
-    let Some(question) = pending.question.as_deref() else {
-        return Strip::default();
-    };
-    // The dialog's own title in front of the question, where it draws one. Two lines is the whole
-    // budget here — a row this strip takes is a row the pane never gets (#373, #374) — so the
-    // header rides on the question's line rather than earning one, and the per-option descriptions
-    // the Compose client draws have nowhere to go at all.
-    let asked = match pending.header.as_deref() {
-        Some(header) => format!("{header} · {question}"),
-        None => question.to_string(),
-    };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(
-            " ⚑ ".to_string(),
-            Style::default()
-                .fg(theme.blocked)
-                .bg(theme.blocked_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            clip(&asked, width.saturating_sub(4) as usize),
-            Style::default()
-                .fg(theme.text)
-                .bg(theme.blocked_bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ])];
-    // Only the keys the node offered. It decides whether a submit key follows, per harness —
-    // claude selects on the bare digit, codex needs an Enter (#43) — so nothing is synthesised.
-    let mut spans = vec![Span::styled(
-        " ".to_string(),
-        Style::default().bg(theme.blocked_bg),
-    )];
-    let mut chips = Vec::new();
-    let mut x = 1u16;
-    for option in &pending.options {
-        let key = format!(" {} ", option.key);
-        let chip = key.chars().count() as u16;
-        chips.push((x, chip));
-        x += chip;
-        spans.push(Span::styled(
-            key,
-            Style::default()
-                .fg(theme.on_accent)
-                .bg(theme.accent)
-                .add_modifier(Modifier::BOLD),
-        ));
-        // A tick is drawn rather than left implicit: on a question that takes several answers the
-        // node strips the checkbox out of the label to publish `chosen`, and a reader who cannot
-        // see which are ticked cannot tell what pressing again would do.
-        let label = match (pending.multi, option.chosen) {
-            (true, true) => format!(" ☑ {}  ", option.label),
-            (true, false) => format!(" ☐ {}  ", option.label),
-            _ => format!(" {}  ", option.label),
-        };
-        x += label.chars().count() as u16;
-        spans.push(Span::styled(
-            label,
-            Style::default().fg(theme.text).bg(theme.blocked_bg),
-        ));
-    }
-    if pending.options.is_empty() {
-        spans.push(Span::styled(
-            "no keys were offered".to_string(),
-            Style::default().fg(theme.dim).bg(theme.blocked_bg),
-        ));
-    }
-    // **The one thing this client must not let a chip imply.** A press here ticks a box and does
-    // not answer, and there is no commit affordance on this surface — the sequence that commits is
-    // right-arrow then Enter (#421), which the operator sends by opening the pane.
-    if pending.multi {
-        spans.push(Span::styled(
-            "· ticks only, submit in the pane".to_string(),
-            Style::default().fg(theme.mute).bg(theme.blocked_bg),
-        ));
-    }
-    lines.push(Line::from(spans));
-    Strip {
-        lines,
-        chips,
-        chip_row: 1,
-    }
-}
-
 pub(super) fn clip(text: &str, width: usize) -> String {
     if Span::raw(text).width() <= width {
         return text.to_string();
@@ -1580,90 +1593,5 @@ pub(super) fn pad(text: &str, width: usize, align: Alignment) -> String {
             format!("{}{text}{}", " ".repeat(left), " ".repeat(slack - left))
         }
         _ => format!("{text}{}", " ".repeat(slack)),
-    }
-}
-
-#[cfg(test)]
-mod prompt_tests {
-    use super::*;
-
-    fn option(key: &str, label: &str, chosen: bool) -> kampr_client::PendingOption {
-        kampr_client::PendingOption {
-            key: key.into(),
-            label: label.into(),
-            chosen,
-            ..kampr_client::PendingOption::default()
-        }
-    }
-
-    fn said(pending: &Pending) -> Vec<String> {
-        prompt(pending, &crate::theme::PHOSPHOR, 120)
-            .lines
-            .iter()
-            .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
-            .collect()
-    }
-
-    /// Two lines is the whole budget, so the dialog's own title rides on the question's line
-    /// rather than earning one of its own.
-    #[test]
-    fn a_dialogs_title_reaches_a_terminal_without_costing_the_pane_a_row() {
-        let strip = prompt(
-            &Pending {
-                pane: "p".into(),
-                question: Some("Which indentation do you prefer?".into()),
-                header: Some("Indentation".into()),
-                options: vec![option("1", "Tabs", false)],
-                ..Pending::default()
-            },
-            &crate::theme::PHOSPHOR,
-            120,
-        );
-        assert_eq!(strip.lines.len(), 2, "the strip grew a row");
-        assert!(
-            strip.lines[0]
-                .spans
-                .iter()
-                .any(|s| s.content.contains("Indentation · Which indentation")),
-            "{:?}",
-            said(&Pending::default()),
-        );
-    }
-
-    /// **The chip must not read as an answer when it is a tick.** This surface has no commit
-    /// affordance — the sequence is right-arrow then Enter (#421) — so it says where to send.
-    #[test]
-    fn a_question_that_takes_several_answers_says_a_press_is_only_a_tick() {
-        let pending = Pending {
-            pane: "p".into(),
-            question: Some("Which test suites should I run?".into()),
-            multi: true,
-            options: vec![option("1", "unit", true), option("2", "integration", false)],
-            ..Pending::default()
-        };
-        let lines = said(&pending);
-        assert!(lines[1].contains("☑ unit"), "{lines:?}");
-        assert!(lines[1].contains("☐ integration"), "{lines:?}");
-        assert!(lines[1].contains("ticks only, submit in the pane"), "{lines:?}");
-    }
-
-    /// And a single-answer question is untouched: no boxes, no warning, because a press there
-    /// really is the answer.
-    #[test]
-    fn a_single_answer_question_is_drawn_exactly_as_it_was() {
-        let lines = said(&Pending {
-            pane: "p".into(),
-            question: Some("Do you want to make this edit?".into()),
-            options: vec![option("1", "Yes", false), option("2", "No", false)],
-            ..Pending::default()
-        });
-        assert!(
-            lines[1].contains(" Yes  ") && lines[1].contains(" No  "),
-            "{lines:?}"
-        );
-        assert!(
-            !lines[1].contains('☐') && !lines[1].contains("ticks only"),
-            "{lines:?}"
-        );
     }
 }

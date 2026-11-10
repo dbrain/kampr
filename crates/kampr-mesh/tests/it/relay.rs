@@ -888,6 +888,32 @@ async fn a_peers_desk_line_crosses_the_mesh_like_every_other_conversation_frame(
     assert_eq!(message["clear"], "\u{3}");
 }
 
+#[tokio::test]
+async fn a_peers_heard_prompt_and_hook_state_cross_the_mesh() {
+    let peers = peers();
+    let store = store().await;
+    let mut peer = join(&peers, &store, KEY, "01JA", "laptop").await;
+    peer.send(herd("01JA", &["w1:p1"])).await;
+    settle(&peers, |h| !h.panes.is_empty()).await;
+
+    let mut watcher = peers.watch("01JA/w1:p1", true).expect("a live peer");
+    peer.request_but_ping().await;
+    for frame in [
+        json!({ "t": "convo.heard", "pane": "01JA/w1:p1", "text": "ship it" }),
+        json!({ "t": "claude.hooks", "pane": "01JA/w1:p1", "state": "absent", "ask": true, "project": "/w" }),
+    ] {
+        peer.send(frame.clone()).await;
+        let relayed = tokio::time::timeout(Duration::from_secs(2), watcher.recv())
+            .await
+            .unwrap_or_else(|_| panic!("the hub swallowed {frame}"))
+            .expect("the watcher closed");
+        let RemoteEvent::Passthrough(message) = relayed else {
+            panic!("{frame} reached the client as {relayed:?}");
+        };
+        assert_eq!(message, frame);
+    }
+}
+
 /// `styles.from` is a `u32` straight off the peer's frame, and the table was resized to it. Forty
 /// bytes of JSON — well under any size ceiling — asked the hub for four billion entries, and the
 /// hub is the front node the whole herd is reached through.

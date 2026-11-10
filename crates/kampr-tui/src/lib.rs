@@ -393,7 +393,11 @@ static SECTIONS: &[Section] = &[
             ("prefix shift+c", "take the line left at the pane's own keyboard"),
             (
                 "1..9 on an empty box",
-                "answers the question a blocked agent is asking",
+                "answers the question a blocked agent is asking; an answer marked … opens the box for its words",
+            ),
+            (
+                "alt+o",
+                "reads a question's whole context, such as a plan · esc comes back",
             ),
         ],
     },

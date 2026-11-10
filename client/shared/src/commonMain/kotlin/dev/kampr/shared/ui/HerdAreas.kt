@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.runtime.Composable
@@ -21,8 +22,11 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -35,7 +39,7 @@ import dev.kampr.shared.theme.Kampr
 
 private val TAB_INK = 22.dp
 
-fun shortCount(n: Int): String = if (n > 9) "9+" else n.toString()
+fun shortCount(n: Int): String = if (n > 99) "9+" else n.toString()
 
 private fun NodeGroup.count(area: Area): Int? = when (area) {
     Area.Terminals -> null
@@ -99,11 +103,23 @@ fun AreaTabs(group: NodeGroup, ctx: HerdRowsCtx) {
                 ) {
                     val tint = if (active) tokens.color.text else tokens.color.mute
                     IconGlyph(areaIcon(area), 13.dp, tint)
-                    if (count != null && count > 0) DisableSelection { KText(shortCount(count), tokens.type.micro, tint) }
+                    if (count != null && count > 0) DisableSelection { TwoCells(shortCount(count), tint) }
                 }
             }
         }
     }
+}
+
+// Sized by the widest thing it can say, so a count ticking from 9 to 10 does not shift the switch.
+@Composable
+private fun TwoCells(text: String, tint: Color) {
+    val style = Kampr.tokens.type.micro
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val widest = remember(style, density) {
+        with(density) { listOf("99", "9+").maxOf { measurer.measure(it, style).size.width }.toDp() }
+    }
+    Box(Modifier.widthIn(min = widest)) { KText(text, style, tint) }
 }
 
 // Everything about a machine that is not the one thing done most, which is the + beside this.

@@ -32,11 +32,23 @@ pub enum Typed {
     Changed,
     /// The draft, and the carriage return that follows it as its own message.
     Send(String),
+    Answer(Answering, String),
+}
+
+/// A question's option that is answered with words, which the box is collecting instead of a
+/// reply to the pane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Answering {
+    pub key: String,
+    pub label: String,
+    pub id: Option<String>,
+    pub multi: bool,
 }
 
 #[derive(Debug, Default)]
 pub struct Composer {
     drafts: HashMap<String, Draft>,
+    answering: HashMap<String, Answering>,
 }
 
 impl Composer {
@@ -47,9 +59,33 @@ impl Composer {
     /// **Whether a bare keystroke still belongs to a pending prompt.** An empty box means the
     /// operator has not started writing, so `1` is the answer to the question on screen; once
     /// there is a draft, `1` is a character in it. This is the whole of the fix for a composer
-    /// that used to swallow prompt keys and a prompt that used to swallow typed ones.
-    pub fn empty(&self, pane: &str) -> bool {
-        self.text(pane).is_empty()
+    /// that used to swallow prompt keys and a prompt that used to swallow typed ones. A box
+    /// collecting an answer's words is never idle, even before the first one.
+    pub fn idle(&self, pane: &str) -> bool {
+        self.text(pane).is_empty() && !self.answering.contains_key(pane)
+    }
+
+    pub fn answering(&self, pane: &str) -> Option<&Answering> {
+        self.answering.get(pane)
+    }
+
+    /// Only ever opened on an empty box: an option's key reaches here only while the box is idle.
+    pub fn answer_with(&mut self, pane: &str, answering: Answering) {
+        self.answering.insert(pane.to_string(), answering);
+    }
+
+    /// Drops every answer whose question is no longer the one on screen, words and all.
+    pub fn settle(&mut self, still: impl Fn(&str, &Answering) -> bool) {
+        let gone: Vec<String> = self
+            .answering
+            .iter()
+            .filter(|(pane, answering)| !still(pane, answering))
+            .map(|(pane, _)| pane.clone())
+            .collect();
+        for pane in gone {
+            self.answering.remove(&pane);
+            self.drafts.remove(&pane);
+        }
     }
 
     /// Words moved here from somewhere else, in front of whatever is already being written: they
@@ -78,6 +114,9 @@ impl Composer {
             }
             KeyCode::Enter => {
                 let text = draft.text.trim_end().to_string();
+                if text.is_empty() && self.answering.contains_key(pane) {
+                    return Typed::Changed;
+                }
                 if text.is_empty() {
                     // Never synthesise a submit into an empty box: a bare Enter at a conversation
                     // is a keystroke the pane's own prompt may be waiting for, and #43 is that the
@@ -85,7 +124,10 @@ impl Composer {
                     return Typed::Ignored;
                 }
                 self.drafts.remove(pane);
-                Typed::Send(text)
+                match self.answering.remove(pane) {
+                    Some(answering) => Typed::Answer(answering, text),
+                    None => Typed::Send(text),
+                }
             }
             KeyCode::Char(c) if !ctrl => {
                 draft.insert(c);
@@ -117,8 +159,9 @@ impl Composer {
             }
             // An empty box has nothing to give up, so esc is the router's — it is how a mode is
             // left, and a composer that swallowed it would strand the operator in one.
-            KeyCode::Esc if !draft.text.is_empty() => {
+            KeyCode::Esc if !draft.text.is_empty() || self.answering.contains_key(pane) => {
                 self.drafts.remove(pane);
+                self.answering.remove(pane);
                 Typed::Changed
             }
             _ => Typed::Ignored,
@@ -151,15 +194,26 @@ impl Composer {
             return;
         }
         let text = self.text(pane);
+        let answering = self.answering.get(pane);
         let body = match (writes, text.is_empty()) {
             (false, _) => return,
-            (true, true) => Line::from(Span::styled(
-                " type a reply · enter sends · alt+enter for a new line",
-                Style::default().fg(theme.mute).bg(theme.bar),
-            )),
+            (true, true) => {
+                let hint = match answering {
+                    Some(a) if a.multi => format!(
+                        " {} · type the answer · enter sends it with the ticked ones · esc cancels",
+                        a.label
+                    ),
+                    Some(a) => format!(" {} · type the answer · enter sends · esc cancels", a.label),
+                    None => " type a reply · enter sends · alt+enter for a new line".to_string(),
+                };
+                Line::from(Span::styled(hint, Style::default().fg(theme.mute).bg(theme.bar)))
+            }
             (true, false) => Line::from(vec![
                 Span::styled(
-                    " \u{203a} ",
+                    match answering {
+                        Some(a) => format!(" {} · esc cancels \u{203a} ", a.label),
+                        None => " \u{203a} ".to_string(),
+                    },
                     Style::default()
                         .fg(theme.accent)
                         .bg(theme.bar)

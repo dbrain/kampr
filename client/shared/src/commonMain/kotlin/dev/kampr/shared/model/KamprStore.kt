@@ -169,7 +169,7 @@ class KamprStore {
     // state map during composition, which is a recomposition loop rather than a lookup.
     fun triage(): List<TriageItem> = blocked()
         .sortedByDescending { it.updatedAt ?: "" }
-        .map { TriageItem(it, paneStates[it.id]?.pending?.question) }
+        .map { pane -> paneStates[pane.id]?.pending.let { TriageItem(pane, it?.question, it?.id, approvable = it?.terminalOnly != true) } }
 
     fun status(value: ConnectionStatus) {
         _status.value = value
@@ -363,6 +363,7 @@ class KamprStore {
             is ServerMsg.Pasted -> paneStates[msg.pane]?.let { pane -> pane.files.answered(msg)?.let(pane.mirror::placed) }
 
             is ServerMsg.Managed -> {
+                if (msg.op.startsWith("claude.hooks.")) paneStates.values.any { it.hooks.acked(msg) }
                 _managed.value = msg
                 _acks.tryEmit(msg)
             }
@@ -372,6 +373,11 @@ class KamprStore {
             is ServerMsg.NodeCaps -> _nodeCaps.value = _nodeCaps.value + (msg.node to msg)
 
             is ServerMsg.Pong -> Unit
+
+            // Read without creating: a send is only ever held on a pane somebody has open.
+            is ServerMsg.ConvoHeard -> paneStates[msg.pane]?.let { it.sends.acknowledged(msg.text, it.turns) }
+
+            is ServerMsg.ClaudeHooks -> pane(msg.pane).hooks.heard(msg)
         }
     }
 }

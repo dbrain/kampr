@@ -209,6 +209,25 @@ name the session it was running (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, its mes
 `TMUX`, `HERDR_*`, …) is never copied at all (`kampr-keep/src/dir.rs` `SESSION_SCOPED`). The child's
 own `/proc/<pid>/environ` is readable by your uid either way, as every process's is.
 
+**Claude's hooks** ([docs/12 W11](./12-harness-briefs.md)) add a third: `hooks.sock` in the same
+private runtime directory (`$XDG_RUNTIME_DIR/kampr`, 0700, ancestors checked by the same
+`check_private`; overridable in config), which `kampr hook` writes each Claude Code hook event to.
+The node checks the peer's uid with `SO_PEERCRED` (`getpeereid`-backed on macOS) and drops any
+other, and routes an event only to a pane whose process tree holds the peer's pid; an event from a
+process no pane hosts is answered with nothing. **A reply on this socket approves tool use with the
+same authority as an `answer` keystroke** — `allow`, `allow` with the request's own
+`updatedPermissions` (which can change the session's mode or add rules), or `deny` — and is only
+ever sent for an `answer` or `answer.submit` from a device that may write, audited as one; a press
+that names a question no longer standing (`id`) decides nothing. Anything
+running as your uid can already connect and impersonate a Claude, but it gains nothing it could
+not do by typing into the pane. Installing the hooks writes the operator's own Claude settings
+(`~/.claude/settings.json`, or a project's `settings.local.json`) with a command naming this node's
+executable and socket; it is a write-gated, audited `manage` op, and the command is
+`[ -x <exe> ] && <exe> hook … 2>/dev/null; exit 0` so a removed or older Kampr is silent and never
+returns the exit 2 Claude reads as a decision (#630). A node whose state
+directory is not the default names its socket `hooks-<hash>.sock`, so a test node or a second node
+of the same uid never takes the socket the operator's sessions are pointed at.
+
 **Not chmod'ed:** `config.toml`, which relies on its 0700 parent. It holds no secrets today (node id,
 bind, origin, `trust_proxy`, paths to TLS material) and it would be better with an explicit mode.
 

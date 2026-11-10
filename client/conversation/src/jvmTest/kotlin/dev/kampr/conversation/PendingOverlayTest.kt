@@ -154,6 +154,43 @@ class PendingOverlayTest {
         )
     }
 
+    // A hook question names itself, and the press says which question it answered: a tap made on
+    // a card the node has since replaced with another request is refused there, not taken as the
+    // answer to the new one. A node that names nothing is answered as it always was.
+    @Test
+    fun anAnswerCarriesTheIdOfTheQuestionItWasPressedOn() {
+        val multi = ASKED.copy(multi = true, options = ASKED.options.map { it.copy(chosen = true) })
+        val cases = listOf(
+            Triple(ASKED.copy(id = "q7", source = "hook"), "Answer 2, Yes, and do not ask again for this file", ClientMsg.Answer(PANE_ID, "2", "q7")),
+            Triple(ASKED, "Answer 2, Yes, and do not ask again for this file", ClientMsg.Answer(PANE_ID, "2")),
+            Triple(multi.copy(id = "q8", source = "hook"), "Send 3 answers", ClientMsg.AnswerSubmit(PANE_ID, "q8")),
+            Triple(multi, "Send 3 answers", ClientMsg.AnswerSubmit(PANE_ID)),
+        )
+        for ((question, press, want) in cases) {
+            runComposeUiTest {
+                RecordingIo.sent.clear()
+                val store = KamprStore()
+                store.accept(SHORT)
+                store.accept(question)
+                setContent {
+                    CompositionLocalProvider(
+                        LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
+                        LocalPaneIo provides RecordingIo,
+                        LocalConnectionStatus provides ConnectionStatus.Live("full"),
+                    ) {
+                        Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
+                            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize())
+                        }
+                    }
+                }
+                waitForIdle()
+                onNodeWithContentDescription(press).performClick()
+                waitForIdle()
+                assertEquals(listOf<ClientMsg>(want), RecordingIo.sent.toList(), "$press on ${question.id}")
+            }
+        }
+    }
+
     // The report: *"we show blocked with options when Claude asks a question, but tapping the
     // options do nothing"*, on both the card and the terminal's chip row, and *"it worked slowly
     // after a couple of presses"*. An answer is `typing` on the wire (`KamprConnection.typing`),
