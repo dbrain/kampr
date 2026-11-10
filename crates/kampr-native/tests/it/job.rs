@@ -13,14 +13,7 @@ struct Root(tempfile::TempDir);
 
 impl Drop for Root {
     fn drop(&mut self) {
-        for session in kampr_keep::list(self.0.path()).unwrap_or_default() {
-            if let Some(keeper) = session.keeper() {
-                unsafe {
-                    libc::kill(-(keeper.child as i32), libc::SIGKILL);
-                    libc::kill(keeper.keeper as i32, libc::SIGKILL);
-                }
-            }
-        }
+        kampr_testkit::stop_keepers(self.0.path());
     }
 }
 
@@ -123,12 +116,14 @@ async fn a_job_the_herd_was_told_of_is_taken_back_even_if_it_ended_between_looks
 }
 
 /// macOS names a process after the file its symlink resolved to, so Claude's installed
-/// `~/.local/bin/claude` ran as `2.1.308` (its `versions/` file); the job is what was typed.
+/// `~/.local/bin/claude` ran as `2.1.308` (its `versions/` file); the job is what was typed. The link
+/// is to `sh`, which waits on the terminal under any name: ubuntu-26.04's coreutils is one
+/// multi-call binary that refuses a name that is none of its tools.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_job_run_through_a_symlink_is_named_by_the_link() {
     let (root, provider, pane) = shell().await;
     let link = root.0.path().join("widget");
-    std::os::unix::fs::symlink(which("cat"), &link).expect("a link");
+    std::os::unix::fs::symlink(which("sh"), &link).expect("a link");
     provider
         .write_pane(&pane, Input::Bytes(format!("{}\r", link.display()).into_bytes()))
         .await

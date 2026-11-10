@@ -18,14 +18,7 @@ pub(crate) struct Cli {
 
 impl Drop for Cli {
     fn drop(&mut self) {
-        for session in kampr_keep::list(self.keep.path()).unwrap_or_default() {
-            if let Some(keeper) = session.keeper() {
-                unsafe {
-                    libc::kill(-(keeper.child as i32), libc::SIGKILL);
-                    libc::kill(keeper.keeper as i32, libc::SIGKILL);
-                }
-            }
-        }
+        kampr_testkit::stop_keepers(self.keep.path());
     }
 }
 

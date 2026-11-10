@@ -57,14 +57,7 @@ impl Root {
 
 impl Drop for Root {
     fn drop(&mut self) {
-        for session in kampr_keep::list(self.path()).unwrap_or_default() {
-            if let Some(keeper) = session.keeper() {
-                unsafe {
-                    libc::kill(-(keeper.child as i32), libc::SIGKILL);
-                    libc::kill(keeper.keeper as i32, libc::SIGKILL);
-                }
-            }
-        }
+        kampr_testkit::stop_keepers(self.path());
     }
 }
 
