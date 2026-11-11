@@ -80,13 +80,13 @@ class FilesEntryTest {
     }
 
     @Test
-    fun theFilesChipOpensThePanesWorkingDirectoryAnchoredAtThePane() {
+    fun browseFilesOpensThePanesWorkingDirectoryAnchoredAtThePane() {
         val table = listOf(WITH_CWD to "/home/u/dev/kampr", NO_CWD to "~")
         for ((pane, path) in table) {
             withApp("full") { app ->
                 app.openSheet(Sheet.Actions(pane))
                 waitForIdle()
-                onNodeWithText("files").performClick()
+                onNodeWithText("Browse files").performClick()
                 waitForIdle()
                 assertEquals(listOf<FilesPlace>(FilesPlace.Dir("01JNODE", pane, path)), app.files, pane)
                 assertNull(app.sheet, "the sheet stays over the folder it opened")
@@ -99,7 +99,7 @@ class FilesEntryTest {
         withApp("readonly") { app ->
             app.openSheet(Sheet.Actions(WITH_CWD))
             waitForIdle()
-            assertTrue(onAllNodesWithText("files").fetchSemanticsNodes().isEmpty())
+            assertTrue(onAllNodesWithText("Browse files").fetchSemanticsNodes().isEmpty())
             assertTrue(onAllNodesWithContentDescription("Browse files on comingclean").fetchSemanticsNodes().isEmpty())
         }
     }

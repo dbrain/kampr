@@ -50,8 +50,8 @@ fun SendingCard(
     BlockFrame(speakerSkin(speakerOf(turn), agent), BlockEdge.Foot) {
         DisableSelection {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                QuietAction("Resend", onResend, label = "Resend this reply")
                 QuietAction("Dismiss", onDismiss, label = "Dismiss this reply")
+                QuietAction("Resend", onResend, label = "Resend this reply")
             }
         }
     }

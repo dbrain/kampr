@@ -172,12 +172,14 @@ fun GlyphTarget(
     target: Dp = TOUCH,
     glyph: Dp = 17.dp,
     enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Box(
-        modifier.size(target).action(label, onClick, enabled = enabled),
+        modifier.size(target).action(label, onClick, enabled = enabled, onLongClick = onLongClick),
         contentAlignment = Alignment.Center,
     ) {
         IconGlyph(icon, glyph, tint)
+        Hint(label, byTouch = onLongClick == null)
     }
 }
 

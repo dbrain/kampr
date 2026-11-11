@@ -48,6 +48,7 @@ import dev.kampr.shared.platform.acceptsPastedFiles
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.Answering
 import dev.kampr.shared.ui.GlyphTarget
+import dev.kampr.shared.ui.Hint
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LocalSafeArea
@@ -354,12 +355,13 @@ fun Composer(
                 )
             }
             val pillShape = RoundedCornerShape(tokens.radii.pill)
+            val sending = "Send this reply to ${agent ?: "the agent"}"
             Box(
                 Modifier
                     .size(TOUCH)
                     .background(if (ready) tokens.color.accent else tokens.color.raise, pillShape)
                     .action(
-                        "Send this reply to ${agent ?: "the agent"}",
+                        sending,
                         { submit() },
                         pillShape,
                         enabled = ready,
@@ -370,6 +372,7 @@ fun Composer(
                 contentAlignment = Alignment.Center,
             ) {
                 IconGlyph(ConversationIcons.send, 18.dp, if (ready) tokens.color.onAccent else tokens.color.mute)
+                Hint(sending)
             }
         }
     }

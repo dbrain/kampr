@@ -18,6 +18,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,7 +84,7 @@ private fun Parts(place: FilesPlace.Commit, parts: CommitParts, nav: FilesNav) {
 @Composable
 private fun FileSection(patch: FilePatch, startOpen: Boolean, onOpen: () -> Unit) {
     val tokens = Kampr.tokens
-    var open by remember(patch.path) { mutableStateOf(startOpen) }
+    var open by rememberSaveable(patch.path) { mutableStateOf(startOpen) }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             GlyphTarget(

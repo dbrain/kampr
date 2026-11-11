@@ -140,8 +140,8 @@ class NewSheetMuffitTest {
             runComposeUiTest {
                 val sheet = MuffitSheet()
                 open(sheet)
-                onNodeWithContentDescription("directory").performTextInput(" /home/dbrain/dev/kampr ")
-                onNodeWithContentDescription("first prompt").performTextInput("tidy the parser")
+                onNodeWithContentDescription("Directory").performTextInput(" /home/dbrain/dev/kampr ")
+                onNodeWithContentDescription("First prompt").performTextInput("tidy the parser")
                 if (case.background) onNodeWithContentDescription(TERMINAL, substring = true).performClick()
                 waitForIdle()
                 onNodeWithContentDescription(START).performClick()

@@ -82,7 +82,7 @@ class HerdQuickSessionTest {
     fun theBarsPlusStillOpensTheSheet() = runComposeUiTest {
         val spy = Spy()
         portrait(spy, LOCAL, PEER)
-        onNodeWithContentDescription("New workspace or session").performClick()
+        onNodeWithContentDescription("Start a new workspace or session").performClick()
         assertEquals(true, spy.sheet)
         assertNull(spy.quick)
     }

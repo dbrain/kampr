@@ -35,6 +35,8 @@ import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
+private const val HEADER = "header"
+
 private val ROOM_INFO = PaneInfo(
     id = Phone.PANE, nodeId = "01JKAMPRNODE0000000000000", workspace = "kampr", tab = "1",
     cwd = "~/dev/kampr", agent = "claude", agentStatus = "working", cols = 94, rows = 40,
@@ -125,8 +127,10 @@ class ZoomSheetRoomTest {
         val bottom = assertNotNull(surfaces.keyRowTop, "the key row never laid itself out")
         val where = if (landscape) "landscape" else "portrait"
         for ((what, node) in sheetControls()) {
-            node.performScrollTo()
-            waitForIdle()
+            if (what != HEADER) {
+                node.performScrollTo()
+                waitForIdle()
+            }
             val at = node.getUnclippedBoundsInRoot()
             assertTrue(
                 at.top >= top && at.bottom <= bottom,
@@ -136,8 +140,9 @@ class ZoomSheetRoomTest {
         }
     }
 
+    // The header stays put above the scroller, so it is measured where it stands.
     private fun ComposeUiTest.sheetControls(): List<Pair<String, SemanticsNodeInteraction>> = listOf(
-        "first line" to onNodeWithText("pinch to adjust", substring = true),
+        HEADER to onNodeWithText("Pinch to adjust", substring = true),
         "fit-width preset" to onNodeWithContentDescription("Fit width", substring = true),
         "last toggle" to onNodeWithContentDescription("Check destructive commands", substring = true),
         "closing note" to onNodeWithText("Zoom is yours alone", substring = true),

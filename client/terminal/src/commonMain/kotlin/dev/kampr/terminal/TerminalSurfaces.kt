@@ -6,11 +6,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import dev.kampr.shared.model.PaneState
-import dev.kampr.shared.ui.Chip
 import dev.kampr.shared.ui.FallbackSurfaces
 import dev.kampr.shared.ui.FilesNav
 import dev.kampr.shared.ui.FilesPlace
+import dev.kampr.shared.ui.KamprIcons
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.MenuRow
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.terminal.guard.SubmitGuard
@@ -41,8 +42,8 @@ class TerminalSurfaces(private val conversation: PaneSurfaces = FallbackSurfaces
             onUsed()
             session.asked = tool
         }
-        Chip("review", false, { ask(PaneTool.Review) }, label = "Review this pane row by row")
-        if (session.attachable) Chip("attach", false, { ask(PaneTool.Attach) }, label = "Attach a file for this pane")
+        MenuRow("Review row by row", { ask(PaneTool.Review) }, KamprIcons.tool, label = "Review this pane row by row")
+        if (session.attachable) MenuRow("Attach a file", { ask(PaneTool.Attach) }, KamprIcons.link, label = "Attach a file for this pane")
     }
 
     @Composable

@@ -45,6 +45,15 @@ internal class AppFilesNav(private val state: AppState) : FilesNav {
 
 @Composable
 internal fun FilesLayer(state: AppState, surfaces: PaneSurfaces, nav: FilesNav) {
-    val top = state.files.lastOrNull() ?: return
-    surfaces.Files(top, nav, Modifier.modal(nav::back))
+    FilesStack(state.files) { surfaces.Files(it, nav, Modifier.modal(nav::back)) }
+}
+
+// Keyed by depth as well as place: the same folder twice on one stack is two visits, each with
+// its own filter and scroll.
+@Composable
+fun FilesStack(places: List<FilesPlace>, content: @Composable (FilesPlace) -> Unit) {
+    val keys = places.mapIndexed { depth, place -> "$depth $place" }
+    val kept = rememberKept(keys)
+    val top = places.lastOrNull() ?: return
+    kept.Keep(keys.last()) { content(top) }
 }

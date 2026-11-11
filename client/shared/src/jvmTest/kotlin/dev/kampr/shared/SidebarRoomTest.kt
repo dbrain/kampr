@@ -55,9 +55,9 @@ private val SIDEBAR_HERD = Herd(
 // Every control the header carries, by the name a reader reaches it under.
 private val HEADER_CONTROLS = listOf(
     "Machines",
-    "Mosaic, several panes at once",
-    "Fleet, one command across the herd",
-    "New workspace or session",
+    "Show several panes at once",
+    "Run one command across the herd",
+    "Start a new workspace or session",
 )
 
 // The one thing in the sidebar that spans its whole width, so its bounds are the sidebar's own.
@@ -219,7 +219,7 @@ class SidebarRoomTest {
     fun theRailKeepsTheControlsThatAreNotAPane() = runComposeUiTest {
         setContent { Sidebar(collapsed = true) }
         waitForIdle()
-        onNodeWithContentDescription("New workspace or session", substring = true).assertIsDisplayed()
+        onNodeWithContentDescription("Start a new workspace or session", substring = true).assertIsDisplayed()
         onNodeWithContentDescription(FOOT, substring = true).assertIsDisplayed()
     }
 }

@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
@@ -29,28 +30,33 @@ import dev.kampr.shared.wire.ServerMsg
 @Composable
 fun FindSheet(
     paneId: String,
+    subject: String,
     breakpoint: Breakpoint,
     found: ServerMsg.Found?,
     onSearch: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val tokens = Kampr.tokens
     var query by remember(paneId) { mutableStateOf("") }
     BottomSheet(breakpoint, onDismiss) {
-        SheetHeader("Find in scrollback", "the pane's whole history, not the rows on screen", null, onDismiss)
+        SheetHeader("Find in scrollback", subject, null, onDismiss, breakpoint != Breakpoint.Portrait)
         Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(16.dp),
+            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 20.dp, end = 20.dp, top = 6.dp, bottom = 18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            KField(
-                hint = "what to look for",
-                text = query,
-                label = "What to look for in this pane's whole scrollback",
-                onSubmit = { onSearch(query) },
-                onText = { query = it },
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip("search", false, { onSearch(query) }, label = "Search this pane's whole scrollback")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                KField(
+                    hint = "Text to find",
+                    text = query,
+                    modifier = Modifier.weight(1f),
+                    style = tokens.type.body,
+                    label = "What to look for in this pane's whole scrollback",
+                    onSubmit = { onSearch(query) },
+                    onText = { query = it },
+                )
+                CommandButton("Search", { onSearch(query) }, KamprIcons.search, primary = true, label = "Search this pane's whole scrollback")
             }
+            KText("Searches the pane's whole history, not only the rows on screen.", tokens.type.captionSmall, tokens.color.mute, maxLines = 2)
             results(paneId, found)
         }
     }
@@ -61,14 +67,14 @@ private fun ColumnScope.results(paneId: String, found: ServerMsg.Found?) {
     val tokens = Kampr.tokens
     val mine = found?.takeIf { it.pane == paneId } ?: return
     if (mine.matches.isEmpty()) {
-        KText("no match in this pane's scrollback", tokens.type.caption, tokens.color.mute)
+        KText("No match in this pane's scrollback.", tokens.type.caption, tokens.color.mute)
         return
     }
     // `total` is every match the node found; the list it hands over is capped so that one search
     // cannot become hundreds of round trips. Saying both is the honest summary.
     val shown = mine.matches.size
     KText(
-        if (mine.total > shown) "${mine.total} matches · first $shown" else "${mine.total} matches",
+        if (mine.total > shown) "${mine.total} matches · showing the first $shown" else "${mine.total} matches",
         tokens.type.meta,
         tokens.color.mute,
     )

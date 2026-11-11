@@ -137,8 +137,8 @@ fun CommandPalette(items: List<PaletteItem>, onPick: (PaletteTarget) -> Unit, on
                 .padding(top = 64.dp, start = 16.dp, end = 16.dp)
                 .widthIn(max = 560.dp)
                 .width(maxWidth)
-                .background(tokens.color.surface, RoundedCornerShape(tokens.radii.lg))
-                .edge(tokens.card, RoundedCornerShape(tokens.radii.lg))
+                .background(tokens.color.bar, RoundedCornerShape(tokens.radii.lg))
+                .edge(tokens.chrome, RoundedCornerShape(tokens.radii.lg))
                 .readingOrder(-1f)
                 .onPreviewKeyEvent { event ->
                     if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
@@ -158,7 +158,7 @@ fun CommandPalette(items: List<PaletteItem>, onPick: (PaletteTarget) -> Unit, on
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             KField(
-                hint = "host, session, path, agent…",
+                hint = "Search panes, hosts, paths, agents…",
                 text = query,
                 modifier = Modifier.focusRequester(focus),
                 style = tokens.type.body,
@@ -177,14 +177,14 @@ fun CommandPalette(items: List<PaletteItem>, onPick: (PaletteTarget) -> Unit, on
                 },
             )
             if (shown.isEmpty()) {
-                KText("nothing matches", tokens.type.caption, tokens.color.mute, Modifier.padding(8.dp))
+                KText("Nothing matches.", tokens.type.caption, tokens.color.mute, Modifier.padding(8.dp))
             }
             shown.forEachIndexed { index, item ->
                 PaletteRow(index, item, index == selected) { onPick(item.target) }
             }
             KText(
-                "1–9 to jump · ↑↓ enter · esc",
-                tokens.type.captionSmall,
+                "1–9 jump · ↑↓ move · Enter open · Esc close",
+                tokens.type.micro,
                 tokens.color.mute,
                 Modifier.padding(horizontal = 8.dp),
             )

@@ -123,7 +123,7 @@ fun EnvEditor(
 ) {
     val tokens = Kampr.tokens
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        LabelText("environment", tokens.type.micro, tokens.color.mute)
+        LabelText("Environment", tokens.type.micro, tokens.color.mute)
         rows.forEachIndexed { index, (key, value) ->
             Row(
                 Modifier.fillMaxWidth(),

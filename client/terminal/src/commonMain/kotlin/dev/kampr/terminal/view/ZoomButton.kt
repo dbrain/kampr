@@ -2,6 +2,7 @@ package dev.kampr.terminal.view
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.padding
@@ -11,6 +12,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.Hint
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
@@ -29,14 +31,15 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
     // Rule 3's price for a hold: said wherever it is held, on the one control that opens the panel
     // its off switch is on. ADR 0013.
     val held = session.view.holdsPane
-    Row(
+    val spoken = "Zoom, currently ${zoomLabel(session.view.displayZoom)}"
+    Box(
         modifier
             .defaultMinSize(minWidth = 68.dp)
             .background(if (open) tokens.color.accentSoft else tokens.color.surface, shape)
             .edge(tokens.card, shape)
             .touchable()
             .action(
-                "Zoom, currently ${zoomLabel(session.view.displayZoom)}",
+                spoken,
                 { session.view.sheetOpen = !open },
                 shape,
                 selected = open,
@@ -44,17 +47,22 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
                     "sheet open".takeIf { open },
                     "holding this pane at this view's size — the desk sees it this shape too".takeIf { held },
                 ).joinToString(", ").ifEmpty { null },
-            )
-            .padding(horizontal = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ),
+        contentAlignment = Alignment.CenterStart,
     ) {
-        IconGlyph(KamprIcons.zoom, 15.dp, if (open) tokens.color.accent else tokens.color.dim)
-        KText(
-            zoomLabel(session.view.displayZoom),
-            tokens.type.key,
-            if (open) tokens.color.accent else tokens.color.dim,
-        )
-        if (held) KText("held", tokens.type.key, tokens.color.working)
+        Row(
+            Modifier.padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            IconGlyph(KamprIcons.zoom, 15.dp, if (open) tokens.color.accent else tokens.color.dim)
+            KText(
+                zoomLabel(session.view.displayZoom),
+                tokens.type.key,
+                if (open) tokens.color.accent else tokens.color.dim,
+            )
+            if (held) KText("held", tokens.type.key, tokens.color.working)
+        }
+        Hint(spoken)
     }
 }

@@ -92,7 +92,7 @@ class NewSheetNativeTest {
     fun theCommandAndDirectoryAreSentAsTyped() = runComposeUiTest {
         val sheet = NativeSheet(pane = FROM)
         open(sheet)
-        onNodeWithContentDescription("command").performTextInput("  cargo test && make ")
+        onNodeWithContentDescription("Command").performTextInput("  cargo test && make ")
         waitForIdle()
         onNodeWithContentDescription(START).performClick()
         waitForIdle()
@@ -161,7 +161,7 @@ class NewSheetNativeTest {
         }
         onNodeWithContentDescription("Kampr options").performClick()
         waitForIdle()
-        onNodeWithContentDescription("needs Kampr 0.1.119 on comingclean", substring = true).assertExists()
+        onNodeWithContentDescription("Needs Kampr 0.1.119 on comingclean", substring = true).assertExists()
         onNodeWithContentDescription("Kampr session,", substring = true).assertHasNoClickAction()
     }
 

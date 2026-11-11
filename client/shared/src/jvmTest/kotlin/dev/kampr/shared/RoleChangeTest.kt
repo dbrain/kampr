@@ -234,7 +234,7 @@ class RoleChangeTest {
     }
 }
 
-private const val NEW = "New, from this pane"
+private const val NEW = "Start something new from this pane"
 private const val READ_ONLY = "This device is read-only — it cannot type into the pane"
 
 private fun assertNotNullNote(note: String?): String = note ?: error("the role change was never surfaced to the operator")

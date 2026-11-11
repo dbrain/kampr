@@ -153,6 +153,6 @@ class RailMenuReachTest {
     @Test
     fun theExpandedSidebarRowCarriesTheGlyphTheRailHasNoRoomFor() = runComposeUiTest {
         setContent { Row() }
-        onNodeWithContentDescription("Pane menu").assertExists()
+        onNodeWithContentDescription("Show the pane menu").assertExists()
     }
 }

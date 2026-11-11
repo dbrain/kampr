@@ -5,8 +5,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.absolutePadding
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -23,10 +21,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.AgentStatus
@@ -140,28 +142,85 @@ private fun rememberLastKnown(paneId: String, info: PaneInfo?): PaneInfo? {
     return last
 }
 
-// Everything the header says *about* the pane rather than which pane it is: what the frame stream
-// is doing and what the keyboard is doing. Emitted as siblings so the row that hosts them decides
-// how they lay out; the agent's own status is placed separately.
+// What the header says *about* the pane rather than which pane it is. `words` is what the overflow
+// pill lists when this one does not fit, and `tone` is what that pill borrows when this is the most
+// serious one hidden.
+private class PaneStatus(val words: String, val tone: Color, val draw: @Composable () -> Unit)
+
+// One order on every layout: what the agent is doing first, then what is wrong with the pane, the
+// keyboard or the device, most serious first. Every host keeps them after the controls, so a status
+// arriving never moves a control.
 @Composable
-private fun PaneMarks(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?, shown: PaneView) {
+private fun paneStatuses(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?, shown: PaneView): List<PaneStatus> {
     val tokens = Kampr.tokens
-    if (gone != null) GoneBadge(gone)
-    if (info?.detail != null && info.paints) StreamBadge()
-    if (pane.stale) StaleBadge(shown)
-    if (pane.quiet) QuietBadge()
-    if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
-    if (readOnly) {
-        StatusBadge(
-            "read-only",
-            tokens.color.dim,
-            tokens.color.surface,
-            label = "This device is read-only — it cannot type into the pane",
-        )
+    val agent = info?.let(::statusOf) ?: AgentStatus.Unknown
+    return listOfNotNull(
+        statusLabel(agent)?.let { PaneStatus(it, statusColor(agent)) { StatusChip(info) } },
+        gone?.let { PaneStatus(goneWord(it), tokens.color.blocked) { GoneBadge(it) } },
+        pane.undelivered.takeIf { it > 0 }?.let { PaneStatus("Not sent", tokens.color.blocked) { UnsentBadge(it) } },
+        PaneStatus("No stream", tokens.color.blocked) { StreamBadge() }.takeIf { info?.detail != null && info.paints },
+        PaneStatus("Stale", tokens.color.working) { StaleBadge(shown) }.takeIf { pane.stale },
+        PaneStatus("Quiet", tokens.color.working) { QuietBadge() }.takeIf { pane.quiet },
+        PaneStatus("Read-only", tokens.color.dim) {
+            StatusBadge(
+                "Read-only",
+                tokens.color.dim,
+                tokens.color.surface,
+                label = "This device is read-only — it cannot type into the pane",
+                icon = KamprIcons.lockSmall,
+                outlined = true,
+            )
+        }.takeIf { readOnly },
+    )
+}
+
+// One line, end-aligned, most important first. What does not fit is counted in a pill that wears
+// the most serious hidden status's colour and names them all on hover or a long press — never
+// wrapped, because a header that grows a line insets the terminal under it, and every status change
+// would shove the grid down. The unplaced badges keep their semantics, so a reader hears them all.
+@Composable
+private fun StatusLine(statuses: List<PaneStatus>, modifier: Modifier) {
+    val gap = with(LocalDensity.current) { 6.dp.roundToPx() }
+    SubcomposeLayout(modifier) { constraints ->
+        // Unbounded, so a badge that does not fit is counted rather than ellipsized to fit.
+        val loose = Constraints(maxHeight = constraints.maxHeight)
+        val all = statuses.mapIndexed { index, status -> subcompose(index) { status.draw() }.map { it.measure(loose) } }
+        val widths = all.map { row -> row.sumOf { it.width } }
+        fun fits(count: Int, more: Int): Boolean = widths.take(count).sum() + gap * (count - 1).coerceAtLeast(0) + more <= constraints.maxWidth
+        var shown = all.size
+        var extra: Placeable? = null
+        while (!fits(shown, extra?.let { it.width + gap } ?: 0) && shown > 0) {
+            shown--
+            val hidden = statuses.drop(shown)
+            extra = subcompose("more-$shown") { MoreStatuses(hidden) }.single().measure(loose)
+        }
+        val height = if (constraints.hasBoundedHeight) constraints.maxHeight else (all.flatten().maxOfOrNull { it.height } ?: 0)
+        layout(constraints.maxWidth, height) {
+            var x = constraints.maxWidth
+            extra?.let {
+                x -= it.width
+                it.place(x, (height - it.height) / 2)
+                x -= gap
+            }
+            for (row in all.take(shown).asReversed()) {
+                x -= row.sumOf { it.width }
+                row.forEach { it.place(x, (height - it.height) / 2) }
+                x -= gap
+            }
+        }
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MoreStatuses(hidden: List<PaneStatus>) {
+    val tokens = Kampr.tokens
+    val tone = hidden.first().tone
+    Box(Modifier.clearAndSetSemantics {}) {
+        StatusBadge("+${hidden.size}", tone, tokens.color.surface, icon = KamprIcons.warning.takeIf { tone != tokens.color.dim }, outlined = true)
+        Hint(hidden.joinToString(" · ") { it.words })
+    }
+}
+
 @Composable
 fun PaneScreenMobile(
     pane: PaneState,
@@ -176,6 +235,7 @@ fun PaneScreenMobile(
     modifier: Modifier = Modifier,
     tab: List<PaneInfo> = emptyList(),
     onTab: (String) -> Unit = {},
+    backLabel: String = "Back to the herd",
 ) {
     val tokens = Kampr.tokens
     val density = LocalDensity.current
@@ -230,36 +290,36 @@ fun PaneScreenMobile(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                BackAction("Back to the herd", onBack, target = if (landscape) LANDSCAPE_TOUCH else TOUCH)
+                BackAction(backLabel, onBack, target = if (landscape) LANDSCAPE_TOUCH else TOUCH)
                 KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f).asHeading())
                 watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
                 if (landscape) {
-                    PaneMarks(pane, info, readOnly, gone, shown)
-                    StatusChip(info)
+                    StatusLine(paneStatuses(pane, info, readOnly, gone, shown), Modifier.weight(1f).height(LANDSCAPE_TOUCH))
                     if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
                     if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true)
-                } else {
-                    StatusChip(info)
                 }
                 NewAction(pane.id, target = LANDSCAPE_TOUCH)
                 PaneManageAction(pane.id, target = LANDSCAPE_TOUCH)
             }
             if (!landscape) {
-                // Flowing rather than a Row: stale, unsent and read-only together outrun a 360 dp
-                // phone beside the switch, and a switch squeezed to nothing is not a switch.
-                FlowRow(
+                // The controls lead and the statuses follow, end-aligned and flowing onto lines of
+                // their own: stale, unsent and read-only together outrun a 360 dp phone, and when
+                // they shared one flow with the switch, "Quiet" arriving pushed it out from under
+                // the thumb.
+                Row(
                     Modifier
                         .fillMaxWidth()
                         .background(tokens.color.bar)
                         .edgeBottom()
                         .absolutePadding(left = 12.dp + safe.left, right = 12.dp + safe.right, bottom = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PaneMarks(pane, info, readOnly, gone, shown)
-                    if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true)
+                    // Glyphs rather than words on a phone held upright: the words took 200 of a
+                    // 360 dp row and left the statuses beside them no room to say anything.
+                    if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true, glyphs = true)
                     if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
+                    StatusLine(paneStatuses(pane, info, readOnly, gone, shown), Modifier.weight(1f).height(LANDSCAPE_TOUCH))
                 }
             }
             TabStrip(tab, pane.id, onTab, onSideBySide = null, Modifier.absolutePadding(left = safe.left, right = safe.right))
@@ -304,7 +364,7 @@ fun PaneScreenMobile(
 }
 
 @Composable
-private fun ViewSwitch(view: PaneView, onView: (PaneView) -> Unit, modifier: Modifier, compact: Boolean = false) {
+private fun ViewSwitch(view: PaneView, onView: (PaneView) -> Unit, modifier: Modifier, compact: Boolean = false, glyphs: Boolean = false) {
     Segmented(
         listOf("Terminal", "Conversation"),
         if (view == PaneView.Conversation) 1 else 0,
@@ -312,6 +372,7 @@ private fun ViewSwitch(view: PaneView, onView: (PaneView) -> Unit, modifier: Mod
         modifier,
         what = "view",
         compact = compact,
+        icons = listOf(KamprIcons.shell, KamprIcons.chat).takeIf { glyphs },
     )
 }
 
@@ -329,7 +390,7 @@ private fun StaleBadge(shown: PaneView) {
         PaneView.Split -> "showing the last of both that arrived"
     }
     Box(Modifier.announce("Stale — this pane has stopped sending frames, $holding")) {
-        StatusBadge("Stale", tokens.color.working, tokens.color.surface)
+        StatusBadge("Stale", tokens.color.working, tokens.color.surface, icon = KamprIcons.warning, outlined = true)
     }
 }
 
@@ -346,7 +407,7 @@ private fun QuietBadge() {
             urgent = true,
         ),
     ) {
-        StatusBadge("Quiet", tokens.color.working, tokens.color.surface)
+        StatusBadge("Quiet", tokens.color.working, tokens.color.surface, icon = KamprIcons.warning, outlined = true)
     }
 }
 
@@ -362,7 +423,7 @@ private fun UnsentBadge(count: Int) {
             urgent = true,
         ),
     ) {
-        StatusBadge("Not sent · $count", tokens.color.blocked, tokens.color.blockedBg)
+        StatusBadge("Not sent · $count", tokens.color.blocked, tokens.color.blockedBg, icon = KamprIcons.warning, outlined = true)
     }
 }
 
@@ -429,12 +490,7 @@ fun PaneScreenDesktop(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading(), maxLines = 1)
-                if (gone != null) GoneBadge(gone)
-                if (info?.detail != null && info.paints) StreamBadge()
-                if (pane.stale) StaleBadge(shown)
-                if (pane.quiet) QuietBadge()
-                if (pane.undelivered > 0) UnsentBadge(pane.undelivered)
-                StatusChip(info)
+                paneStatuses(pane, info, readOnly, gone, shown).forEach { it.draw() }
                 Box(Modifier.weight(1f))
                 if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
                 if (info.switches) {

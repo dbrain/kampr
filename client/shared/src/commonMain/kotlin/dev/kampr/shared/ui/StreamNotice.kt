@@ -27,7 +27,7 @@ private val NOTICE_MAX_WIDTH = 420.dp
 internal fun StreamBadge() {
     val tokens = Kampr.tokens
     Box(Modifier.announce(NO_PICTURE)) {
-        StatusBadge("No stream", tokens.color.blocked, tokens.color.blockedBg)
+        StatusBadge("No stream", tokens.color.blocked, tokens.color.blockedBg, icon = KamprIcons.warning, outlined = true)
     }
 }
 

@@ -126,7 +126,7 @@ class MosaicCellActionsTest {
         waitForIdle()
         onRoot().performMouseInput { rightClick(percentOffset(0.5f, 0.8f)) }
         waitForIdle()
-        onNodeWithContentDescription("Pane actions").performClick()
+        onNodeWithContentDescription("Show pane actions").performClick()
         waitForIdle()
         assertTrue(manage.listed.isEmpty(), "a cell opened the list menu: ${manage.listed}")
         assertEquals(listOf(CELL.id, CELL.id), manage.opened, "a cell opened ${manage.opened}")
@@ -137,7 +137,7 @@ class MosaicCellActionsTest {
         val manage = ManageSpy()
         setContent { Cell(manage) }
         waitForIdle()
-        onNodeWithContentDescription("Pane actions").performClick()
+        onNodeWithContentDescription("Show pane actions").performClick()
         waitForIdle()
         assertEquals(listOf(CELL.id), manage.opened, "the cell header's ellipsis opened ${manage.opened}")
     }

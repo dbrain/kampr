@@ -94,10 +94,21 @@ object KamprIcons {
         Glyph.Frame(1.4f, 5f, 9.2f, 9.2f, 1.4f),
         d("M5 5V1.4h9.6V11h-3.6"),
     )
+    val chat = icon(18f, 1.6f, Glyph.Frame(2f, 3f, 14f, 10f, 2.4f), d("M6 16l1.6-3"))
     val plus = icon(16f, 1.8f, d("M8 2.2v11.6M2.2 8h11.6"))
     val folder = icon(16f, 1.6f, d("M1.8 4.2a1.4 1.4 0 0 1 1.4-1.4h3l1.6 1.8h5a1.4 1.4 0 0 1 1.4 1.4v6.6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4Z"))
     val cross = icon(20f, 1.9f, d("M5 5l10 10M15 5 5 15"))
     val pencil = icon(16f, 1.6f, d("M10.6 2.6 13.4 5.4 5.4 13.4H2.6v-2.8z"))
+    val open = icon(16f, 1.6f, d("M9 2.4h4.6V7M13.6 2.4 7.4 8.6M11.6 9.6v3a1 1 0 0 1-1 1H3.4a1 1 0 0 1-1-1V5.4a1 1 0 0 1 1-1h3"))
+    val desk = icon(16f, 1.6f, Glyph.Frame(1.6f, 2.4f, 12.8f, 8.6f, 1.4f), d("M5.6 14h4.8M8 11v3"))
+    val fill = icon(16f, 1.6f, d("M2.4 6V2.4H6M10 2.4h3.6V6M13.6 10v3.6H10M6 13.6H2.4V10"))
+    val restore = icon(16f, 1.6f, d("M3 5.6h6.6a3.8 3.8 0 0 1 0 7.6H5.4M5.6 3 3 5.6l2.6 2.6"))
+    val restart = icon(16f, 1.6f, d("M13.2 8a5.2 5.2 0 1 1-1.6-3.8M13.2 2.4v3.2H10"))
+    val stop = icon(16f, 1.6f, Glyph.Frame(3.4f, 3.4f, 9.2f, 9.2f, 1.4f))
+    val play = icon(16f, 1.6f, d("M4.6 2.8v10.4L13 8z"))
+    val bolt = icon(16f, 1.6f, d("M9.2 1.6 3.6 9h4l-1 5.4L12.4 7h-4z"))
+    val link = icon(16f, 1.6f, d("M6.8 9.2a2.8 2.8 0 0 0 4 0l2-2a2.8 2.8 0 0 0-4-4l-.8.8M9.2 6.8a2.8 2.8 0 0 0-4 0l-2 2a2.8 2.8 0 0 0 4 4l.8-.8"))
+    val unlink = icon(16f, 1.6f, d("M9.8 3.4l.2-.2a2.8 2.8 0 0 1 4 4l-2 2M6.2 12.6l-.2.2a2.8 2.8 0 0 1-4-4l2-2M2.4 2.4l11.2 11.2"))
 
     // A whale carrying three crates.
     val docker = icon(
@@ -125,6 +136,27 @@ object KamprIcons {
         Glyph.Round(3.2f, 8f, 1.1f, filled = true),
         Glyph.Round(8f, 8f, 1.1f, filled = true),
         Glyph.Round(12.8f, 8f, 1.1f, filled = true),
+    )
+    val keep = icon(16f, 1.6f, d("M4 1.8h8a.8.8 0 0 1 .8.8v11.6L8 11l-4.8 3.2V2.6a.8.8 0 0 1 .8-.8z"))
+    val forget = icon(16f, 1.6f, d("M2.2 4h11.6M6 4V2.4h4V4M3.6 4l.8 9.6h7.2l.8-9.6M6.6 6.6v4.6M9.4 6.6v4.6"))
+    val copyText = icon(
+        16f,
+        1.5f,
+        Glyph.Frame(5f, 5f, 9f, 9f, 1.6f),
+        d("M11 5V3.6A1.6 1.6 0 0 0 9.4 2H3.6A1.6 1.6 0 0 0 2 3.6v5.8A1.6 1.6 0 0 0 3.6 11H5"),
+    )
+    val pasteText = icon(
+        16f,
+        1.5f,
+        Glyph.Frame(2.6f, 2.8f, 10.8f, 11.8f, 1.6f),
+        Glyph.Frame(5.6f, 1.4f, 4.8f, 2.8f, 1f),
+        d("M5.4 8h5.2M5.4 10.8h3.6"),
+    )
+    val selectAll = icon(
+        16f,
+        1.5f,
+        d("M2 5V3a1 1 0 0 1 1-1h2M11 2h2a1 1 0 0 1 1 1v2M14 11v2a1 1 0 0 1-1 1h-2M5 14H3a1 1 0 0 1-1-1v-2"),
+        d("M5.4 6h5.2M5.4 8h5.2M5.4 10h3.4"),
     )
 }
 

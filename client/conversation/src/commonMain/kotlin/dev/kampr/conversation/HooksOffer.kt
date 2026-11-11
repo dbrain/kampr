@@ -14,6 +14,7 @@ import dev.kampr.shared.theme.BorderSpec
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
+import dev.kampr.shared.ui.PrimaryAction
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.wire.HooksScope
@@ -45,7 +46,7 @@ internal fun HooksOffer(
         modifier
             .fillMaxWidth()
             .padding(top = 12.dp)
-            .background(tokens.color.raise, shape)
+            .background(tokens.color.surface, shape)
             .edge(BorderSpec(1.dp, tokens.color.accent), shape)
             .padding(horizontal = 13.dp, vertical = 11.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -57,18 +58,25 @@ internal fun HooksOffer(
             HooksScope.Project -> "Update them and $GIVES"
         }
         KText(words, tokens.type.caption, tokens.color.dim, maxLines = 4)
-        if (update != null) {
-            QuietAction("Update", { onInstall(update) }, Modifier.fillMaxWidth(), enabled = !asking)
-        } else {
-            QuietAction("Install for all projects", { onInstall(HooksScope.User) }, Modifier.fillMaxWidth(), enabled = !asking)
-            offer.project?.let { project ->
-                QuietAction("Install for ${basename(project)}", { onInstall(HooksScope.Project) }, Modifier.fillMaxWidth(), enabled = !asking)
-            }
-        }
+        refusal?.let { KText(it, tokens.type.micro, tokens.color.blocked, maxLines = 3) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             QuietAction("Not now", onNotNow, Modifier.weight(1f))
             QuietAction("Don't ask again", onDecline, Modifier.weight(1f), enabled = !asking)
         }
-        refusal?.let { KText(it, tokens.type.micro, tokens.color.blocked, maxLines = 3) }
+        if (update != null) {
+            PrimaryAction("Update hooks", { onInstall(update) }, Modifier.fillMaxWidth(), tokens.type.buttonSmall, 10.dp, enabled = !asking)
+        } else {
+            offer.project?.let { project ->
+                QuietAction("Install for ${basename(project)}", { onInstall(HooksScope.Project) }, Modifier.fillMaxWidth(), enabled = !asking)
+            }
+            PrimaryAction(
+                "Install for all projects",
+                { onInstall(HooksScope.User) },
+                Modifier.fillMaxWidth(),
+                tokens.type.buttonSmall,
+                10.dp,
+                enabled = !asking,
+            )
+        }
     }
 }

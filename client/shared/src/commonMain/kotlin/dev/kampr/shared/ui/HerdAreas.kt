@@ -4,10 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
@@ -29,13 +29,18 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import dev.kampr.shared.model.Area
 import dev.kampr.shared.model.NodeGroup
 import dev.kampr.shared.model.areas
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.wire.NodeInfo
 
 private val TAB_INK = 22.dp
 
@@ -87,10 +92,11 @@ fun AreaTabs(group: NodeGroup, ctx: HerdRowsCtx) {
             val active = area == shown
             val count = group.count(area)
             val shape = RoundedCornerShape(TAB_INK / 2)
+            val spoken = areaSpoken(area, count)
             Box(
                 Modifier
                     .height(ctx.look.control)
-                    .action(areaSpoken(area, count), { ctx.onArea(group.node.id, area) }, shape, role = Role.Tab, selected = active),
+                    .action(spoken, { ctx.onArea(group.node.id, area) }, shape, role = Role.Tab, selected = active),
                 contentAlignment = Alignment.Center,
             ) {
                 Row(
@@ -105,6 +111,7 @@ fun AreaTabs(group: NodeGroup, ctx: HerdRowsCtx) {
                     IconGlyph(areaIcon(area), 13.dp, tint)
                     if (count != null && count > 0) DisableSelection { TwoCells(shortCount(count), tint) }
                 }
+                Hint(spoken)
             }
         }
     }
@@ -122,7 +129,8 @@ private fun TwoCells(text: String, tint: Color) {
     Box(Modifier.widthIn(min = widest)) { KText(text, style, tint) }
 }
 
-// Everything about a machine that is not the one thing done most, which is the + beside this.
+// Everything about a machine that is not the one thing done most, which is the + beside this. A
+// pointer gets a menu hanging off the glyph; a finger gets the same rows as a sheet.
 @Composable
 fun NodeOverflow(group: NodeGroup, ctx: HerdRowsCtx) {
     val tokens = Kampr.tokens
@@ -135,38 +143,37 @@ fun NodeOverflow(group: NodeGroup, ctx: HerdRowsCtx) {
         GlyphAction(KamprIcons.ellipsis, "More for ${node.name}", tokens.color.dim, ctx.look.control, chip = 22.dp) { open = true }
         if (open) {
             val close = { open = false }
-            val below = with(androidx.compose.ui.platform.LocalDensity.current) { ctx.look.control.roundToPx() }
-            Popup(
-                alignment = Alignment.TopEnd,
-                offset = IntOffset(0, below),
-                onDismissRequest = close,
-                properties = PopupProperties(focusable = true),
-            ) {
-                val shape = RoundedCornerShape(tokens.radii.sm)
-                Column(
-                    Modifier
-                        .width(OVERFLOW_WIDTH)
-                        .background(tokens.color.bar, shape)
-                        .edge(tokens.chrome, shape)
-                        .padding(vertical = 5.dp),
+            val rows: @Composable ColumnScope.() -> Unit = {
+                NodeStatus(node, latency)
+                if (manage.browses && node.isReachable) {
+                    MenuRow("Browse files", {
+                        close()
+                        manage.browse(node)
+                    }, KamprIcons.folder, label = "Browse files on ${node.name}")
+                }
+                if (manage.enabled && node.isReachable) {
+                    MenuRow("New with options…", {
+                        close()
+                        manage.newOn(node.id)
+                    }, KamprIcons.plus, label = "New on ${node.name}, with every option")
+                }
+            }
+            if (ctx.look == HerdLook.Sidebar) {
+                val below = with(LocalDensity.current) { ctx.look.control.roundToPx() }
+                Popup(
+                    alignment = Alignment.TopEnd,
+                    offset = IntOffset(0, below),
+                    onDismissRequest = close,
+                    properties = PopupProperties(focusable = true),
                 ) {
-                    KText(
-                        listOf(nodeReach(node), latency).joinToString(" · "),
-                        tokens.type.captionSmall,
-                        tokens.color.mute,
-                        Modifier.padding(horizontal = 14.dp, vertical = 6.dp).named("${node.name}, ${nodeReach(node)}, $latency"),
-                    )
-                    if (manage.browses && node.isReachable) {
-                        OverflowItem("Browse files", "Browse files on ${node.name}") {
-                            close()
-                            manage.browse(node)
-                        }
-                    }
-                    if (manage.enabled && node.isReachable) {
-                        OverflowItem("New…", "New on ${node.name}, with every option") {
-                            close()
-                            manage.newOn(node.id)
-                        }
+                    MenuPanel(content = rows)
+                }
+            } else {
+                Popup(popupPositionProvider = WholeWindow, onDismissRequest = close, properties = PopupProperties(focusable = true)) {
+                    val breakpoint = if (ctx.look == HerdLook.Portrait) Breakpoint.Portrait else Breakpoint.Landscape
+                    BottomSheet(breakpoint, close) {
+                        SheetHeader(node.name, null, null, close, breakpoint != Breakpoint.Portrait, dismiss = "Close the menu")
+                        Column(Modifier.padding(bottom = 12.dp), content = rows)
                     }
                 }
             }
@@ -174,18 +181,24 @@ fun NodeOverflow(group: NodeGroup, ctx: HerdRowsCtx) {
     }
 }
 
-private val OVERFLOW_WIDTH: Dp = 200.dp
+// The sheet covers the window rather than hanging off the glyph that opened it.
+private object WholeWindow : PopupPositionProvider {
+    override fun calculatePosition(anchorBounds: IntRect, windowSize: IntSize, layoutDirection: LayoutDirection, popupContentSize: IntSize): IntOffset = IntOffset.Zero
+}
 
 @Composable
-private fun OverflowItem(text: String, label: String, onClick: () -> Unit) {
+private fun NodeStatus(node: NodeInfo, latency: String) {
     val tokens = Kampr.tokens
-    Box(
-        Modifier
-            .touchable(LANDSCAPE_TOUCH)
-            .action(label, onClick)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
-        contentAlignment = Alignment.CenterStart,
+    val serving = node.isServing
+    val tone = if (serving) tokens.color.done else tokens.color.blocked
+    val status = if (serving) "Online" else "Offline"
+    Row(
+        Modifier.padding(horizontal = 20.dp, vertical = 6.dp).named("${node.name}, ${status.lowercase()}, ${nodeReach(node)}, $latency"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        DisableSelection { KText(text, tokens.type.body, tokens.color.text) }
+        Mark(tone, if (serving) MarkShape.Bar else MarkShape.Ring, 8.dp)
+        KText(status, tokens.type.captionSmall, tone)
+        KText(listOf(nodeReach(node), latency).joinToString(" · "), tokens.type.captionSmall, tokens.color.mute)
     }
 }

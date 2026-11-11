@@ -34,7 +34,7 @@ import kotlin.test.assertTrue
 
 private const val ALL = "Install for all projects"
 private const val PROJECT = "Install for kampr"
-private const val UPDATE = "Update"
+private const val UPDATE = "Update hooks"
 private const val NOT_NOW = "Not now"
 private const val NEVER = "Don't ask again"
 

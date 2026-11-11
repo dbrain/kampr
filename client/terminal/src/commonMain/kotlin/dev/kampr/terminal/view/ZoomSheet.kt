@@ -39,6 +39,7 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.ui.Divider
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
+import dev.kampr.shared.ui.SheetHeader
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.Toggle
 import dev.kampr.shared.ui.action
@@ -92,7 +93,7 @@ fun ZoomSheet(
     // it is `(hover: hover) and (pointer: fine)`, a mouse or a trackpad — so it names the wheel
     // there and keeps the finger's word everywhere else. Both are true at once on a trackpad, whose
     // pinch the browser delivers as exactly this ctrl+wheel.
-    val adjust = if (LocalHardKeyboard.current) "pinch or ctrl+wheel" else "pinch to adjust"
+    val adjust = if (LocalHardKeyboard.current) "Pinch or ctrl+wheel" else "Pinch to adjust"
     // One parent, the way `BottomSheet` builds it. The scrim covers the sheet as well as
     // the screen, so the two have to be siblings under a Box of their own — otherwise the
     // sheet's own controls are hit-tested against a scrim spread across the whole pane.
@@ -155,111 +156,113 @@ fun ZoomSheet(
                 // only thing left to tap: the scrim is under the header and the key row both, so a
                 // sheet that filled its gap would have nowhere outside itself to dismiss it.
                 BoxWithConstraints {
-                    Column(
-                        Modifier
-                            .heightIn(max = maxHeight * SHEET_ROOM)
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 15.dp, vertical = 14.dp),
-                        verticalArrangement = Arrangement.spacedBy(13.dp),
-                    ) {
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                    Column(Modifier.heightIn(max = maxHeight * SHEET_ROOM)) {
+                        SheetHeader(
+                            title = "Zoom and size",
+                            subtitle = "${zoomLabel(zoom)} · $adjust",
+                            onBack = null,
+                            onClose = onDismiss,
+                            compact = true,
+                        )
+                        Column(
+                            Modifier
+                                .verticalScroll(rememberScrollState())
+                                .padding(start = 20.dp, end = 20.dp, bottom = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(13.dp),
                         ) {
                             LabelText("Zoom", tokens.type.sectionLabel, tokens.color.mute)
-                            KText("$adjust · ${zoomLabel(zoom)}", tokens.type.metaSmall, tokens.color.mute)
-                        }
 
-                        Surface(
-                            Modifier.fillMaxWidth(),
-                            background = tokens.color.surface2,
-                            radius = tokens.radii.md,
-                        ) {
-                            Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Minimap(
-                                    window,
-                                    totalRows,
-                                    visibleRows,
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .height(74.dp)
-                                        .named(
-                                            "Showing columns ${window.firstCol + 1} to ${window.lastCol} " +
-                                                "of ${window.cols}, and $visibleRows of $totalRows rows",
-                                        ),
-                                )
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    KText(
-                                        "viewing col ${window.firstCol + 1}–${window.lastCol}, " +
-                                            "row ${visibleRows.coerceAtMost(totalRows)} of $totalRows",
-                                        tokens.type.metaSmall,
-                                        tokens.color.mute,
+                            Surface(
+                                Modifier.fillMaxWidth(),
+                                background = tokens.color.surface2,
+                                radius = tokens.radii.md,
+                            ) {
+                                Column(Modifier.padding(9.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Minimap(
+                                        window,
+                                        totalRows,
+                                        visibleRows,
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .height(74.dp)
+                                            .named(
+                                                "Showing columns ${window.firstCol + 1} to ${window.lastCol} " +
+                                                    "of ${window.cols}, and $visibleRows of $totalRows rows",
+                                            ),
                                     )
-                                    KText("of ${window.cols} wide", tokens.type.metaSmall, tokens.color.mute)
-                                }
-                                // Only when there is a hole to own up to. A pane whose ring is intact says
-                                // nothing here, which is what stops this becoming furniture.
-                                if (historyNote != null) {
-                                    KText(
-                                        historyNote.replaceFirstChar(Char::uppercase),
-                                        tokens.type.metaSmall,
-                                        tokens.color.working,
-                                        Modifier.named("The scrollback: $historyNote"),
-                                        maxLines = 3,
-                                    )
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                        KText(
+                                            "Viewing columns ${window.firstCol + 1}–${window.lastCol}, " +
+                                                "row ${visibleRows.coerceAtMost(totalRows)} of $totalRows",
+                                            tokens.type.metaSmall,
+                                            tokens.color.mute,
+                                        )
+                                        KText("${window.cols} wide", tokens.type.metaSmall, tokens.color.mute)
+                                    }
+                                    // Only when there is a hole to own up to. A pane whose ring is intact says
+                                    // nothing here, which is what stops this becoming furniture.
+                                    if (historyNote != null) {
+                                        KText(
+                                            historyNote.replaceFirstChar(Char::uppercase),
+                                            tokens.type.metaSmall,
+                                            tokens.color.working,
+                                            Modifier.named("The scrollback: $historyNote"),
+                                            maxLines = 3,
+                                        )
+                                    }
                                 }
                             }
+
+                            // The continuous one, above the three that are jumps. The presets stay: they
+                            // are the sizes worth landing on exactly, and this is everything between them.
+                            ZoomSlider(presets, zoom, onZoom)
+
+                            // Four rungs, and `Actual` is the one the ladder was missing. It is where
+                            // a pane now opens wherever the window has room for it (`defaultZoom`'s
+                            // floor), so it is the size an operator is reading at before they touch
+                            // anything — and every other control here multiplies, which left no way
+                            // back to it. The operator's words: *"the config / zoom options really hate
+                            // 1.0x … maybe we push towards 1.0x being at least default"*.
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                                Preset("Fit width", presets.fitWidth, zoom, onZoom, Modifier.weight(1f))
+                                Preset("Actual", BASE_ZOOM, zoom, onZoom, Modifier.weight(1f))
+                                Preset("Readable", presets.readable, zoom, onZoom, Modifier.weight(1f))
+                                Preset("Close up", presets.closeUp, zoom, onZoom, Modifier.weight(1f))
+                            }
+
+                            if (sizing != null) {
+                                Divider()
+                                ResizePanel(sizing, onResize, onHoldSize, onMatchView)
+                                Divider()
+                            }
+
+                            LabelText("This pane", tokens.type.sectionLabel, tokens.color.mute)
+                            Toggle(
+                                on = remembered,
+                                title = "Remember for this pane",
+                                detail = "Per device, stored on the node.",
+                                onChange = onRemember,
+                            )
+                            Toggle(
+                                on = followCursor,
+                                title = "Follow the cursor",
+                                detail = "Pans sideways to keep the caret in view.",
+                                onChange = onFollow,
+                            )
+                            Toggle(
+                                on = confirmRisky,
+                                title = "Check destructive commands",
+                                detail = "This pane only, over the setting for this device. Holds Enter on rm -rf, sudo, force-push.",
+                                onChange = onConfirmRisky,
+                            )
+                            KText(
+                                "Zoom is yours alone — the pane stays ${window.cols} columns for everyone. " +
+                                    "Pane size is not: it changes the pane for everybody looking at it.",
+                                tokens.type.captionSmall,
+                                tokens.color.mute,
+                                maxLines = 2,
+                            )
                         }
-
-                        // The continuous one, above the three that are jumps. The presets stay: they
-                        // are the sizes worth landing on exactly, and this is everything between them.
-                        ZoomSlider(presets, zoom, onZoom)
-
-                        // Four rungs, and `Actual` is the one the ladder was missing. It is where
-                        // a pane now opens wherever the window has room for it (`defaultZoom`'s
-                        // floor), so it is the size an operator is reading at before they touch
-                        // anything — and every other control here multiplies, which left no way
-                        // back to it. The operator's words: *"the config / zoom options really hate
-                        // 1.0x … maybe we push towards 1.0x being at least default"*.
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                            Preset("Fit width", presets.fitWidth, zoom, onZoom, Modifier.weight(1f))
-                            Preset("Actual", BASE_ZOOM, zoom, onZoom, Modifier.weight(1f))
-                            Preset("Readable", presets.readable, zoom, onZoom, Modifier.weight(1f))
-                            Preset("Close up", presets.closeUp, zoom, onZoom, Modifier.weight(1f))
-                        }
-
-                        if (sizing != null) {
-                            Divider()
-                            ResizePanel(sizing, onResize, onHoldSize, onMatchView)
-                            Divider()
-                        }
-
-                        Toggle(
-                            on = remembered,
-                            title = "Remember for this pane",
-                            detail = "Per device, stored on the node.",
-                            onChange = onRemember,
-                        )
-                        Toggle(
-                            on = followCursor,
-                            title = "Follow the cursor",
-                            detail = "Pans sideways to keep the caret in view.",
-                            onChange = onFollow,
-                        )
-                        Toggle(
-                            on = confirmRisky,
-                            title = "Check destructive commands",
-                            detail = "This pane only, over the setting for this device. Holds Enter on rm -rf, sudo, force-push.",
-                            onChange = onConfirmRisky,
-                        )
-                        KText(
-                            "Zoom is yours alone — the pane stays ${window.cols} columns for everyone. " +
-                                "Pane size is not: it changes the pane for everybody looking at it.",
-                            tokens.type.captionSmall,
-                            tokens.color.mute,
-                            maxLines = 2,
-                        )
                     }
                 }
             }

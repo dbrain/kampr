@@ -56,8 +56,8 @@ private enum class DockerTab(val title: String) { Overview("Info"), Logs("Logs")
 private val ALIVE = setOf("running", "restarting", "paused")
 
 // One container, from the node that runs it (docs/19). The state and the actions follow the herd
-// entry, which the node pushes on every change; everything else is the last `docker.detail`. No
-// action asks first: whoever can reach this can already run `docker` on the machine.
+// entry, which the node pushes on every change; everything else is the last `docker.detail`. Only
+// Remove asks first, because it is the one action a `docker start` cannot take back.
 @Composable
 fun DockerSheet(
     breakpoint: Breakpoint,
@@ -71,20 +71,42 @@ fun DockerSheet(
 ) {
     val tokens = Kampr.tokens
     var tab by remember(container.id) { mutableStateOf(DockerTab.Overview) }
+    var removing by remember(container.id) { mutableStateOf(false) }
     fun send(action: DockerAction) = onManage(ManageOp.Docker(action, node.id, container.id))
 
     BottomSheet(breakpoint, onDismiss, height = DOCKER_SHEET_HEIGHT, wideWidth = DOCKER_SHEET_WIDTH) {
         DockerHeader(node, container, now, onDismiss)
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                val running = container.state == "running"
                 val alive = container.state in ALIVE
-                if (running) Chip("Shell in", true, { send(DockerAction.Shell) })
-                Chip("Restart", false, { send(DockerAction.Restart) })
-                if (alive) Chip("Stop", false, { send(DockerAction.Stop) }) else Chip("Start", false, { send(DockerAction.Start) })
-                if (alive) Chip("Kill", false, { send(DockerAction.Kill) }, label = "Kill", danger = true)
-                if (!alive) Chip("Remove", false, { send(DockerAction.Remove) }, label = "Remove", danger = true)
-                if (container.child != null) Chip("Release", false, { send(DockerAction.Release) }) else Chip("Adopt", false, { send(DockerAction.Adopt) })
+                if (container.state == "running") CommandButton("Open shell", { send(DockerAction.Shell) }, KamprIcons.shell, primary = true)
+                CommandButton("Restart", { send(DockerAction.Restart) }, KamprIcons.restart)
+                if (alive) {
+                    CommandButton("Stop", { send(DockerAction.Stop) }, KamprIcons.stop)
+                } else {
+                    CommandButton("Start", { send(DockerAction.Start) }, KamprIcons.play)
+                }
+                if (container.child != null) {
+                    CommandButton("Release", { send(DockerAction.Release) }, KamprIcons.unlink, label = "Release: stop running kampr inside it")
+                } else {
+                    CommandButton("Adopt", { send(DockerAction.Adopt) }, KamprIcons.link, label = "Adopt: run kampr inside it")
+                }
+                if (alive) CommandButton("Kill", { send(DockerAction.Kill) }, KamprIcons.bolt, danger = true)
+                if (!alive) CommandButton("Remove…", { removing = true }, KamprIcons.forget, danger = true, label = "Remove this container")
+            }
+            if (removing && container.state !in ALIVE) {
+                Surface(Modifier.fillMaxWidth()) {
+                    Column(Modifier.announce("Remove ${container.name}? Its filesystem and logs are deleted. Confirm or cancel.", urgent = true)) {
+                        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            KText("Remove ${container.name}?", tokens.type.bodyStrong, tokens.color.text)
+                            KText("Its filesystem and logs are deleted; the image stays.", tokens.type.captionSmall, tokens.color.mute, maxLines = 2)
+                        }
+                        SheetActions("Remove container", {
+                            removing = false
+                            send(DockerAction.Remove)
+                        }, onCancel = { removing = false }, danger = true)
+                    }
+                }
             }
             container.adoptError?.let { KText(it, tokens.type.captionSmall, tokens.color.blocked, maxLines = 4) }
             refusal?.let { KText(it, tokens.type.captionSmall, tokens.color.blocked, Modifier.announce(it, urgent = true), maxLines = 3) }
@@ -111,7 +133,7 @@ fun DockerSheet(
 private fun DockerHeader(node: NodeInfo, container: ContainerInfo, now: Double, onDismiss: () -> Unit) {
     val tokens = Kampr.tokens
     Row(
-        Modifier.fillMaxWidth().padding(start = 20.dp, top = 14.dp, end = 12.dp, bottom = 10.dp),
+        Modifier.fillMaxWidth().padding(start = 20.dp, top = 14.dp, end = 8.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -122,7 +144,7 @@ private fun DockerHeader(node: NodeInfo, container: ContainerInfo, now: Double, 
             }
             LabelText(listOf(container.image, node.name, containerPhrase(container, now)).joinToString(" · "), tokens.type.micro, tokens.color.mute)
         }
-        CloseAction("Close ${container.name}", onDismiss, target = LANDSCAPE_TOUCH)
+        CloseAction("Close ${container.name}", onDismiss, target = if (LocalSheetWide.current) LANDSCAPE_TOUCH else TOUCH)
     }
 }
 

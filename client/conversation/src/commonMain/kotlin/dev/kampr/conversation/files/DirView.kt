@@ -21,6 +21,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,7 +62,7 @@ fun DirView(place: FilesPlace.Dir, nav: FilesNav, modifier: Modifier = Modifier)
     val picker = LocalUploadPicker.current
     val scope = rememberCoroutineScope()
     var attempt by remember(place) { mutableIntStateOf(0) }
-    var showHidden by remember { mutableStateOf(false) }
+    var showHidden by rememberSaveable { mutableStateOf(false) }
     var transfer by remember(place) { mutableStateOf<Transfer?>(null) }
     var fresh by remember(place) { mutableStateOf<String?>(null) }
     val load = rememberLoad(place.anchor, lsAttachmentId(place.path), attempt) { got -> decodeListing(got.bytes) }
@@ -134,7 +135,7 @@ private fun Listing(
     val safe = LocalSafeArea.current
     val list = rememberLazyListState()
     val still = LocalReduceMotion.current
-    var query by remember(listing.path) { mutableStateOf("") }
+    var query by rememberSaveable(listing.path) { mutableStateOf("") }
     val entries = remember(listing, query, showHidden) { visibleEntries(listing.entries, query, showHidden) }
     val now = remember(listing) { wallClockMillis() }
     val filtered = listing.entries.size >= FILTER_FROM

@@ -62,10 +62,10 @@ class NewSheetSessionTest {
         val sheet = Sheet()
         setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet.render() } } }
 
-        onNodeWithContentDescription("Named session, its own server")
+        onNodeWithContentDescription("Named session, Its own server")
             .performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
-        onNodeWithContentDescription("name").performTextInput("agents")
+        onNodeWithContentDescription("Name").performTextInput("agents")
         waitForIdle()
         onNodeWithContentDescription("Start session").performClick()
         waitForIdle()
@@ -89,7 +89,7 @@ class NewSheetSessionTest {
         sheet.caps.value = capsOf(SessionInfo("agents", running = true))
         setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet.render() } } }
 
-        onNodeWithContentDescription("Named session, its own server · agents")
+        onNodeWithContentDescription("Named session, Its own server · agents")
             .performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
         onNodeWithContentDescription("Stop the agents session")
@@ -190,10 +190,10 @@ class NewSheetSessionTest {
         val sheet = Sheet()
         setContent { Themed { Box(Modifier.size(420.dp, 900.dp)) { sheet.render() } } }
 
-        onNodeWithContentDescription("Named session, its own server")
+        onNodeWithContentDescription("Named session, Its own server")
             .performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
-        onNodeWithContentDescription("name").performTextInput("agents")
+        onNodeWithContentDescription("Name").performTextInput("agents")
         waitForIdle()
         onNodeWithContentDescription("Start session").performClick()
         waitForIdle()

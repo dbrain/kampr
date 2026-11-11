@@ -195,12 +195,14 @@ fun PrimaryAction(
     vertical: Dp = 15.dp,
     enabled: Boolean = true,
     label: String? = null,
+    danger: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.md)
+    val fill = if (danger) tokens.color.blocked else tokens.color.accent
     Box(
         modifier
-            .background(if (enabled) tokens.color.accent else tokens.color.raise, shape)
+            .background(if (enabled) fill else tokens.color.raise, shape)
             .edge(tokens.card, shape)
             .touchable()
             .action(label ?: text, onClick, shape, enabled = enabled)
@@ -244,6 +246,7 @@ fun Segmented(
     modifier: Modifier = Modifier,
     what: String = "view",
     compact: Boolean = false,
+    icons: List<Icon>? = null,
 ) {
     val tokens = Kampr.tokens
     val outer = RoundedCornerShape(tokens.radii.md)
@@ -275,6 +278,11 @@ fun Segmented(
                     .padding(horizontal = if (compact) 10.dp else 0.dp, vertical = if (compact) 0.dp else 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
+                if (icons != null) {
+                    IconGlyph(icons[index], 16.dp, if (active) tokens.color.text else tokens.color.dim, Modifier.padding(horizontal = 4.dp))
+                    Hint(option)
+                    return@Box
+                }
                 // Every segment reserves the width its label takes *selected*, whichever segment
                 // is. The selected one is W700 and the rest are W500, so without this the control
                 // measures wider whenever the longer label is the chosen one — "Conversation" set
@@ -334,5 +342,6 @@ fun GlyphAction(
         ) {
             IconGlyph(icon, chip * 0.54f, tint)
         }
+        Hint(label)
     }
 }

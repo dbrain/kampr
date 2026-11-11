@@ -83,7 +83,7 @@ internal fun ResizePanel(
         ) {
             LabelText("Pane size", tokens.type.sectionLabel, tokens.color.mute)
             KText(
-                "now ${sizing.cols}×${sizing.rows}",
+                "Now ${sizing.cols}×${sizing.rows}",
                 tokens.type.metaSmall,
                 tokens.color.mute,
             )

@@ -11,6 +11,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.v2.runComposeUiTest
 import dev.kampr.shared.model.ContainerWatch
@@ -195,20 +196,20 @@ class DockerSheetTest {
     }
 
     @Test
-    fun eachActionSendsItsOpWithNoConfirmation() = runComposeUiTest {
+    fun eachActionOfARunningContainerSendsItsOpWithNoConfirmation() = runComposeUiTest {
         val sent = mutableListOf<ManageOp>()
         setContent(sheet(RUNNING, sent))
         for ((label, action) in listOf(
             "Restart" to DockerAction.Restart,
             "Stop" to DockerAction.Stop,
             "Kill" to DockerAction.Kill,
-            "Adopt" to DockerAction.Adopt,
-            "Shell in" to DockerAction.Shell,
+            "Adopt: run kampr inside it" to DockerAction.Adopt,
+            "Open shell" to DockerAction.Shell,
         )) {
             onNodeWithContentDescription(label).performClick()
             assertEquals(op(action), sent.last(), label)
         }
-        for (absent in listOf("Start", "Release", "Remove")) {
+        for (absent in listOf("Start", "Release: stop running kampr inside it", "Remove this container")) {
             assertEquals(0, onAllNodesWithContentDescription(absent).fetchSemanticsNodes().size, absent)
         }
     }
@@ -218,10 +219,12 @@ class DockerSheetTest {
         val sent = mutableListOf<ManageOp>()
         setContent(sheet(RUNNING.copy(state = "exited", exitCode = 1, child = "01JHOST-c-$CID"), sent))
         onNodeWithContentDescription("Start").performClick()
-        onNodeWithContentDescription("Release").performClick()
-        onNodeWithContentDescription("Remove").performClick()
+        onNodeWithContentDescription("Release: stop running kampr inside it").performClick()
+        onNodeWithContentDescription("Remove this container").performClick()
+        assertEquals(listOf<ManageOp>(op(DockerAction.Start), op(DockerAction.Release)), sent, "removed without asking")
+        onNodeWithText("Remove container").performClick()
         assertEquals(listOf<ManageOp>(op(DockerAction.Start), op(DockerAction.Release), op(DockerAction.Remove)), sent)
-        for (absent in listOf("Stop", "Shell in", "Kill")) {
+        for (absent in listOf("Stop", "Open shell", "Kill")) {
             assertEquals(0, onAllNodesWithContentDescription(absent).fetchSemanticsNodes().size, absent)
         }
     }

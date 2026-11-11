@@ -215,11 +215,11 @@ class MuffitPaneTest {
             }
         }
         waitForIdle()
-        assertEquals(listOf("Open", "Close"), texts())
-        onNodeWithText("Close").performClick()
+        assertEquals(listOf("Open", "Close…"), texts())
+        onNodeWithText("Close…").performClick()
         waitForIdle()
         assertTrue(sent.isEmpty(), "closed without asking: $sent")
-        onNodeWithText("close").performClick()
+        onNodeWithText("Close session").performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeClose(MUFFIT_ID)), sent)
     }
@@ -245,13 +245,13 @@ class MuffitPaneTest {
         }
         waitForIdle()
         val shown = texts()
-        for (absent in listOf("focus at the desk", "fill the tab", "remember the splits", "find", "rename", "tab", "workspace")) {
+        for (absent in listOf("Focus at the desk…", "Fill the tab", "Remember the splits", "Find in scrollback", "Rename session…", "tab", "workspace")) {
             assertFalse(absent in shown, "a muffit session's sheet offers \"$absent\": $shown")
         }
         assertEquals(0, count(TOOLS), "a muffit session's sheet offers the terminal's tools")
-        onNodeWithText("close").performClick()
+        onNodeWithText("Close session…").performClick()
         waitForIdle()
-        onAllNodesWithText("close")[1].performClick()
+        onNodeWithText("Close session").performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeClose(MUFFIT_ID)), sent)
     }

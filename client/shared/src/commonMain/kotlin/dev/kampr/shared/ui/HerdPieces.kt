@@ -460,17 +460,21 @@ fun Badge(box: Dp, glyph: Dp, icon: Icon, tint: Color, label: String? = null) {
     }
 }
 
+// Filled for what the agent is doing; outlined with a glyph for what is wrong with the picture or
+// the keyboard, so "Quiet" never reads as a second kind of "Working" when the two share a tone.
 @Composable
-fun StatusBadge(text: String, tone: Color, background: Color, label: String? = null) {
+fun StatusBadge(text: String, tone: Color, background: Color, label: String? = null, icon: Icon? = null, outlined: Boolean = false) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.pill)
-    Box(
+    Row(
         Modifier
             .let { if (label != null) it.named(label) else it }
-            .background(background, shape)
-            .edge(tokens.card, shape)
-            .padding(horizontal = 11.dp, vertical = 5.dp),
+            .let { if (outlined) it.border(1.dp, tone.copy(alpha = 0.55f), shape) else it.background(background, shape).edge(tokens.card, shape) }
+            .padding(start = if (icon != null) 8.dp else 11.dp, end = 11.dp, top = 5.dp, bottom = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(5.dp),
     ) {
+        if (icon != null) IconGlyph(icon, 11.dp, tone)
         KText(text, tokens.type.badge, tone)
     }
 }

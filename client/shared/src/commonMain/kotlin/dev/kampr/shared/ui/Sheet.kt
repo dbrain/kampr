@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
@@ -44,7 +45,7 @@ private val SHEET_MAX_WIDTH = 420.dp
 
 // A 844x390 landscape viewport is wide and short, so the sheet spends the width it has rather
 // than scrolling a phone-shaped column through a letterbox.
-private val SHEET_WIDE_WIDTH = 720.dp
+internal val SHEET_WIDE_WIDTH = 720.dp
 private const val SCRIM_ALPHA = 0.72f
 
 // The requester is refused until the sheet is placed and the focus owner is live, and how many
@@ -129,22 +130,24 @@ fun BottomSheet(
             val shape = RoundedCornerShape(tokens.radii.lg)
             // Mounted beside the screen body rather than inside it, so the sheet asks for its own
             // selection. The scrim stays outside it and keeps its tap-to-dismiss.
-            SelectionContainer {
-                Column(
-                    Modifier
-                        .absolutePadding(
-                            left = safe.left,
-                            top = safe.top,
-                            right = safe.right,
-                            bottom = safe.bottom,
-                        )
-                        .width(width)
-                        .let { if (height == null) it.heightIn(max = tall) else it.height(if (height < tall) height else tall) }
-                        .background(tokens.color.bar, shape)
-                        .modal(onDismiss)
-                        .edge(tokens.chrome, shape),
-                    content = content,
-                )
+            CompositionLocalProvider(LocalSheetWide provides (breakpoint != Breakpoint.Portrait)) {
+                SelectionContainer {
+                    Column(
+                        Modifier
+                            .absolutePadding(
+                                left = safe.left,
+                                top = safe.top,
+                                right = safe.right,
+                                bottom = safe.bottom,
+                            )
+                            .width(width)
+                            .let { if (height == null) it.heightIn(max = tall) else it.height(if (height < tall) height else tall) }
+                            .background(tokens.color.bar, shape)
+                            .modal(onDismiss)
+                            .edge(tokens.chrome, shape),
+                        content = content,
+                    )
+                }
             }
         }
     }
@@ -160,8 +163,9 @@ private fun Modifier.escapes(onDismiss: () -> Unit): Modifier = onKeyEvent { eve
     }
 }
 
-// A 390 dp-tall landscape viewport cannot afford a 26 px title and two rows of chrome, so the
-// header collapses onto one line rather than eating a third of the sheet.
+// One title size for every sheet, so a phone's sheet and a desk's dialog read as the same thing.
+// A 390 dp-tall landscape viewport cannot afford two rows of chrome, so compact puts the subtitle
+// beside the title rather than under it.
 @Composable
 fun SheetHeader(
     title: String,
@@ -169,44 +173,39 @@ fun SheetHeader(
     onBack: (() -> Unit)?,
     onClose: () -> Unit,
     compact: Boolean = false,
+    // A sheet titled with a pane's name would otherwise offer "Close <pane>" twice: the dismiss
+    // and the destructive command in its list.
+    dismiss: String = "Close $title",
 ) {
     val tokens = Kampr.tokens
-    Column {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = 20.dp,
-                    top = if (compact) 12.dp else 18.dp,
-                    end = 20.dp,
-                    bottom = if (compact) 10.dp else 12.dp,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            if (onBack != null) {
-                BackAction("Back", onBack, target = if (compact) LANDSCAPE_TOUCH else TOUCH)
+    val target = if (compact) LANDSCAPE_TOUCH else TOUCH
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(start = if (onBack == null) 20.dp else 8.dp, top = if (compact) 10.dp else 14.dp, end = 8.dp, bottom = if (compact) 6.dp else 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (onBack != null) BackAction("Back", onBack, target = target)
+        if (compact) {
+            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                KText(title, tokens.type.paneTitle, tokens.color.text, Modifier.weight(1f, fill = false).asHeading())
+                if (subtitle != null) LabelText(subtitle, tokens.type.micro, tokens.color.mute, Modifier.weight(1f, fill = false))
             }
-            KText(title, if (compact) tokens.type.paneTitle else tokens.type.screenTitle, tokens.color.text)
-            if (compact && subtitle != null) {
-                LabelText(subtitle, tokens.type.micro, tokens.color.mute, Modifier.weight(1f))
-            } else {
-                Box(Modifier.weight(1f))
-            }
-            CloseAction("Close $title", onClose, target = if (compact) LANDSCAPE_TOUCH else TOUCH)
-        }
-        if (!compact && subtitle != null) {
-            Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 9.dp)) {
-                LabelText(subtitle, tokens.type.micro, tokens.color.mute)
+        } else {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                KText(title, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading(), maxLines = 2)
+                if (subtitle != null) LabelText(subtitle, tokens.type.micro, tokens.color.mute)
             }
         }
+        CloseAction(dismiss, onClose, target = target)
     }
 }
 
 @Composable
 fun SheetSection(label: String, compact: Boolean = false) {
     val tokens = Kampr.tokens
-    Box(Modifier.padding(start = 20.dp, top = if (compact) 12.dp else 20.dp, end = 20.dp, bottom = 9.dp)) {
+    Box(Modifier.padding(start = 20.dp, top = if (compact) 10.dp else 14.dp, end = 20.dp, bottom = 6.dp)) {
         LabelText(label, tokens.type.micro, tokens.color.mute)
     }
 }

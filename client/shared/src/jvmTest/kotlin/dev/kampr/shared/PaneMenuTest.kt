@@ -47,7 +47,7 @@ private val SIBLING = LISTED.copy(id = "01JNODE/w3:p3", label = "tests")
 // Everything the in-session sheet says about the machine's own screen. None of it may appear on a
 // surface where the pane is a row: the operator cannot see the desk it reshapes, and half of it
 // (#265's zoom, #396's focus) changes what somebody else is looking at.
-private val DESK = listOf("focus at the desk", "fill the tab", "remember the splits", "put the splits back")
+private val DESK = listOf("at the desk", "Focus this", "Fill the tab", "fill its tab", "Remember the splits", "Put the splits back")
 
 @OptIn(ExperimentalTestApi::class)
 @Composable
@@ -94,7 +94,7 @@ class PaneMenuTest {
         setContent { Menu(mutableListOf(), Breakpoint.Desktop, MenuAnchor(120.dp, 120.dp)) }
         waitForIdle()
         assertEquals(
-            listOf("Open", "Rename…", "Close"),
+            listOf("Open", "Rename…", "Close…"),
             onAllNodesWithText("", substring = true)
                 .fetchSemanticsNodes()
                 .mapNotNull { node ->
@@ -147,9 +147,9 @@ class PaneMenuTest {
     fun closingATabNamesItAndCountsThePanesItWillTakeWithIt() = runComposeUiTest {
         setContent { InSession(mutableListOf()) }
         waitForIdle()
-        onAllNodesWithText("close")[1].performClick()
+        onNodeWithText("Close tab…").performClick()
         waitForIdle()
-        onNodeWithText("Close tab?").assertExists("the tab's confirmation does not name the kind")
+        onNodeWithText("Close this tab?").assertExists("the tab's confirmation does not name the kind")
         onNodeWithText("1 — 2 panes").assertExists("the tab's confirmation does not count its panes")
     }
 
@@ -158,17 +158,17 @@ class PaneMenuTest {
         val sent = mutableListOf<ManageOp>()
         setContent { Menu(sent) }
         waitForIdle()
-        onNodeWithText("Close").performClick()
+        onNodeWithText("Close…").performClick()
         waitForIdle()
         assertTrue(sent.isEmpty(), "the list menu closed the pane without asking: $sent")
         assertEquals(
-            listOf("Close pane? ${paneTitle(LISTED)}. Confirm or cancel."),
-            onAllNodesWithContentDescription("Close pane?", substring = true)
+            listOf("Close this pane? ${paneTitle(LISTED)} Whatever is running in it is ended. Confirm or cancel."),
+            onAllNodesWithContentDescription("Close this pane?", substring = true)
                 .fetchSemanticsNodes()
                 .map { it.config[SemanticsProperties.ContentDescription].first() },
             "the list menu's confirmation does not name the kind and the pane the way herdr's does",
         )
-        onNodeWithText("close").performClick()
+        onNodeWithText("Close pane").performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.Close(LISTED.id)), sent, "the confirmed close sent $sent")
     }
@@ -177,7 +177,7 @@ class PaneMenuTest {
     fun theInSessionSheetStillCarriesEveryDeskControl() = runComposeUiTest {
         setContent { InSession(mutableListOf()) }
         waitForIdle()
-        for (control in listOf("focus at the desk", "fill the tab", "remember the splits")) {
+        for (control in listOf("Focus at the desk…", "Fill the tab", "Remember the splits")) {
             assertTrue(
                 onAllNodesWithText(control).fetchSemanticsNodes().isNotEmpty(),
                 "the actions sheet lost \"$control\"",
@@ -192,11 +192,11 @@ class PaneMenuTest {
         val sent = mutableListOf<ManageOp>()
         setContent { InSession(sent) }
         waitForIdle()
-        onAllNodesWithText("focus at the desk").onFirst().performClick()
+        onAllNodesWithText("Focus at the desk…").onFirst().performClick()
         waitForIdle()
-        onNodeWithText("focus").performClick()
+        onNodeWithText("Focus pane").performClick()
         waitForIdle()
-        onNodeWithText("fill the tab").performClick()
+        onNodeWithText("Fill the tab").performClick()
         waitForIdle()
         assertEquals(
             listOf<ManageOp>(ManageOp.Focus(LISTED.id), ManageOp.PaneZoom(LISTED.id)),
@@ -212,7 +212,7 @@ class PaneMenuTest {
         val sent = mutableListOf<ManageOp>()
         setContent { InSession(sent) }
         waitForIdle()
-        onAllNodesWithText("focus at the desk").onFirst().performClick()
+        onAllNodesWithText("Focus at the desk…").onFirst().performClick()
         waitForIdle()
         assertTrue(sent.isEmpty(), "the focus chip sent $sent before it said what it costs")
         assertTrue(

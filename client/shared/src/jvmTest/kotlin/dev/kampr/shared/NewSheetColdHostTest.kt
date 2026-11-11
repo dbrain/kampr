@@ -105,7 +105,7 @@ class NewSheetColdHostTest {
 
         // The stopped herdr says what is actually true of it, and what making something will do —
         // `detail` there is a socket path and an errno, which answers a question nobody asked.
-        onNodeWithText("herdr is not running here — making something starts it", useUnmergedTree = true)
+        onNodeWithText("Herdr is not running here — making something starts it", useUnmergedTree = true)
             .assertExists()
         onNodeWithContentDescription("Create on coldbox").performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
@@ -152,7 +152,7 @@ class NewSheetColdHostTest {
         // them say it and the machine with no node behind it does not.
         assertEquals(
             2,
-            onAllNodesWithText("herdr is not running here — making something starts it", useUnmergedTree = true)
+            onAllNodesWithText("Herdr is not running here — making something starts it", useUnmergedTree = true)
                 .fetchSemanticsNodes().size,
             "a stopped herdr reads differently depending on whose machine it is on",
         )

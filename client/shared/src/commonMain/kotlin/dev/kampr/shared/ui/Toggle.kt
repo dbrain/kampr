@@ -56,8 +56,8 @@ fun Toggle(on: Boolean, title: String, detail: String, onChange: (Boolean) -> Un
             )
         }
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            KText(title, tokens.type.cardTitle, tokens.color.text)
-            KText(detail, tokens.type.captionSmall, tokens.color.mute)
+            KText(title, tokens.type.cardTitle, tokens.color.text, maxLines = 2)
+            KText(detail, tokens.type.captionSmall, tokens.color.mute, maxLines = 4)
         }
     }
 }

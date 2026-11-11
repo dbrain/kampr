@@ -123,7 +123,7 @@ class HerdrOffTest {
         sheet(WITH_HERDR, sent = sent)
         waitForIdle()
         onNodeWithContentDescription("Kampr session,", substring = true).assertExists()
-        assertTrue(onAllNodesWithContentDescription("Workspace, a herdr workspace", substring = true).fetchSemanticsNodes().isEmpty())
+        assertTrue(onAllNodesWithContentDescription("Workspace, A herdr workspace", substring = true).fetchSemanticsNodes().isEmpty())
         onNodeWithContentDescription("Herdr options").assertExists()
         onNodeWithContentDescription(START).performClick()
         waitForIdle()

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -82,12 +83,23 @@ internal fun RunSheet(
         naming = TextFieldValue(command.label.orEmpty())
     }
 
+    val machines = "$hosts machine${if (hosts == 1) "" else "s"}"
     BottomSheet(breakpoint, onCancel) {
+        SheetHeader(
+            title = "Run a command",
+            subtitle = "On $machines",
+            onBack = null,
+            onClose = onCancel,
+            compact = breakpoint == Breakpoint.Landscape,
+        )
         Column(
-            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(20.dp),
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            KText("Run on $hosts machine${if (hosts == 1) "" else "s"}", tokens.type.paneTitle, tokens.color.text)
             KField(
                 hint = "pacman -Syu",
                 value = entry,
@@ -105,11 +117,7 @@ internal fun RunSheet(
                         .padding(horizontal = 12.dp, vertical = 9.dp),
                     verticalArrangement = Arrangement.spacedBy(3.dp),
                 ) {
-                    KText(
-                        "Will run on $hosts machine${if (hosts == 1) "" else "s"}",
-                        tokens.type.caption,
-                        tokens.color.mute,
-                    )
+                    KText("Will run on $machines", tokens.type.caption, tokens.color.mute)
                     KText(line, tokens.type.body, tokens.color.accent, maxLines = 4)
                 }
             }
@@ -127,11 +135,30 @@ internal fun RunSheet(
                 maxLines = 4,
             )
             if (ready) {
-                KField(
-                    hint = "Name it (optional)",
-                    value = naming,
-                    onChange = { naming = it },
-                )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    KField(
+                        hint = "Name it (optional)",
+                        value = naming,
+                        modifier = Modifier.weight(1f),
+                        onChange = { naming = it },
+                    )
+                    QuietAction(
+                        "Save",
+                        {
+                            // One element, and that element is the whole line: an entry is rendered by
+                            // joining `args` with spaces, here and on every older client still on a
+                            // phone, so this reads back byte for byte as it was typed.
+                            onBook(ManageOp.FleetSave(args = listOf(line), label = naming.text.trim().ifEmpty { null }))
+                        },
+                        Modifier.defaultMinSize(minWidth = 88.dp),
+                        style = tokens.type.button,
+                        label = "Save $line",
+                    )
+                }
             }
             // The node declines to write a secret-shaped command down by itself and allows a
             // deliberate save; this is where the operator finds out which of the two is happening.
@@ -145,18 +172,6 @@ internal fun RunSheet(
                     tokens.color.blocked,
                     maxLines = 4,
                 )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                FleetChip("Cancel", isDefault = false, onClick = onCancel)
-                if (ready) {
-                    FleetChip("Save", isDefault = false) {
-                        // One element, and that element is the whole line: an entry is rendered by
-                        // joining `args` with spaces, here and on every older client still on a
-                        // phone, so this reads back byte for byte as it was typed.
-                        onBook(ManageOp.FleetSave(args = listOf(line), label = naming.text.trim().ifEmpty { null }))
-                    }
-                    FleetChip("Run everywhere", isDefault = true) { onRun(line) }
-                }
             }
             BookSection(
                 title = "Saved",
@@ -177,6 +192,12 @@ internal fun RunSheet(
                 onBook = onBook,
             )
         }
+        SheetActions(
+            confirm = "Run on $machines",
+            onConfirm = { if (ready) onRun(line) },
+            onCancel = onCancel,
+            enabled = ready,
+        )
     }
 }
 
@@ -221,7 +242,7 @@ private fun BookRow(
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Column(
             modifier = Modifier
@@ -235,22 +256,17 @@ private fun BookRow(
             command.label?.let { KText(it, tokens.type.bodyStrong, tokens.color.text, maxLines = 1) }
             KText(command.command, tokens.type.captionSmall, tokens.color.accent, maxLines = 2)
         }
+        val target = if (LocalSheetWide.current) LANDSCAPE_TOUCH else TOUCH
         if (command.label == null) {
-            KText(
-                "Keep",
-                tokens.type.captionSmall,
-                tokens.color.mute,
-                Modifier.action("Keep ${command.command}", { onBook(ManageOp.FleetSave(entry = command.id)) }),
-            )
+            GlyphAction(KamprIcons.keep, "Keep ${command.command}", tokens.color.dim, target) {
+                onBook(ManageOp.FleetSave(entry = command.id))
+            }
         }
         // The rule that keeps credentials out of the automatic half is a reduction rather than a
         // filter, so this is the part that actually holds: anything written down can be removed.
-        KText(
-            "Forget",
-            tokens.type.captionSmall,
-            tokens.color.mute,
-            Modifier.action("Forget ${command.command}", { onBook(ManageOp.FleetDrop(command.id)) }),
-        )
+        GlyphAction(KamprIcons.forget, "Forget ${command.command}", tokens.color.dim, target) {
+            onBook(ManageOp.FleetDrop(command.id))
+        }
         RunNow(command, hosts) { onRun(command) }
     }
 }

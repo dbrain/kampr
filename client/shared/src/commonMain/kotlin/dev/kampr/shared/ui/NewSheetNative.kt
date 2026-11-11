@@ -24,15 +24,15 @@ internal fun NativeSessionFields(
     beside: String?,
 ) {
     val tokens = Kampr.tokens
-    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
-        LabelledField("command", "the login shell", command, onChange = onCommand)
-        LabelledField("directory", "/home/dbrain/dev/kampr", cwd, onChange = onCwd)
-        LabelledField("label", "build", label, onChange = onLabel)
+    Column(Modifier.padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(11.dp)) {
+        LabelledField("Command", "the login shell", command, onChange = onCommand)
+        LabelledField("Directory", "/home/dbrain/dev/kampr", cwd, onChange = onCwd)
+        LabelledField("Label", "build", label, onChange = onLabel)
         if (desk != null) {
             Toggle(
                 desk,
                 "Also show on the desk",
-                beside?.let { "in a herdr pane beside $it" } ?: "in a herdr pane on that machine",
+                beside?.let { "In a herdr pane beside $it" } ?: "In a herdr pane on that machine",
                 onDesk,
             )
         }

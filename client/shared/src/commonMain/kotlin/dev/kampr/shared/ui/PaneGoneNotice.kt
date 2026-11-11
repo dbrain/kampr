@@ -34,13 +34,15 @@ private val WORDS = mapOf(
     ),
 )
 
+internal fun goneWord(gone: PaneGone): String = WORDS.getValue(gone).badge
+
 private class Gone(val badge: String, val spokenBadge: String, val sentence: String)
 
 @Composable
 internal fun GoneBadge(gone: PaneGone) {
     val tokens = Kampr.tokens
     val words = WORDS.getValue(gone)
-    StatusBadge(words.badge, tokens.color.blocked, tokens.color.blockedBg, label = words.spokenBadge)
+    StatusBadge(words.badge, tokens.color.blocked, tokens.color.blockedBg, label = words.spokenBadge, icon = KamprIcons.warning, outlined = true)
 }
 
 // A band across the chrome rather than a card over the grid. The grid below is the last true thing

@@ -69,9 +69,9 @@ class NativePaneActionsTest {
     @Test
     fun theListMenuOffersTheSessionsOwnVerbsInPlaceOfHerdrsClose() = runComposeUiTest {
         val cases = listOf(
-            Triple(SESSION, true, listOf("Open", "Rename…", "Show on desk", "Close")),
-            Triple(SESSION, false, listOf("Open", "Rename…", "Close")),
-            Triple(ENDED, true, listOf("Open", "Rename…", "Forget")),
+            Triple(SESSION, true, listOf("Open", "Rename…", "Show on desk", "Close…")),
+            Triple(SESSION, false, listOf("Open", "Rename…", "Close…")),
+            Triple(ENDED, true, listOf("Open", "Rename…", "Forget…")),
         )
         var current by mutableStateOf(cases.first())
         setContent {
@@ -96,10 +96,10 @@ class NativePaneActionsTest {
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeDesk(SESSION.id)), sent)
 
-        onNodeWithText("Close").performClick()
+        onNodeWithText("Close…").performClick()
         waitForIdle()
         assertEquals(1, sent.size, "the session was closed without asking: $sent")
-        onNodeWithText("close").performClick()
+        onNodeWithText("Close session").performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeDesk(SESSION.id), ManageOp.NativeClose(SESSION.id)), sent)
     }
@@ -108,10 +108,10 @@ class NativePaneActionsTest {
     fun anEndedSessionIsForgottenOnlyOnceConfirmed() = runComposeUiTest {
         val sent = mutableListOf<ManageOp>()
         menu(ENDED, true, sent)
-        onNodeWithText("Forget").performClick()
+        onNodeWithText("Forget…").performClick()
         waitForIdle()
         assertTrue(sent.isEmpty(), "forgot without asking: $sent")
-        onNodeWithText("forget").performClick()
+        onNodeWithText("Forget session").performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeForget(ENDED.id)), sent)
     }
@@ -122,15 +122,15 @@ class NativePaneActionsTest {
         sheet(SESSION, true, sent)
         waitForIdle()
         val shown = texts()
-        for (absent in listOf("focus at the desk", "fill the tab", "remember the splits", "tab", "workspace")) {
+        for (absent in listOf("Focus at the desk…", "Fill the tab", "Remember the splits", "tab", "workspace")) {
             assertTrue(absent !in shown, "a kept session's sheet offers herdr's \"$absent\": $shown")
         }
         assertTrue("not on desk" !in shown.joinToString("\n"), "the sheet still labels a session off the desk: $shown")
-        onNodeWithText("show on desk").performClick()
+        onNodeWithText("Show on desk").performClick()
         waitForIdle()
-        onNodeWithText("close").performClick()
+        onNodeWithText("Close session…").performClick()
         waitForIdle()
-        onAllNodesWithText("close")[1].performClick()
+        onNodeWithText("Close session").performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeDesk(SESSION.id), ManageOp.NativeClose(SESSION.id)), sent)
     }
@@ -141,10 +141,10 @@ class NativePaneActionsTest {
         sheet(ENDED, true, sent)
         waitForIdle()
         onNodeWithText("killed by signal 9").assertExists()
-        onNodeWithText("show on desk").assertDoesNotExist()
-        onNodeWithText("forget").performClick()
+        onNodeWithText("Show on desk").assertDoesNotExist()
+        onNodeWithText("Forget session…").performClick()
         waitForIdle()
-        onAllNodesWithText("forget")[1].performClick()
+        onNodeWithText("Forget session").performClick()
         waitForIdle()
         assertEquals(listOf<ManageOp>(ManageOp.NativeForget(ENDED.id)), sent)
     }

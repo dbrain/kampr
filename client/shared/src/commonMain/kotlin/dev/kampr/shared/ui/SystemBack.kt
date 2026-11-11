@@ -16,7 +16,7 @@ internal fun backTarget(screen: Screen, breakpoint: Breakpoint, paired: Boolean)
     // The wide layout opens the herd's first pane by itself, so a back that landed on the herd
     // would be undone in the frame after it — and the sidebar means the pane was never covering
     // anything to get back to.
-    is Screen.Pane -> Screen.Herd.takeIf { breakpoint != Breakpoint.Desktop }
+    is Screen.Pane -> screen.from.takeIf { breakpoint != Breakpoint.Desktop }
 
     Screen.Mosaic, Screen.Fleet -> Screen.Herd
 
@@ -26,6 +26,10 @@ internal fun backTarget(screen: Screen, breakpoint: Breakpoint, paired: Boolean)
 
     Screen.Herd -> null
 }
+
+// The screens a back walks up through from this one, this one first. Phone-shaped and paired on
+// purpose: it says which screens sit under which, not where this window's back leads today.
+internal fun lineage(screen: Screen): List<Screen> = generateSequence(screen) { backTarget(it, Breakpoint.Portrait, paired = true) }.toList()
 
 // A sheet floats over whatever screen is showing and everything it acts on is behind it, so it is
 // what back closes first — the screen underneath has not been left yet. An open file floats over

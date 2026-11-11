@@ -2,7 +2,6 @@ package dev.kampr.conversation
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -26,6 +25,7 @@ import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Mark
 import dev.kampr.shared.ui.MarkShape
+import dev.kampr.shared.ui.PrimaryAction
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.edge
@@ -186,28 +186,16 @@ fun PendingStrip(
         // commits one on this harness. Without it the operator ticks boxes into a dialog that
         // never closes, which is worse than no affordance at all.
         if (pending.multi && onSubmit != null) {
-            val chip = RoundedCornerShape(tokens.radii.sm)
             val ticked = pending.options.count { it.chosen }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(if (answering.enabled) tokens.color.accent else tokens.color.raise, chip)
-                    .touchable()
-                    .action(
-                        if (ticked == 1) "Send 1 answer" else "Send $ticked answers",
-                        onSubmit,
-                        chip,
-                        enabled = answering.enabled && ticked > 0,
-                    )
-                    .padding(horizontal = 12.dp, vertical = 9.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                KText(
-                    if (ticked == 0) "Tick what you want" else "Send $ticked",
-                    tokens.type.buttonSmall,
-                    if (answering.enabled && ticked > 0) tokens.color.onAccent else tokens.color.mute,
-                )
-            }
+            PrimaryAction(
+                if (ticked == 0) "Tick what you want" else "Send $ticked answer${if (ticked == 1) "" else "s"}",
+                onSubmit,
+                Modifier.fillMaxWidth(),
+                tokens.type.buttonSmall,
+                9.dp,
+                enabled = answering.enabled && ticked > 0,
+                label = if (ticked == 1) "Send 1 answer" else "Send $ticked answers",
+            )
         }
 
         KText(

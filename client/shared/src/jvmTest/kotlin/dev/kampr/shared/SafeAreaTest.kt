@@ -64,7 +64,7 @@ private fun PaneScreen(landscape: Boolean) = PaneScreenMobile(
 
 // The controls that sit at the very top of the pane screen. Anything further down the header
 // clears a 32 dp bar whatever the code does, so asserting on it would pass either way.
-private val TOPMOST = listOf("Back to the herd", "Pane actions")
+private val TOPMOST = listOf("Back to the herd", "Show pane actions")
 
 @OptIn(ExperimentalTestApi::class)
 private fun ComposeUiTest.topOf(labels: List<String>): Dp = labels

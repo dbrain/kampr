@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -45,6 +46,7 @@ fun ConfirmSheet(
     onEdit: () -> Unit,
     onMute: () -> Unit,
     modifier: Modifier = Modifier,
+    wide: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     val heading = if (held.paste) "Pasted command" else "Before this runs"
@@ -106,23 +108,6 @@ fun ConfirmSheet(
                     }
                 }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    QuietAction(
-                        "Back to edit  n",
-                        onEdit,
-                        Modifier.weight(1f),
-                        vertical = 13.dp,
-                        label = "Back to edit — do not run it",
-                    )
-                    PrimaryAction(
-                        "Run it  y",
-                        onRun,
-                        Modifier.weight(1f),
-                        vertical = 13.dp,
-                        label = "Run ${held.command}",
-                    )
-                }
-
                 val shape = RoundedCornerShape(tokens.radii.md)
                 Row(
                     Modifier
@@ -140,11 +125,35 @@ fun ConfirmSheet(
 
                 KText(
                     "A mistap guard, not a lock — anyone who can reach this pane can already run " +
-                        "anything. Turn it back on from the zoom sheet.",
+                        "anything. Turn it back on from the zoom sheet." +
+                        if (wide) " Y runs it, N goes back to edit." else "",
                     tokens.type.captionSmall,
                     tokens.color.mute,
-                    maxLines = 2,
+                    maxLines = 3,
                 )
+
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, if (wide) Alignment.End else Alignment.Start),
+                ) {
+                    val sized = if (wide) Modifier.defaultMinSize(minWidth = 112.dp) else Modifier.weight(1f)
+                    QuietAction(
+                        "Back to edit",
+                        onEdit,
+                        sized,
+                        style = tokens.type.button,
+                        vertical = 13.dp,
+                        label = "Back to edit — do not run it",
+                    )
+                    PrimaryAction(
+                        "Run it",
+                        onRun,
+                        sized,
+                        vertical = 13.dp,
+                        label = "Run ${held.command}",
+                        danger = true,
+                    )
+                }
             }
         }
     }

@@ -88,7 +88,7 @@ class FleetBookTest {
         onNodeWithContentDescription("Put kampr update in the box").performClick()
         assertNull(board.ran, "a saved command fanned out across the herd on one press")
 
-        onNodeWithContentDescription("Run everywhere").performClick()
+        onNodeWithContentDescription("Run on 2 machines").performClick()
         assertEquals("kampr update", board.ran)
     }
 
@@ -110,7 +110,7 @@ class FleetBookTest {
                 .isNotEmpty(),
             "the line about to reach every machine in the herd was not on screen",
         )
-        onNodeWithContentDescription("Run everywhere").performClick()
+        onNodeWithContentDescription("Run on 2 machines").performClick()
         assertEquals("""find . -name "*.rs" | wc -l""", board.ran)
     }
 
@@ -195,7 +195,7 @@ class FleetBookTest {
         onNodeWithContentDescription("Put kampr update in the run box").performClick()
         waitForIdle()
         assertNull(board.ran, "a quick link fanned out across the herd on one press")
-        onNodeWithContentDescription("Run everywhere").performClick()
+        onNodeWithContentDescription("Run on 2 machines").performClick()
         waitForIdle()
         assertEquals("kampr update", board.ran, "the sheet did not open with the line in the box")
     }

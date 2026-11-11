@@ -33,6 +33,7 @@ import dev.kampr.shared.ui.FilesNav
 import dev.kampr.shared.ui.FilesPlace
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.LocalPlaceMemory
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.announce
@@ -110,13 +111,19 @@ private fun FileScreen(source: Source, nav: FilesNav, modifier: Modifier) {
     val held = LocalHeldBytes.current
     val voices = LocalVoices.current
     val films = LocalFilms.current
-    var fetch by remember(source.id) { mutableStateOf<Fetch>(Fetch.Asking) }
+    val memory = LocalPlaceMemory.current
+    val kept = "fetch ${source.anchor} ${source.id}"
+    var fetch by remember(source.id) { mutableStateOf<Fetch>(memory?.recall<Fetch.Got>(kept) ?: Fetch.Asking) }
+    // A file uncovered again keeps the stream it was reading, and with it how far it had read:
+    // a fresh one would start from its first slice, under a scroll position deeper than that.
     LaunchedEffect(source.anchor, source.id) {
+        if (fetch is Fetch.Got) return@LaunchedEffect
         fetch = when (val got = first(io, held, source)) {
             is AttachmentSlice.Ok -> {
                 val more: suspend (Long, Long) -> AttachmentSlice =
                     if (source.record) NOTHING_MORE else { start, end -> io.range(source.anchor, source.id, start, end) }
                 Fetch.Got(withContext(Dispatchers.Default) { openedOf(source.name, got, more, { voices.canPlay(it) || films.canPlay(it) }) { rest(io, source, got) } })
+                    .also { memory?.keep(kept, it) }
             }
 
             is AttachmentSlice.Failed -> {

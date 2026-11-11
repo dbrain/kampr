@@ -78,6 +78,7 @@ fun HerdRail(
     onFold: OnFold = NO_FOLD,
 ) {
     val tokens = Kampr.tokens
+    val settings = "Settings — $deviceName, $deviceDetail"
     Column(
         modifier
             .width(RAIL_WIDTH)
@@ -125,10 +126,11 @@ fun HerdRail(
                 .edgeTop()
                 .padding(bottom = LocalSafeArea.current.bottom)
                 .height(TILE)
-                .action("Settings — $deviceName, $deviceDetail", onSettings),
+                .action(settings, onSettings),
             contentAlignment = Alignment.Center,
         ) {
             IconGlyph(KamprIcons.gear, 15.dp, tokens.color.mute)
+            Hint(settings)
         }
     }
 }
@@ -176,6 +178,7 @@ private fun RailContainer(nodeId: String, container: ContainerInfo, now: Double)
             KText(containerSigil(container.name), tokens.type.pill, tokens.color.dim, maxLines = 1)
             Mark(containerColor(container), containerShape(container), 7.dp)
         }
+        if (manage.enabled) Hint(spoken)
     }
 }
 
@@ -208,6 +211,7 @@ private fun RailPane(pane: PaneInfo, now: Double, active: Boolean, onClick: () -
     val quiet = status == AgentStatus.Idle || status == AgentStatus.Unknown
     val shape = RoundedCornerShape(tokens.radii.sm)
     val manage = LocalManage.current
+    val spoken = "Open ${paneSpoken(pane, now)}"
     Box(
         Modifier
             .padding(horizontal = 5.dp)
@@ -216,7 +220,7 @@ private fun RailPane(pane: PaneInfo, now: Double, active: Boolean, onClick: () -
             .let { if (active) it.background(tokens.color.raise, shape) else it }
             .paneMenu(pane.id)
             .action(
-                "Open ${paneSpoken(pane, now)}",
+                spoken,
                 onClick,
                 shape,
                 role = Role.Tab,
@@ -239,5 +243,6 @@ private fun RailPane(pane: PaneInfo, now: Double, active: Boolean, onClick: () -
                 StatusMark(status, 7.dp)
             }
         }
+        Hint(spoken, byTouch = !manage.enabled)
     }
 }

@@ -8,6 +8,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import dev.kampr.shared.net.AttachmentBytes
 import dev.kampr.shared.ui.LocalPaneIo
+import dev.kampr.shared.ui.LocalPlaceMemory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -29,14 +30,16 @@ fun browseFailure(got: AttachmentBytes.Failed): String = if (got.missing) NOT_BR
 @Composable
 fun <T : Any> rememberLoad(anchor: String, id: String, attempt: Int, decode: (AttachmentBytes.Ok) -> T?): Load<T> {
     val io = LocalPaneIo.current
-    var load by remember(anchor, id) { mutableStateOf<Load<T>>(Load.Loading) }
+    val memory = LocalPlaceMemory.current
+    val key = "$anchor $id"
+    var load by remember(anchor, id) { mutableStateOf<Load<T>>(memory?.recall<Load.Ready<T>>(key) ?: Load.Loading) }
     LaunchedEffect(anchor, id, attempt) {
         if (load !is Load.Ready) load = Load.Loading
         load = when (val got = io.attachment(anchor, id)) {
             is AttachmentBytes.Failed -> Load.Failed(browseFailure(got))
 
             is AttachmentBytes.Ok -> withContext(Dispatchers.Default) { decode(got) }
-                ?.let { Load.Ready(it) }
+                ?.let { Load.Ready(it).also { ready -> memory?.keep(key, ready) } }
                 ?: Load.Failed("The node answered with something this app cannot read. It may need updating.")
         }
     }

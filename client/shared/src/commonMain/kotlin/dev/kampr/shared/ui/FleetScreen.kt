@@ -447,12 +447,19 @@ private fun BroadcastConfirm(
     onConfirm: () -> Unit,
 ) {
     val tokens = Kampr.tokens
+    val n = pending.recipients.size
     BottomSheet(breakpoint, onCancel) {
+        SheetHeader(
+            title = "Answer $n host${if (n == 1) "" else "s"}",
+            subtitle = null,
+            onBack = null,
+            onClose = onCancel,
+            compact = breakpoint == Breakpoint.Landscape,
+        )
         Column(
-            modifier = Modifier.fillMaxWidth().padding(20.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            KText("Answer ${pending.recipients.size} hosts", tokens.type.paneTitle, tokens.color.text)
             KText(pending.prompt, tokens.type.body, tokens.color.mute, maxLines = 3)
             KText(
                 "Sending \"${pending.label}\" to ${pending.hostNames.joinToString(", ")}.",
@@ -464,17 +471,22 @@ private fun BroadcastConfirm(
                 KText(
                     "Not sending to ${pending.differingNames.joinToString(", ")} — asking something else.",
                     tokens.type.caption,
-                    tokens.color.blocked,
+                    tokens.color.working,
                     maxLines = 3,
                 )
             }
-            val reach = answering(LocalConnectionStatus.current, 0)
-            reach.note?.let { KText(it, tokens.type.caption, tokens.color.blocked, maxLines = 2) }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                FleetChip("Cancel", isDefault = false, onClick = onCancel)
-                FleetChip("Send to all", isDefault = true, enabled = reach.enabled, onClick = onConfirm)
-            }
         }
+        val reach = answering(LocalConnectionStatus.current, 0)
+        reach.note?.let {
+            KText(it, tokens.type.caption, tokens.color.blocked, Modifier.padding(start = 20.dp, top = 12.dp, end = 20.dp), maxLines = 2)
+        }
+        SheetActions(
+            confirm = "Send to $n host${if (n == 1) "" else "s"}",
+            onConfirm = onConfirm,
+            onCancel = onCancel,
+            enabled = reach.enabled,
+            confirmLabel = "Send \"${pending.label}\" to $n host${if (n == 1) "" else "s"}",
+        )
     }
 }
 

@@ -25,6 +25,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.ui.Hint
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.edge
@@ -193,6 +194,8 @@ private fun RowScope.Cap(
         contentAlignment = Alignment.Center,
     ) {
         KText(label, if (cap.symbol) tokens.type.badge else tokens.type.key, ink)
+        // A cap's own hold is a key — repeat, or its alternate — so only a mouse is told its name.
+        if (enabled && !spokenKey(label).equals(label, ignoreCase = true)) Hint(spoken, byTouch = false)
     }
 }
 

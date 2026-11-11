@@ -26,6 +26,7 @@ import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.ui.FilesNav
 import dev.kampr.shared.ui.FilesPlace
+import dev.kampr.shared.ui.FilesStack
 import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
@@ -66,7 +67,7 @@ internal fun streamOf(id: String) = "https://node.test/api/stream/$id"
 internal fun text(body: String) = AttachmentBytes.Ok(body.encodeToByteArray(), "application/octet-stream")
 
 // What `KamprApp` does with the stack, without the app around it: the top place drawn over the
-// window, and every surface under it opening places onto the same stack.
+// window through the app's own `FilesStack`, and every surface under it opening places onto it.
 @Composable
 internal fun Stage(io: PaneIo, nav: Stack, held: HeldBytes = HeldBytes(), voices: Voices = Decoder(), films: Films = Projector(), content: @Composable () -> Unit = {}) {
     CompositionLocalProvider(
@@ -80,7 +81,7 @@ internal fun Stage(io: PaneIo, nav: Stack, held: HeldBytes = HeldBytes(), voices
     ) {
         Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
             content()
-            nav.places.lastOrNull()?.let { FilesHost(it, nav, Modifier.fillMaxSize()) }
+            FilesStack(nav.places) { FilesHost(it, nav, Modifier.fillMaxSize()) }
         }
     }
 }

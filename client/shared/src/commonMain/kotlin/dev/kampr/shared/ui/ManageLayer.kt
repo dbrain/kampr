@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.capsFor
 import dev.kampr.shared.model.hasDesk
+import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.net.anchorPane
 import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
@@ -116,7 +117,7 @@ fun NewAction(paneId: String? = null, target: Dp = TOUCH, modifier: Modifier = M
     if (!manage.enabled) return
     GlyphAction(
         KamprIcons.plus,
-        if (paneId == null) "New workspace or session" else "New, from this pane",
+        if (paneId == null) "Start a new workspace or session" else "Start something new from this pane",
         Kampr.tokens.color.accent,
         target,
         modifier,
@@ -148,7 +149,7 @@ fun QuickSessionAction(node: NodeInfo, target: Dp = TOUCH, modifier: Modifier = 
 fun PaneManageAction(paneId: String, target: Dp = TOUCH, modifier: Modifier = Modifier) {
     val manage = LocalManage.current
     if (!manage.enabled) return
-    GlyphAction(KamprIcons.ellipsis, "Pane actions", Kampr.tokens.color.dim, target, modifier) {
+    GlyphAction(KamprIcons.ellipsis, "Show pane actions", Kampr.tokens.color.dim, target, modifier) {
         manage.openActions(paneId)
     }
 }
@@ -164,7 +165,7 @@ fun PaneMenuAction(paneId: String, target: Dp = TOUCH, modifier: Modifier = Modi
     var anchor by remember(paneId) { mutableStateOf<MenuAnchor?>(null) }
     GlyphAction(
         KamprIcons.ellipsis,
-        "Pane menu",
+        "Show the pane menu",
         Kampr.tokens.color.dim,
         target,
         modifier.onGloballyPositioned {
@@ -192,6 +193,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
         val found by state.store.found.collectAsState()
         FindSheet(
             paneId = paneId,
+            subject = herd.panes.firstOrNull { it.id == paneId }?.let(::paneTitle) ?: paneId.substringAfter('/'),
             breakpoint = breakpoint,
             found = found,
             onSearch = { state.find(paneId, it) },

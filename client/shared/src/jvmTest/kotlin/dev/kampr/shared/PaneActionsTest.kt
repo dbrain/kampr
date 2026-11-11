@@ -35,8 +35,8 @@ private val PANE = PaneInfo(
     rows = 30,
 )
 
-private const val FILL = "fill the tab"
-private const val FOCUS = "focus at the desk"
+private const val FILL = "Fill the tab"
+private const val FOCUS = "Focus at the desk…"
 
 @OptIn(ExperimentalTestApi::class)
 @Composable
@@ -85,7 +85,7 @@ class PaneActionsTest {
         waitForIdle()
         onAllNodesWithText(FOCUS).onFirst().performClick()
         waitForIdle()
-        onNodeWithText("focus").performClick()
+        onNodeWithText("Focus pane").performClick()
         waitForIdle()
         assertEquals(
             listOf<ManageOp>(ManageOp.Focus(PANE.id)),

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -161,6 +162,7 @@ private const val TARGET_RULE = 2f
 // The card is placed at the click, not under it: a pointer sitting on its top-left corner hides
 // the first characters of the thing it is naming.
 private const val CARD_NUDGE = 10f
+private val DESK_SHEET_WIDTH = 640.dp
 
 // How far the viewport sits above the live edge, in rows, which is what "rows back" says.
 //
@@ -1333,9 +1335,14 @@ fun TerminalView(
                     sink.confirmed(held.payload)
                     session.confirm.held = null
                 },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .padding(bottom = with(density) { session.keyRowHeight.toDp() }),
+                modifier = if (breakpoint == Breakpoint.Desktop) {
+                    Modifier.align(Alignment.Center).widthIn(max = DESK_SHEET_WIDTH)
+                } else {
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(bottom = with(density) { session.keyRowHeight.toDp() })
+                },
+                wide = breakpoint == Breakpoint.Desktop,
             )
         }
 
@@ -1428,13 +1435,14 @@ fun TerminalView(
                 // key row is what also holds it off the gesture handle on a layout that has no key
                 // row.
                 modifier = Modifier
-                    .align(Alignment.BottomStart)
+                    .align(if (breakpoint == Breakpoint.Desktop) Alignment.Center else Alignment.BottomStart)
                     .absolutePadding(
                         left = safe.left,
                         right = safe.right,
                         top = chromeTop,
                         bottom = with(density) { chromeBottom.toDp() },
-                    ),
+                    )
+                    .let { if (breakpoint == Breakpoint.Desktop) it.widthIn(max = DESK_SHEET_WIDTH) else it },
             )
         }
     }

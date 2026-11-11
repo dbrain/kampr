@@ -47,12 +47,12 @@ fun PanePicker(
     onDismiss: () -> Unit,
 ) {
     val tokens = Kampr.tokens
-    val compact = breakpoint != Breakpoint.Desktop
+    val compact = breakpoint == Breakpoint.Landscape
     val byHost = herd.groups().groupBy { it.node.host }
     BottomSheet(breakpoint, onDismiss) {
         SheetHeader(
             title = "Add pane",
-            subtitle = if (full) "the mosaic is full — remove one first" else "${chosen.size} of $MAX_CELLS in the mosaic",
+            subtitle = if (full) "The mosaic is full — remove a pane first" else "${chosen.size} of $MAX_CELLS in the mosaic",
             onBack = null,
             onClose = onDismiss,
             compact = compact,
@@ -93,7 +93,7 @@ fun PanePicker(
                     if (group.panes.isEmpty()) {
                         Box(Modifier.padding(start = 20.dp, end = 20.dp, bottom = 6.dp)) {
                             KText(
-                                node.detail ?: "no panes",
+                                node.detail ?: "No panes",
                                 tokens.type.captionSmall,
                                 tokens.color.mute,
                             )
@@ -128,7 +128,7 @@ fun PanePicker(
                                 trailing = if (already) {
                                     (
                                         {
-                                            KText("in the mosaic", tokens.type.micro, tokens.color.accent)
+                                            KText("In the mosaic", tokens.type.micro, tokens.color.accent)
                                         }
                                         )
                                 } else {

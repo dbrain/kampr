@@ -45,7 +45,7 @@ private val LISTED = PaneInfo(
 
 private const val NOW = 1_700_000_000.0
 
-private const val ELLIPSIS = "Pane menu"
+private const val ELLIPSIS = "Show the pane menu"
 
 // Two menus, and which one a listed pane reaches is the whole point: a row is a pane you cannot
 // see, so it gets the list menu and never the in-session sheet.

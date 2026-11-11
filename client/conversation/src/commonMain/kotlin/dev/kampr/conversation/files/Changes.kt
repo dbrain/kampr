@@ -10,7 +10,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -61,8 +61,8 @@ suspend fun fetchChanges(io: PaneIo, anchor: String, path: String): List<Patch> 
 fun ChangesView(patches: List<Patch>, modifier: Modifier) {
     val tokens = Kampr.tokens
     val safe = LocalSafeArea.current
-    var side by remember(patches) { mutableIntStateOf(0) }
-    var split by remember { mutableStateOf(false) }
+    var side by rememberSaveable(patches) { mutableIntStateOf(0) }
+    var split by rememberSaveable { mutableStateOf(false) }
     val patch = patches[side.coerceAtMost(patches.lastIndex)]
     Column(modifier.fillMaxWidth()) {
         DisableSelection {

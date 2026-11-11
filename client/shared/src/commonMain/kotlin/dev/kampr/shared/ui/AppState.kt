@@ -104,7 +104,9 @@ sealed interface Screen {
     // rather than a section of the herd: a fleet run is on nobody's desk, and "which host needs
     // me" is not the herd's question.
     data object Fleet : Screen
-    data class Pane(val paneId: String, val view: PaneView) : Screen
+
+    // `from` is the screen that opened it, so back from a run opened off Fleet returns to Fleet.
+    data class Pane(val paneId: String, val view: PaneView, val from: Screen = Herd) : Screen
     data object Setup : Screen
     data object Devices : Screen
     data object Appearance : Screen
@@ -676,12 +678,18 @@ class AppState(
         reconcileNotifications(store.herd.value)
         if (!store.paneInfo(paneId).paints) {
             awaitingRemembered = false
-            go(Screen.Pane(paneId, PaneView.Conversation))
+            go(Screen.Pane(paneId, PaneView.Conversation, origin()))
             return
         }
         val remembered = store.prefsFor(paneId).view?.let(::viewOf)
         awaitingRemembered = prefer == null && remembered == null
-        go(Screen.Pane(paneId, prefer ?: remembered ?: defaultViewOf(paneId)))
+        go(Screen.Pane(paneId, prefer ?: remembered ?: defaultViewOf(paneId), origin()))
+    }
+
+    private fun origin(): Screen = when (val here = screen) {
+        is Screen.Pane -> here.from
+        Screen.Fleet, Screen.Mosaic -> here
+        else -> Screen.Herd
     }
 
     // The operator's own choice always wins; this is only what a pane nobody has chosen for opens
@@ -743,7 +751,7 @@ class AppState(
     fun selectTab(tab: Tab) = go(screenFor(tab))
 
     fun back() {
-        go(Screen.Herd)
+        go((screen as? Screen.Pane)?.from ?: Screen.Herd)
     }
 
     // A notification the node sent is a summary of the moment it sent it. This client sees the

@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -56,7 +57,7 @@ fun TextFile(anchor: String, name: String, path: String?, stream: TextStream, mo
     if (path != null) {
         LaunchedEffect(anchor, path) { changes = Changes.Got(fetchChanges(io, anchor, path)) }
     }
-    var tab by remember(path) { mutableIntStateOf(0) }
+    var tab by rememberSaveable(path) { mutableIntStateOf(0) }
     Column(modifier.fillMaxSize()) {
         if (path != null) {
             val first = (changes as? Changes.Got)?.patches?.firstOrNull()
@@ -105,7 +106,7 @@ private fun Contents(name: String, stream: TextStream, modifier: Modifier) {
         json -> "Formatted"
         else -> null
     }
-    var rendered by remember(name) { mutableStateOf(if (json) minified(stream) else reading != null) }
+    var rendered by rememberSaveable(name) { mutableStateOf(if (json) minified(stream) else reading != null) }
     Column(modifier.fillMaxWidth()) {
         // Said because it was judged from the bytes rather than declared by them, and a reader
         // looking at mojibake needs to know which guess produced it.

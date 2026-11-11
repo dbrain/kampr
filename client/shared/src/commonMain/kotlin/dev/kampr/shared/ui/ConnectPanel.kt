@@ -13,7 +13,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextRange
@@ -50,11 +50,11 @@ fun ConnectPanel(
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
-    var address by remember(current?.baseUrl) { mutableStateOf(TextFieldValue(current?.baseUrl.orEmpty())) }
+    var address by rememberSaveable(current?.baseUrl, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(current?.baseUrl.orEmpty())) }
     // Deliberately empty rather than pre-filled with the stored token: a blank code means "keep
     // the enrolment I already have", which is what editing the address alone must not throw away.
     // A code carried in on a scanned link is the one exception — it is what the scan was for.
-    var code by remember(offeredCode) { mutableStateOf(TextFieldValue(offeredCode.orEmpty())) }
+    var code by rememberSaveable(offeredCode, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue(offeredCode.orEmpty())) }
 
     val target = endpointFrom(address.text, code.text)
     val dial = {
@@ -85,7 +85,7 @@ fun ConnectPanel(
             // The scheme is inferred from the shape of the host, so it is printed back rather
             // than applied silently: a wrong guess has to be one the operator can see.
             if (target != null && target.baseUrl != address.text.trim()) {
-                KText("connects to ${target.baseUrl}", tokens.type.meta, tokens.color.mute)
+                KText("Connects to ${target.baseUrl}", tokens.type.meta, tokens.color.mute)
             }
             RecentAddresses(recent) { address = TextFieldValue(it, TextRange(it.length)) }
             // The code is eight characters and the node is what fixed the number, so a field
@@ -93,7 +93,7 @@ fun ConnectPanel(
             // never on the value — a complete code that arrived off the camera is armed, not
             // spent, and that is still the operator's tap to make.
             KField(
-                "pairing code",
+                "Pairing code",
                 code,
                 label = "Pairing code, only when pairing",
                 keyboard = CODE_KEYS,
@@ -123,32 +123,34 @@ fun ConnectPanel(
                     "Scan a pairing code",
                     onScan,
                     Modifier.fillMaxWidth(),
+                    tokens.type.button,
                     vertical = 12.dp,
                     label = "Scan a pairing code with the camera",
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                PrimaryAction(
-                    "Connect",
-                    { target?.let(onConnect) },
-                    Modifier.weight(1f),
-                    tokens.type.buttonSmall,
-                    12.dp,
-                    enabled = target != null,
-                    label = "Connect to this node",
-                )
                 // The only enrolment path that does not need somebody at the console: a pairing
                 // code printed there is inert until it is armed there.
                 if (onPasskey != null) {
                     QuietAction(
-                        "Passkey",
+                        "Use a passkey",
                         { target?.let { onPasskey(it.copy(token = null)) } },
                         Modifier.weight(1f),
+                        tokens.type.button,
                         vertical = 12.dp,
                         enabled = target != null,
                         label = "Sign in to this node with a passkey",
                     )
                 }
+                PrimaryAction(
+                    "Connect",
+                    { target?.let(onConnect) },
+                    Modifier.weight(1f),
+                    tokens.type.button,
+                    12.dp,
+                    enabled = target != null,
+                    label = "Connect to this node",
+                )
             }
         }
     }
@@ -160,7 +162,7 @@ private fun RecentAddresses(recent: List<String>, onPick: (String) -> Unit) {
     if (recent.isEmpty()) return
     val tokens = Kampr.tokens
     Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        LabelText("used before", tokens.type.micro, tokens.color.mute)
+        LabelText("Used before", tokens.type.micro, tokens.color.mute)
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
