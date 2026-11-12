@@ -21,6 +21,12 @@ fn exit_json_records_how_the_child_ended() {
         let exit = live.exit(SOON);
         assert_eq!((exit.code, exit.signal), (code, signal), "{script}");
         assert!(!exit.status_lost, "{script}");
+        // exit.json is written before the socket is taken down (launch relies on that order).
+        let keeper = live.keeper_pid();
+        assert!(
+            until(SOON, || !proc_alive(keeper)),
+            "{script}: the keeper never ended"
+        );
         assert!(!live.session.path().join("ctl.sock").exists(), "{script}");
         assert!(!live.session.alive(), "{script}");
     }

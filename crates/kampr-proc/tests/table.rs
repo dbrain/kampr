@@ -133,3 +133,28 @@ fn a_start_reads_exactly_as_ps_prints_it_for_claude_to_compare() {
     let ps = String::from_utf8_lossy(&ps.stdout).trim().to_string();
     assert_eq!(here().start(pid).expect("a start").token, ps);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_scripts_arguments_stay_readable_while_its_interpreter_execs() {
+    let dir = tempfile::tempdir().expect("a directory");
+    let script = dir.path().join("claude");
+    std::fs::write(&script, "#!/bin/sh\nwhile :; do sleep 1; done\n").expect("the script");
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("executable");
+    let want = script.display().to_string();
+    let table = here();
+    for _ in 0..5 {
+        let child = Reaped(Command::new(&script).spawn().expect("the script"));
+        let pid = child.0.id();
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_millis(150) {
+            let argv = table.argv(pid);
+            assert!(
+                argv.as_ref().is_some_and(|a| a.contains(&want)),
+                "{argv:?} at {:?}",
+                started.elapsed()
+            );
+        }
+    }
+}

@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::mem::{MaybeUninit, size_of};
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) struct Darwin;
 
@@ -62,8 +62,31 @@ fn image(pid: u32) -> Option<String> {
     Some(path.rsplit('/').next().unwrap_or_default().to_string())
 }
 
+// macOS's /bin/sh is a shim that execs the selected shell, and while a process execs the kernel
+// answers EIO or EINVAL for its arguments, so a `#!/bin/sh` script named for a harness read for a
+// moment as having none. The window is under a millisecond; a read that ought to work waits it out.
+const EXEC_GRACE: Duration = Duration::from_millis(50);
+
 /// Readable only for a process of our own uid, which every process a node watches is.
 fn args(pid: u32) -> Option<Args> {
+    let deadline = Instant::now() + EXEC_GRACE;
+    loop {
+        if let Some(args) = procargs2(pid) {
+            return Some(args);
+        }
+        if Instant::now() >= deadline || !readable(pid) {
+            return None;
+        }
+        std::thread::sleep(Duration::from_micros(100));
+    }
+}
+
+fn readable(pid: u32) -> bool {
+    let euid = unsafe { libc::geteuid() };
+    bsd(pid).is_some_and(|i| i.pbi_status != libc::SZOMB && (euid == 0 || i.pbi_uid == euid))
+}
+
+fn procargs2(pid: u32) -> Option<Args> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
     let mut sysctl = |buf: *mut libc::c_void, len: &mut libc::size_t| unsafe {
         libc::sysctl(
