@@ -754,7 +754,7 @@ must already handle.
   from the node's gzip/brotli layer: compressing it would make `Content-Range` count bytes the
   client never sees and drop the `Content-Length` a download's progress is drawn from.
 
-#### The other path forms: `diff`, `staged`, `unstaged`, `zip`, `ls`, `repo`, `show`, `commit`, `find`
+#### The other path forms: `diff`, `staged`, `unstaged`, `zip`, `ls`, `repo`, `show`, `commit`, `find`, `names`
 
 The same encoding with a different tag, and every one of them is a path form: gated as typing on
 the route and on the mesh peer (one predicate, `Source::is_path_form`), routed by node id alone,
@@ -774,6 +774,7 @@ rev that names nothing, an id that does not decode — is the one `404`. Past th
 | `show` ␟ path ␟ rev | `git show --no-textconv <rev>:./<name>` in the file's directory — the file as it was | an image by extension, else `text/plain; charset=utf-8` when UTF-8 with no NUL, else bytes to download |
 | `commit` ␟ repo path ␟ sha | `git show --no-color --no-ext-diff --stat --patch --format=fuller <sha>^{commit}` | `text/plain; charset=utf-8` |
 | `find` ␟ base dir ␟ tail | the files below the base whose path ends in the tail (below); none is `404` | `application/json` |
+| `names` ␟ base dir ␟ query | the files and directories below the base whose name is like the query (below); none is an empty answer | `application/json` |
 
 - **`rev` is `[0-9A-Za-z_.~^/@{}-]{1,100}` not starting with `-`, `sha` is `[0-9a-f]{4,64}`**, and an
   id with anything else does not decode at all, so neither ever reaches `git`'s argv as an option, a
@@ -849,6 +850,27 @@ rev that names nothing, an id that does not decode — is the one `404`. Past th
   no link, at most 12 levels deep and 50 000 entries; a walk cut short sets `truncated`.
 - Matches are absolute, sorted by **fewest segments, then by name**, and at most **20** are sent;
   `truncated` is `true` when there were more.
+
+```jsonc
+// names — base "/home/u/dev/kampr", query "fs"
+{ "matches": [ { "path": "/home/u/dev/kampr/crates/kampr-node/src/fs.rs", "dir": false } ],
+  "truncated": false, "indexed": 2244, "cut": false }
+```
+
+- The file browser's search. **No match is `200` with empty `matches`**, so a `404` means only that
+  the base is not a directory or the node predates the form; the client says it cannot search.
+- The query is 1–256 bytes with no control character and not blank; it is trimmed and matched
+  ignoring case. Without a `/` it is matched against each **name**: exact, then prefix, then
+  substring, then its characters in order. With a `/` it is a substring of the path relative to
+  the base. Ties go to fewer segments, then the shorter path, then by path. At most **50** are
+  sent; `truncated` is `true` when more matched.
+- The candidates are an **index of the base**, files and directories: `git ls-files` as `find` runs
+  it, with every directory above a listed file added; outside a repository a breadth-first walk
+  that skips hidden directories, `node_modules`, `target` and `build` (none of them listed either)
+  and follows no link. At most 16 levels and **200 000** entries; `cut` is `true` when that bound
+  stopped it and `indexed` is how many it holds.
+- The index is held in memory for **45 s** for the four most recent bases, so each keystroke of a
+  search scans memory rather than the disk. Something written in that window may not be found yet.
 
 ```
 200  Content-Type: application/zip

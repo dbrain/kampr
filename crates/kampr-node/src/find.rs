@@ -9,7 +9,7 @@ pub const MAX_MATCHES: usize = 20;
 
 /// Directories nobody writes a path into by hand, and the ones that make a walk from `~` cost
 /// minutes rather than milliseconds.
-const NEVER_SOURCE: &[&str] = &["node_modules", "target", "build"];
+pub(crate) const NEVER_SOURCE: &[&str] = &["node_modules", "target", "build"];
 
 #[derive(Debug, Clone, Copy)]
 pub struct Bounds {
@@ -68,7 +68,7 @@ pub fn below(base: &Path, tail: &str, bounds: Bounds) -> Option<Found> {
     })
 }
 
-fn tidy(dir: &Path) -> PathBuf {
+pub(crate) fn tidy(dir: &Path) -> PathBuf {
     dir.components()
         .filter(|c| !matches!(c, Component::CurDir))
         .collect()

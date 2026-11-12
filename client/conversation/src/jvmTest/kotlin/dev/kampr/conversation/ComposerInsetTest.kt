@@ -307,17 +307,10 @@ class ComposerInsetTest {
         }
     }
 
-    // **Searching with the keys up is the one posture where the bar and the reply box compete**,
-    // and it is why the conversation measures its children in priority order rather than in reading
-    // order. Everywhere else the bar stands down on its own — it is composed only while the
-    // keyboard is closed — so a plain column is indistinguishable from a correct one and the
-    // header's half of the fix appears to be the whole of it. Open search, and the bar is there
-    // with a keyboard under it.
-    // **The one posture where the bar and the reply box compete for the same pixels.** Everywhere
-    // else the bar stands down on its own — it is composed only while the keyboard is closed — so
-    // a column that measures in reading order is indistinguishable from one that measures in
-    // priority order, and the header's half of the fix looks like the whole of it. Searching keeps
-    // the bar on screen with the keys up, and then the order decides who gets nothing.
+    // **The one posture where the bar and the reply box compete for the same pixels.** The bar is
+    // composed only while a search is open, so everywhere else a column that measures in reading
+    // order is indistinguishable from one that measures in priority order. Searching puts the bar
+    // on screen with the keys up, and then the order decides who gets nothing.
     //
     // Driven at the layout rather than through the search field: opening search puts focus in a
     // text field, and flipping the keyboard under a focused field leaves `waitForIdle` spinning

@@ -71,13 +71,13 @@ private class PagingIo(private val store: KamprStore) : PaneIo {
 }
 
 @Composable
-private fun Transcript(store: KamprStore, io: PaneIo = RecordingIo) {
+private fun Transcript(store: KamprStore, io: PaneIo = RecordingIo, search: TranscriptSearch = TranscriptSearch()) {
     CompositionLocalProvider(
         LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
         LocalPaneIo provides io,
     ) {
         Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
-            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize())
+            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize(), search = search)
         }
     }
 }
@@ -87,9 +87,11 @@ class SearchStepTest {
     private fun ComposeUiTest.shows(text: String) = onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
 
     private fun ComposeUiTest.search(store: KamprStore, io: PaneIo = RecordingIo) {
-        setContent { Transcript(store, io) }
+        val find = TranscriptSearch()
+        setContent { Transcript(store, io, find) }
         waitForIdle()
-        onNodeWithContentDescription("Search the transcript").performClick()
+        find.open = true
+        waitForIdle()
         onNodeWithContentDescription("Search the transcript").performTextInput(NEEDLE)
         waitForIdle()
         // The search lands on the match nearest the end the reader is standing at, which is the
@@ -151,9 +153,11 @@ class SearchStepTest {
     // and whatever the reader has paged back to. It says so for as long as that is true.
     @Test
     fun theCountSaysSoWhileThereAreOlderTurnsItHasNotSeen() = runComposeUiTest {
-        setContent { Transcript(longTranscript(more = true)) }
+        val find = TranscriptSearch()
+        setContent { Transcript(longTranscript(more = true), search = find) }
         waitForIdle()
-        onNodeWithContentDescription("Search the transcript").performClick()
+        find.open = true
+        waitForIdle()
         onNodeWithContentDescription("Search the transcript").performTextInput(NEEDLE)
         waitForIdle()
         onNodeWithContentDescription("Match $HITS of $HITS in the turns loaded so far").assertExists()
@@ -167,7 +171,7 @@ class SearchStepTest {
         assertTrue(shows("$HITS/$HITS"), "the tally is missing")
     }
 
-    // What the bar itself says about where the reader is standing. A reader the search has moved
+    // What the transcript itself says about where the reader is standing. A reader the search has moved
     // is not at the end any more, so the way back to it is the control that stands there — and
     // its absence is the transcript still believing the reader never left, which is the defect
     // above seen from the other side.

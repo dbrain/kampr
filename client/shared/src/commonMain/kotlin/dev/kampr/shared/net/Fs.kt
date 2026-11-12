@@ -100,5 +100,19 @@ data class FsFound(val matches: List<String> = emptyList(), val truncated: Boole
 
 fun decodeFound(bytes: ByteArray): FsFound? = runCatching { json.decodeFromString<FsFound>(bytes.decodeToString()) }.getOrNull()
 
+@Serializable
+data class FsNamed(val path: String, val dir: Boolean = false)
+
+@Immutable
+@Serializable
+data class FsNames(
+    val matches: List<FsNamed> = emptyList(),
+    val truncated: Boolean = false,
+    val indexed: Int = 0,
+    val cut: Boolean = false,
+)
+
+fun decodeNames(bytes: ByteArray): FsNames? = runCatching { json.decodeFromString<FsNames>(bytes.decodeToString()) }.getOrNull()
+
 // Path forms are routed by node id alone, so a node with no pane on screen is still browsable.
 fun anchorPane(nodeId: String): String = "$nodeId/_"

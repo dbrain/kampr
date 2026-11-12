@@ -1,6 +1,7 @@
 package dev.kampr.shared.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.SubcomposeLayout
@@ -80,6 +82,8 @@ private val DESK_FOOT: Dp = 8.dp
 private val PHONE_HEADER: Dp = 56.dp
 
 private val PHONE_TITLE: Dp = 48.dp
+
+private val PHONE_TITLE_INSET: Dp = 28.dp
 
 // Why this pane will never paint, when there is nothing on its surface to read instead. The
 // node's own refusal about this pane stands in where the herd entry says nothing: a failure the
@@ -140,12 +144,17 @@ private fun StatusChip(info: PaneInfo?) {
 // corner on it in the most serious one's colour; the badges themselves are composed unseen so each
 // still says its own sentence to a reader.
 @Composable
-private fun StatusMarkFor(info: PaneInfo?, warnings: List<PaneStatus>) {
+private fun StatusMarkFor(info: PaneInfo?, warnings: List<PaneStatus>, backLabel: String, onBack: () -> Unit) {
     val tokens = Kampr.tokens
     val status = info?.let(::statusOf) ?: AgentStatus.Unknown
     val word = statusWord(status)
+    val said = "This agent is ${word.lowercase()}"
     Box(
-        Modifier.size(18.dp, PHONE_TITLE).announce("This agent is ${word.lowercase()}", urgent = status == AgentStatus.Blocked),
+        Modifier
+            .size(18.dp, PHONE_TITLE)
+            .pointerInput(onBack) { detectTapGestures(onTap = { onBack() }) }
+            .gestureAction(said, onBack, clickLabel = backLabel)
+            .announce(said, urgent = status == AgentStatus.Blocked),
         contentAlignment = Alignment.Center,
     ) {
         StatusMark(status, 10.dp)
@@ -311,12 +320,6 @@ fun PaneScreenMobile(
             ) {
                 if (landscape) {
                     BackAction(backLabel, onBack, target = LANDSCAPE_TOUCH)
-                } else {
-                    // Flush with the screen's edge rather than inset from it, so the full touch
-                    // target costs the title nothing past the chevron's own width.
-                    BackAction(backLabel, onBack, Modifier.size(TOUCH, PHONE_TITLE))
-                }
-                if (landscape) {
                     KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f).asHeading())
                     watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
                     StatusLine(paneStatuses(pane, info, readOnly, gone, shown), Modifier.weight(1f).height(LANDSCAPE_TOUCH))
@@ -329,14 +332,21 @@ fun PaneScreenMobile(
                     // title moved the title, a status beside the controls pushed the switch out from
                     // under the thumb, and an icon per status after the title cut "kampr · claude"
                     // short on a 360 dp phone.
-                    Row(
-                        Modifier.weight(1f).height(PHONE_TITLE),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        StatusMarkFor(info, paneStatuses(pane, info, readOnly, gone, shown).filterNot { it.agent })
-                        KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f, fill = false).asHeading())
-                        watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
+                    //
+                    // The back target lies under the mark and the title rather than beside them, so
+                    // the title starts just past the chevron and the target keeps its full width:
+                    // the title takes no touches, and a tap on the mark goes back too.
+                    Box(Modifier.weight(1f).height(PHONE_TITLE)) {
+                        BackAction(backLabel, onBack, Modifier.size(TOUCH, PHONE_TITLE))
+                        Row(
+                            Modifier.fillMaxHeight().padding(start = PHONE_TITLE_INSET),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            StatusMarkFor(info, paneStatuses(pane, info, readOnly, gone, shown).filterNot { it.agent }, backLabel, onBack)
+                            KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f, fill = false).asHeading())
+                            watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
+                        }
                     }
                     CompositionLocalProvider(LocalZoomGlyph provides true) {
                         if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))

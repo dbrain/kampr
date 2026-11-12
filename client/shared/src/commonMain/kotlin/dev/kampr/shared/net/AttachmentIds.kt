@@ -19,6 +19,7 @@ private const val STAGED = "staged"
 private const val UNSTAGED = "unstaged"
 private const val ZIP = "zip"
 private const val FIND = "find"
+private const val NAMES = "names"
 
 // The node's own ceiling on an id, applied here as well so a path that could never resolve is
 // never offered as though it could.
@@ -48,6 +49,8 @@ fun showAttachmentId(path: String, rev: String): String = mint(SHOW, path, rev)
 fun commitAttachmentId(repo: String, sha: String): String = mint(COMMIT, repo, sha)
 
 fun findAttachmentId(base: String, tail: String): String = mint(FIND, base, tail)
+
+fun namesAttachmentId(base: String, query: String): String = mint(NAMES, base, query)
 
 // The path an id this client minted names, which is how the file viewer asks for the diff beside
 // the file without being handed the path twice. A record id — five fields, minted by a node —

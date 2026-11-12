@@ -802,6 +802,10 @@ fn the_browsing_forms_round_trip_through_the_shared_decoder() {
             base: dir.clone(),
             tail: "src/lib.rs".into(),
         },
+        attach::Source::Names {
+            base: dir.clone(),
+            query: "Lib rs/ä".into(),
+        },
     ] {
         assert_eq!(
             attach::Source::decode(&source.encode()).expect("our own id"),
@@ -876,6 +880,11 @@ fn a_rev_or_sha_git_could_read_as_anything_else_is_refused_at_decode() {
         &["commit", "", "abcd"],
         &["find", "", "a.rs"],
         &["find", "/x", ""],
+        &["names", "", "lib"],
+        &["names", "/x", ""],
+        &["names", "/x", "   "],
+        &["names", "/x", "a\nb"],
+        &["names", "/x", &"a".repeat(257)],
     ] {
         assert!(attach::Source::decode(&raw_id(empty)).is_err(), "{empty:?}");
     }
@@ -934,6 +943,10 @@ fn every_form_that_names_a_path_is_a_path_form_and_nothing_else_is() {
         attach::Source::Find {
             base: path.clone(),
             tail: "hosts".into(),
+        },
+        attach::Source::Names {
+            base: path.clone(),
+            query: "hosts".into(),
         },
     ] {
         assert!(source.is_path_form(), "{source:?}");

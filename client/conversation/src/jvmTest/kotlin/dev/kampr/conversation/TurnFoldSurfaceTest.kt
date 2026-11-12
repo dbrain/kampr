@@ -67,13 +67,13 @@ private fun storeOfAnAnswer(): KamprStore {
 }
 
 @Composable
-private fun Transcript(store: KamprStore) {
+private fun Transcript(store: KamprStore, search: TranscriptSearch = TranscriptSearch()) {
     CompositionLocalProvider(
         LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
         LocalPaneIo provides RecordingIo,
     ) {
         Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
-            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize())
+            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize(), search = search)
         }
     }
 }
@@ -126,13 +126,15 @@ class TurnFoldSurfaceTest {
     // screen hides is worse than a screen that is too long.
     @Test
     fun aPutAwayReplyHoldingWhatTheSearchIsLookingForOpensItself() = runComposeUiTest {
-        setContent { Transcript(storeOfAnAnswer()) }
+        val find = TranscriptSearch()
+        setContent { Transcript(storeOfAnAnswer(), find) }
         waitForIdle()
         onNodeWithContentDescription(OPEN, substring = true).performClick()
         waitForIdle()
         onAllNodesWithText(BURIED, substring = true).assertCountEquals(0)
 
-        onNodeWithContentDescription("Search the transcript").performClick()
+        find.open = true
+        waitForIdle()
         onNodeWithContentDescription("Search the transcript").performTextInput("scrollbar")
         waitForIdle()
         onAllNodesWithText(BURIED, substring = true).assertCountEquals(1)

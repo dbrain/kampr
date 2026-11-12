@@ -115,7 +115,7 @@ class AttachmentTest {
         assertEquals(AttachmentOffer.Image, offerFor(att))
     }
 
-    // The counter in the transcript bar promises the reader somewhere to go. A hit on a marker
+    // The counter in the search bar promises the reader somewhere to go. A hit on a marker
     // that is no longer rendered is a promise it cannot keep.
     @Test
     fun searchFindsAnAttachmentByItsNameRatherThanByTheMarkerItReplaced() {

@@ -98,7 +98,7 @@ class BackRestoresTest {
         waitUntilExactlyOneExists(row("note-00.txt"))
 
         onNodeWithContentDescription("Show dotfiles").performClick()
-        onNodeWithContentDescription("Filter this folder").performTextInput("note")
+        onNodeWithContentDescription("Search this folder and below").performTextInput("note")
         waitForIdle()
         assertTrue(onAllNodes(row("a-other.txt")).fetchSemanticsNodes().isEmpty())
         onNode(hasScrollToKeyAction()).performScrollToKey("note-40.txt")
@@ -122,7 +122,7 @@ class BackRestoresTest {
 
         onNode(hasScrollToKeyAction()).performScrollToKey("filter")
         waitForIdle()
-        val filter = onNodeWithContentDescription("Filter this folder").fetchSemanticsNode()
+        val filter = onNodeWithContentDescription("Search this folder and below").fetchSemanticsNode()
         assertEquals("note", filter.config[SemanticsProperties.EditableText].text)
         onNode(row("note-00.txt")).assertExists()
         assertTrue(onAllNodes(row("a-other.txt")).fetchSemanticsNodes().isEmpty(), "the filter is still applied")
@@ -137,7 +137,7 @@ class BackRestoresTest {
         val nav = Stack(place)
         setContent { Stage(io, nav) }
         waitUntilExactlyOneExists(row("note-00.txt"))
-        onNodeWithContentDescription("Filter this folder").performTextInput("note")
+        onNodeWithContentDescription("Search this folder and below").performTextInput("note")
         waitForIdle()
 
         nav.back()
@@ -145,7 +145,7 @@ class BackRestoresTest {
         nav.open(place)
         waitUntilExactlyOneExists(row("note-00.txt"))
 
-        val filter = onNodeWithContentDescription("Filter this folder").fetchSemanticsNode()
+        val filter = onNodeWithContentDescription("Search this folder and below").fetchSemanticsNode()
         assertEquals("", filter.config[SemanticsProperties.EditableText].text)
         onNode(row("a-other.txt")).assertExists()
     }

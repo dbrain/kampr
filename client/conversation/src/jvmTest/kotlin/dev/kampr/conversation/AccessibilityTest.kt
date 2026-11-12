@@ -67,20 +67,6 @@ class AccessibilityTest {
         assertEquals(null, sent)
     }
 
-    @Test
-    fun theTranscriptSearchIconIsNamedForWhatItDoes() = runComposeUiTest {
-        val (_, pane) = demoPane(RICH_CONVO)
-        setContent {
-            CompositionLocalProvider(
-                LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
-                LocalPaneIo provides RecordingIo,
-            ) {
-                ConversationView(pane, demoInfo(), Modifier.fillMaxWidth())
-            }
-        }
-        onNodeWithContentDescription("Search the transcript").assertHeightIsAtLeast(LANDSCAPE_TOUCH)
-    }
-
     // A preview is text whose wording may still change under the reader, so it says so — and it
     // stops saying so the moment the transcript takes over. Both halves, because a mark that never
     // goes away is worse than no mark.

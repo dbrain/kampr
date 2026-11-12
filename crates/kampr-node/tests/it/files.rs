@@ -631,3 +631,50 @@ async fn a_base_under_the_home_is_expanded_before_it_is_searched() {
         [home.join("proj/deep/notes.md").display().to_string()]
     );
 }
+
+fn named(base: impl Into<PathBuf>, query: &str) -> Source {
+    Source::Names {
+        base: FileRef::new(base),
+        query: query.into(),
+    }
+}
+
+/// A name search answers with folders and files at any depth, best first (an exact name before a
+/// fuzzy one, an ignored file never), and answers no match with an empty list rather than the 404
+/// a client reads as a node that cannot search.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_search_finds_folders_and_files_below_and_none_is_still_an_answer() {
+    let b = Browser::start().await;
+    let repo = a_repo();
+    touch(&repo.root, "crates/parser/src/parse.rs");
+    touch(&repo.root, "vendor/parser.rs");
+    std::fs::write(repo.root.join(".gitignore"), "vendor/\n").expect("write");
+
+    let found = b.fetch(&named(&repo.root, "PARSER")).await.json();
+    assert_eq!(
+        found["matches"],
+        serde_json::json!([
+            { "path": repo.root.join("crates/parser").display().to_string(), "dir": true },
+            { "path": repo.root.join("crates/parser/src/parse.rs").display().to_string(), "dir": false },
+        ])
+    );
+    assert_eq!(found["truncated"], false);
+    assert_eq!(found["cut"], false);
+    assert!(found["indexed"].as_u64().expect("a count") > 5, "{found}");
+
+    let none = b.fetch(&named(&repo.root, "nothing-like-it")).await.json();
+    assert_eq!(none["matches"], serde_json::json!([]));
+
+    assert_eq!(
+        b.fetch(&named(repo.root.join("README.md"), "x")).await.status,
+        404,
+        "a base that is not a directory is the one refusal"
+    );
+    let readonly = format!("Bearer {}", b.h.token_for(Role::Readonly).await);
+    assert_eq!(
+        b.fetch_as(&b.anchor(), &named(&repo.root, "parser").encode(), &readonly)
+            .await
+            .status,
+        403
+    );
+}

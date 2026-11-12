@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -33,6 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.Measurable
@@ -61,17 +64,14 @@ import dev.kampr.shared.ui.GlyphTarget
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.LANDSCAPE_TOUCH
-import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
-import dev.kampr.shared.ui.LocalSafeArea
 import dev.kampr.shared.ui.PaneView
 import dev.kampr.shared.ui.QuietAction
 import dev.kampr.shared.ui.Surface
 import dev.kampr.shared.ui.announce
 import dev.kampr.shared.ui.answering
-import dev.kampr.shared.ui.asHeading
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.named
@@ -108,6 +108,7 @@ fun ConversationView(
     pane: PaneState,
     info: PaneInfo?,
     modifier: Modifier = Modifier,
+    search: TranscriptSearch = remember(pane.id) { TranscriptSearch() },
     // Injected only so an artboard can be drawn against a fixed one — a picture whose stopwatch
     // reads the real clock is a different picture every time it is rendered.
     clock: () -> Double = ::wallClockMillis,
@@ -115,11 +116,11 @@ fun ConversationView(
     // A host hands the next pane to the slot the last one was in (the desktop's pane screen, a
     // tab), and the reply box's buffer remembered here went with it: one pane's half-written
     // reply sat in the next one's box.
-    key(pane.id) { PaneConversation(pane, info, modifier, clock) }
+    key(pane.id) { PaneConversation(pane, info, modifier, clock, search) }
 }
 
 @Composable
-private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifier, clock: () -> Double) {
+private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifier, clock: () -> Double, search: TranscriptSearch) {
     val tokens = Kampr.tokens
     val io = LocalPaneIo.current
 
@@ -141,7 +142,10 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // so it is the newest thing anybody has said to this pane.
     val turns = remember(pane.revision) { pane.turns.filter { it.isVisible() } + queuedTurns(pane.facets) }
     var query by remember { mutableStateOf("") }
-    var searching by remember { mutableStateOf(false) }
+    DisposableEffect(search) {
+        search.onScreen++
+        onDispose { search.onScreen-- }
+    }
     // Which match the search is standing on, held as the **turn** rather than as an index: a page
     // of older turns arriving puts matches above the reader, and an index would quietly become a
     // different hit under them.
@@ -149,6 +153,12 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // The matches on their own, instead of the transcript. Left when the search is closed, because
     // a list of hits for a query nobody is looking for any more is not a view of anything.
     var listing by remember { mutableStateOf(false) }
+    LaunchedEffect(search.open) {
+        if (!search.open) {
+            query = ""
+            listing = false
+        }
+    }
     val expanded = remember { mutableStateListOf<String>() }
     val toggle: (String) -> Unit = { key -> if (key in expanded) expanded.remove(key) else expanded.add(key) }
     // Per pane, and dropped with it: what bounds how many decoded images this client is holding
@@ -416,12 +426,6 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
         }
     }
 
-    // The bar is 53 dp of a rotated phone's 117 dp of conversation — its search glyph carries a
-    // landscape touch target — and it yields all of it while the keys are up, because a reader
-    // with a keyboard open is writing rather than reading a turn count. Unless the search field is
-    // the thing holding the keyboard, in which case the bar *is* what is being typed into.
-    val keyboardOpen = LocalSafeArea.current.ime > 0.dp
-
     // The question card floats over the top of the transcript rather than standing in the column
     // with it, because the column is where the reply box is measured and a rotated phone with the
     // keys up has no room to spend on a card there (commit cca3022, ComposerInsetTest). An
@@ -490,10 +494,8 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
         }
 
         ConversationColumn(modifier.fillMaxSize().background(tokens.color.bg), bar = {
-            if (searching || !keyboardOpen) {
-                TranscriptBar(
-                    count = turns.size,
-                    searching = searching,
+            if (search.open) {
+                SearchBar(
                     query = query,
                     hits = results.size,
                     // Every matching turn the node found, which is not what it listed: the list is
@@ -511,13 +513,7 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
                         query = it
                         standingOn = null
                     },
-                    onSearching = {
-                        searching = it
-                        if (!it) {
-                            query = ""
-                            listing = false
-                        }
-                    },
+                    onClose = { search.open = false },
                     onStep = { step ->
                         if (results.isNotEmpty()) {
                             val from = if (focus >= 0) focus else results.lastIndex
@@ -525,9 +521,6 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
                         }
                     },
                     onListing = { listing = it },
-                    agent = info?.agent,
-                    adrift = !following && rows.isNotEmpty(),
-                    onEnd = { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
                 )
             }
 
@@ -690,6 +683,12 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
                         onFold = { toggle(RUNNING_OPEN) },
                         clock = clock,
                     )
+                    if (!following && rows.isNotEmpty()) {
+                        ToEnd(
+                            { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
+                            Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = with(density) { foot.toDp() } + 12.dp),
+                        )
+                    }
                 }
             }
         }, composer = {
@@ -741,7 +740,7 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
 // **A column measures its unweighted children in index order against what the ones before them
 // left**, so the reply box — last in reading order — was last in the queue for room that had
 // already gone: rotated with the keys up it measured 0 dp tall and there was nothing to type into
-// (#319). The bar above it is a count and a search field, and the transcript is scrollable; both
+// (#319). The bar above it is a search field, and the transcript is scrollable; both
 // can lose height and still be themselves, and the reply box cannot.
 //
 // So the three are measured in priority order — the composer at its natural height, then the bar
@@ -795,9 +794,7 @@ internal fun ConversationColumn(
 }
 
 @Composable
-private fun TranscriptBar(
-    count: Int,
-    searching: Boolean,
+private fun SearchBar(
     query: String,
     hits: Int,
     // Every matching turn on the machine that holds the transcript, where the node answered. It is
@@ -817,12 +814,9 @@ private fun TranscriptBar(
     reaching: Boolean,
     listing: Boolean,
     onQuery: (String) -> Unit,
-    onSearching: (Boolean) -> Unit,
+    onClose: () -> Unit,
     onStep: (Int) -> Unit,
     onListing: (Boolean) -> Unit,
-    agent: String?,
-    adrift: Boolean,
-    onEnd: () -> Unit,
 ) {
     val tokens = Kampr.tokens
     Row(
@@ -831,44 +825,10 @@ private fun TranscriptBar(
             .background(tokens.color.bar)
             .edgeBottom()
             .readingOrder(-1f)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        if (!searching) {
-            LabelText("transcript", tokens.type.metaSmall, tokens.color.mute)
-            KText(
-                "$count turns",
-                tokens.type.meta,
-                tokens.color.mute,
-                Modifier
-                    .weight(1f)
-                    .asHeading()
-                    .named("Transcript of ${agent ?: "this pane"}, $count turns"),
-            )
-            // Only while it would do something, and to the *left* of search: a control that comes
-            // and goes must not move the one that is always there out from under a thumb. It costs
-            // the rotated bar width rather than height, which is the axis that bar is short of.
-            if (adrift) {
-                GlyphTarget(
-                    ConversationIcons.toEnd,
-                    "Go to the end of the transcript",
-                    tokens.color.accent,
-                    onEnd,
-                    target = LANDSCAPE_TOUCH,
-                    glyph = 15.dp,
-                )
-            }
-            GlyphTarget(
-                ConversationIcons.search,
-                "Search the transcript",
-                tokens.color.dim,
-                { onSearching(true) },
-                target = LANDSCAPE_TOUCH,
-                glyph = 15.dp,
-            )
-            return@Row
-        }
         SearchField(query, onQuery, Modifier.weight(1f))
         // Three numbers and never more than two of them at once: where the reader is, how many
         // there are, and — only when the list is capped — how many the node found in all.
@@ -934,7 +894,7 @@ private fun TranscriptBar(
             ConversationIcons.close,
             "Close search",
             tokens.color.mute,
-            { onSearching(false) },
+            onClose,
             target = LANDSCAPE_TOUCH,
             glyph = 13.dp,
         )
@@ -945,6 +905,8 @@ private fun TranscriptBar(
 private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modifier) {
     val tokens = Kampr.tokens
     var value by remember { mutableStateOf(TextFieldValue(query)) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
     val pill = RoundedCornerShape(tokens.radii.sm)
     Box(
         modifier
@@ -959,7 +921,7 @@ private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modi
                 value = it
                 onQuery(it.text)
             },
-            modifier = Modifier.fillMaxWidth().named("Search the transcript"),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus).named("Search the transcript"),
             textStyle = tokens.type.caption.copy(color = tokens.color.text),
             cursorBrush = SolidColor(tokens.color.accent),
         )

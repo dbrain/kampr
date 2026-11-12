@@ -30,6 +30,7 @@ pub mod lost;
 pub mod manage;
 pub mod mesh;
 pub mod muffit;
+pub mod names;
 pub mod outbox;
 pub mod paste;
 pub mod pasted;

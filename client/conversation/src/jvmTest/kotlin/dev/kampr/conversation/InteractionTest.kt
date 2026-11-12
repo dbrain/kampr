@@ -99,22 +99,18 @@ class InteractionTest {
         assertEquals(listOf(ClientMsg.ConvoLoad(PANE_ID, "a-0003")), RecordingIo.sent.filterIsInstance<ClientMsg.ConvoLoad>())
     }
 
-    // The transcript bar's search control is the last thing in a fixed-height row, so its centre
-    // is derivable; tapping it must swap the bar for the field and its match counter.
     @Test
-    fun tappingSearchOpensTheFieldOverTheWholeTranscript() {
+    fun anOpenSearchIsDrawnOverTheWholeTranscript() {
         val (_, pane) = demoPane(RICH_CONVO)
+        val search = TranscriptSearch().apply { open = true }
         withScene(
             PORTRAIT.first,
             PORTRAIT.second,
             SoftTheme,
             TypeScale.Phone,
-            content = { ConversationView(pane, demoInfo(), Modifier.fillMaxWidth()) },
+            content = { ConversationView(pane, demoInfo(), Modifier.fillMaxWidth(), search = search) },
             body = { scene ->
                 scene.render()
-                val at = Offset(scene.render().width - 47f, 33f)
-                scene.sendPointerEvent(PointerEventType.Press, at)
-                scene.sendPointerEvent(PointerEventType.Release, at)
                 val png = requireNotNull(scene.render().encodeToData()).bytes
                 java.io.File("build/artboards").mkdirs()
                 java.io.File("build/artboards/conversation-search.png").writeBytes(png)

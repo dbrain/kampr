@@ -631,6 +631,10 @@ fn browsing_forms(root: &std::path::Path) -> Vec<kampr_journal::Source> {
             base: FileRef::new(root),
             tail: "notes.md".into(),
         },
+        Source::Names {
+            base: FileRef::new(root),
+            query: "notes".into(),
+        },
         Source::Commit {
             repo: FileRef::new(root),
             sha: "0000".into(),
@@ -651,7 +655,7 @@ async fn a_hub_is_handed_every_browsing_form_off_the_peer_with_no_pane_behind_it
 
     let forms = browsing_forms(&root);
     let mut answers = Vec::new();
-    for (rid, source) in forms.iter().take(5).enumerate() {
+    for (rid, source) in forms.iter().take(6).enumerate() {
         let rid = rid as u64 + 20;
         peer.say(json!({
             "t": "att.fetch", "rid": rid, "pane": anchor, "id": source.encode(), "window": ATT_WINDOW
@@ -686,6 +690,12 @@ async fn a_hub_is_handed_every_browsing_form_off_the_peer_with_no_pane_behind_it
     assert_eq!(
         serde_json::from_str::<Value>(&found).expect("JSON")["matches"],
         json!([root.join("notes.md").display().to_string()])
+    );
+    let (mime, named) = text(&answers[5]);
+    assert_eq!(mime, "application/json");
+    assert_eq!(
+        serde_json::from_str::<Value>(&named).expect("JSON")["matches"],
+        json!([{ "path": root.join("notes.md").display().to_string(), "dir": false }])
     );
     peer.stop();
 }

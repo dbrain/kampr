@@ -52,9 +52,6 @@ import dev.kampr.shared.ui.touchable
 import dev.kampr.shared.util.relativeSeconds
 import kotlinx.coroutines.launch
 
-// Below this many entries a filter is one more thing between the thumb and the list.
-private const val FILTER_FROM = 12
-
 @Composable
 fun DirView(place: FilesPlace.Dir, nav: FilesNav, modifier: Modifier = Modifier) {
     val tokens = Kampr.tokens
@@ -138,10 +135,11 @@ private fun Listing(
     var query by rememberSaveable(listing.path) { mutableStateOf("") }
     val entries = remember(listing, query, showHidden) { visibleEntries(listing.entries, query, showHidden) }
     val now = remember(listing) { wallClockMillis() }
-    val filtered = listing.entries.size >= FILTER_FROM
+    val below = rememberBelow(place.anchor, listing.path, query)
+    val shown = remember(listing.path, entries) { entries.mapTo(HashSet()) { childPath(listing.path, it.name) } }
     fun dir(path: String) = nav.open(FilesPlace.Dir(place.nodeId, place.anchor, path))
 
-    val leading = listOf(true, listing.repo != null, filtered, transfer != null, listing.parent != null).count { it }
+    val leading = 2 + listOf(listing.repo != null, transfer != null, listing.parent != null).count { it }
     LaunchedEffect(fresh, entries) {
         val at = entries.indexOfFirst { it.name == fresh }
         when {
@@ -160,10 +158,8 @@ private fun Listing(
         listing.repo?.let { repo ->
             item(key = "repo") { RepoStrip(repo) { nav.open(FilesPlace.Repo(place.nodeId, place.anchor, repo.root)) } }
         }
-        if (filtered) {
-            item(key = "filter") {
-                KField("filter", query, Modifier.padding(vertical = 6.dp), label = "Filter this folder") { query = it }
-            }
+        item(key = "filter") {
+            KField("Search", query, Modifier.padding(vertical = 6.dp), label = "Search this folder and below") { query = it }
         }
         transfer?.let { note ->
             item(key = "transfer") {
@@ -225,6 +221,9 @@ private fun Listing(
                 val words = if (listing.entries.isEmpty()) "This folder is empty." else "Nothing here matches, or only dotfiles do."
                 KText(words, tokens.type.captionSmall, tokens.color.mute, Modifier.padding(vertical = 12.dp), maxLines = 2)
             }
+        }
+        searchBelow(below, listing.path, shown) { hit ->
+            nav.open(if (hit.dir) FilesPlace.Dir(place.nodeId, place.anchor, hit.path) else FilesPlace.File(place.nodeId, place.anchor, hit.path))
         }
         if (listing.truncated) {
             item(key = "truncated") {

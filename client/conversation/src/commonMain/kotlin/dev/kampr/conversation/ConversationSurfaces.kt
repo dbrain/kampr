@@ -10,22 +10,40 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.ui.FallbackSurfaces
 import dev.kampr.shared.ui.FilesNav
 import dev.kampr.shared.ui.FilesPlace
+import dev.kampr.shared.ui.MenuRow
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.wire.PaneInfo
 
 class ConversationSurfaces(private val base: PaneSurfaces = FallbackSurfaces) : PaneSurfaces {
     private val held = HeldBytes()
+    private val searches = TranscriptSearches()
 
     @Composable
     override fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier) = base.Terminal(pane, info, modifier)
 
     @Composable
     override fun Conversation(pane: PaneState, info: PaneInfo?, modifier: Modifier) = CompositionLocalProvider(LocalHeldBytes provides held) {
-        PathLinks(pane.id, info?.cwd) { ConversationView(pane, info, modifier) }
+        PathLinks(pane.id, info?.cwd) { ConversationView(pane, info, modifier, search = searches[pane.id]) }
     }
 
     @Composable
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = base.KeyRow(pane, compact, modifier)
+
+    @Composable
+    override fun Tools(paneId: String, onUsed: () -> Unit) {
+        base.Tools(paneId, onUsed)
+        val search = searches[paneId]
+        if (search.onScreen == 0) return
+        MenuRow(
+            "Search transcript",
+            {
+                onUsed()
+                search.open = true
+            },
+            ConversationIcons.search,
+            label = "Search this conversation's transcript",
+        )
+    }
 
     @Composable
     override fun Zoom(pane: PaneState, modifier: Modifier) = base.Zoom(pane, modifier)

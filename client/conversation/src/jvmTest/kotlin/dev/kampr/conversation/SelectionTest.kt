@@ -96,11 +96,11 @@ private fun draggedAcrossTheTranscript(pane: PaneState): Int = withScene(
     body = { scene ->
         repeat(3) { scene.render() }
         // Measured against the rendered artboard, at density 2: the first line of the first step
-        // sits at 120 dp on a 390x844 phone, inside the one box its whole reply is drawn as,
+        // sits at 67 dp on a 390x844 phone, inside the one box its whole reply is drawn as,
         // whose content starts 30 dp in. A press has to land in the *first* line of it: a long
         // press takes the word under it and the drag extends from there, so a press one line low
         // copies an answer that starts halfway through itself.
-        scene.sendPointerEvent(PointerEventType.Press, Offset(70f, 255f))
+        scene.sendPointerEvent(PointerEventType.Press, Offset(70f, 149f))
         scene.sendPointerEvent(PointerEventType.Move, Offset(400f, 300f))
         scene.sendPointerEvent(PointerEventType.Move, Offset(700f, 340f))
         scene.sendPointerEvent(PointerEventType.Release, Offset(700f, 340f))
@@ -129,7 +129,7 @@ internal class SelectionToolbar : TextToolbar {
 // A long press is what starts a selection on a phone, and it is a real wall-clock wait: the
 // gesture is timed off the scene's own clock, which only a rendered frame advances.
 @OptIn(ExperimentalComposeUiApi::class)
-private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 255f): String? {
+private fun copiedFromTheTranscript(pane: PaneState, fromY: Float = 149f): String? {
     val toolbar = SelectionToolbar()
     val clipboard = HeldClipboard()
     withScene(
@@ -234,7 +234,7 @@ class SelectionTest {
     fun aButtonsCaptionIsNotSplicedIntoWhatTheReaderCopied() {
         // Both of these open on the same head, so the first selectable line of each is in the
         // same place; this one's is its prose, above the code card.
-        val pasted = copiedFromTheTranscript(paneOf(CARDS), fromY = 255f)
+        val pasted = copiedFromTheTranscript(paneOf(CARDS), fromY = 149f)
         assertTrue(pasted != null, "copying across the cards produced nothing")
         assertTrue("herdr pane list --json" in pasted, "the code itself was not copied: $pasted")
         assertTrue("shot.png" in pasted, "the attachment's name was not copied: $pasted")

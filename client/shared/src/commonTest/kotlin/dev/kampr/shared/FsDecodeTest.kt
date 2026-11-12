@@ -3,6 +3,7 @@ package dev.kampr.shared
 import dev.kampr.shared.net.FsKind
 import dev.kampr.shared.net.anchorPane
 import dev.kampr.shared.net.decodeListing
+import dev.kampr.shared.net.decodeNames
 import dev.kampr.shared.net.decodeRepo
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -77,6 +78,20 @@ class FsDecodeTest {
         assertNull(decodeListing("no such attachment".encodeToByteArray()))
         assertNull(decodeRepo(LISTING.encodeToByteArray()))
         assertNull(decodeListing(byteArrayOf(-1, -2, 0)))
+    }
+
+    @Test
+    fun aNameSearchDecodesWithItsFoldersMarked() {
+        val names = assertNotNull(
+            decodeNames(
+                """{"matches":[{"path":"/home/u/dev/kampr/src","dir":true},{"path":"/home/u/dev/kampr/src/a.rs","dir":false}],
+                "truncated":true,"indexed":1763,"cut":false,"later":1}""".encodeToByteArray(),
+            ),
+        )
+        assertEquals(listOf(true, false), names.matches.map { it.dir })
+        assertTrue(names.truncated)
+        assertEquals(1763, names.indexed)
+        assertNull(decodeNames("no such attachment".encodeToByteArray()))
     }
 
     @Test

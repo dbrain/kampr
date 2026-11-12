@@ -122,13 +122,13 @@ private class OldNodeIo : PaneIo {
 }
 
 @Composable
-private fun Transcript(store: KamprStore, io: PaneIo) {
+private fun Transcript(store: KamprStore, io: PaneIo, search: TranscriptSearch = TranscriptSearch()) {
     CompositionLocalProvider(
         LocalTokens provides tokensFor(SoftTheme, TypeScale.Phone),
         LocalPaneIo provides io,
     ) {
         Box(Modifier.size(PORTRAIT.first, PORTRAIT.second)) {
-            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize())
+            ConversationView(store.pane(PANE_ID), demoInfo(), Modifier.fillMaxSize(), search = search)
         }
     }
 }
@@ -138,9 +138,11 @@ class ConvoFindTest {
     private fun ComposeUiTest.shows(text: String) = onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
 
     private fun ComposeUiTest.search(store: KamprStore, io: PaneIo, answered: Boolean = true) {
-        setContent { Transcript(store, io) }
+        val find = TranscriptSearch()
+        setContent { Transcript(store, io, find) }
         waitForIdle()
-        onNodeWithContentDescription("Search the transcript").performClick()
+        find.open = true
+        waitForIdle()
         onNodeWithContentDescription("Search the transcript").performTextInput(NEEDLE)
         waitForIdle()
         // The ask is debounced, so the clock has to run for it. Waited on rather than slept
