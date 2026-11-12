@@ -1,7 +1,6 @@
 package dev.kampr.terminal
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -42,7 +41,7 @@ private fun ComposeUiTest.terminalAndItsTools(io: PaneIo = HushIo, onScreen: Boo
     setContent {
         CompositionLocalProvider(LocalTokens provides Phone.tokens(), LocalPaneIo provides io) {
             Column(Modifier.fillMaxSize()) {
-                Row { surfaces.Tools(pane.id) { closed++ } }
+                Column { surfaces.Tools(pane.id) { closed++ } }
                 if (onScreen) surfaces.Terminal(pane, null, Modifier.weight(1f))
             }
         }

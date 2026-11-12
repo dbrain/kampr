@@ -19,6 +19,7 @@ import dev.kampr.terminal.input.InputSink
 import dev.kampr.terminal.input.PaneKeyRow
 import dev.kampr.terminal.view.TerminalView
 import dev.kampr.terminal.view.ZoomButton
+import dev.kampr.terminal.view.zoomLabel
 
 class TerminalSurfaces(private val conversation: PaneSurfaces = FallbackSurfaces) : PaneSurfaces {
     private val sessions = PaneSessions()
@@ -42,6 +43,15 @@ class TerminalSurfaces(private val conversation: PaneSurfaces = FallbackSurfaces
             onUsed()
             session.asked = tool
         }
+        MenuRow(
+            "Zoom · ${zoomLabel(session.view.displayZoom)}",
+            {
+                onUsed()
+                session.view.sheetOpen = true
+            },
+            KamprIcons.zoom,
+            label = "Zoom, currently ${zoomLabel(session.view.displayZoom)}",
+        )
         MenuRow("Review row by row", { ask(PaneTool.Review) }, KamprIcons.tool, label = "Review this pane row by row")
         if (session.attachable) MenuRow("Attach a file", { ask(PaneTool.Attach) }, KamprIcons.link, label = "Attach a file for this pane")
     }

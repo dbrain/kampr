@@ -25,6 +25,7 @@ import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.ui.LocalManage
+import dev.kampr.shared.ui.LocalZoomGlyph
 import dev.kampr.shared.ui.PaneScreenDesktop
 import dev.kampr.shared.ui.PaneScreenMobile
 import dev.kampr.shared.ui.PaneSurfaces
@@ -46,7 +47,9 @@ private object Blank : PaneSurfaces {
 
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
 
-    @Composable override fun Zoom(pane: PaneState, modifier: Modifier) = Box(modifier.size(71.dp, 44.dp).named("Zoom"))
+    @Composable override fun Zoom(pane: PaneState, modifier: Modifier) {
+        if (!LocalZoomGlyph.current) Box(modifier.size(71.dp, 44.dp).named("Zoom"))
+    }
 }
 
 private class Look(
@@ -78,6 +81,8 @@ private val LAYOUTS = listOf(
 )
 
 private val CONTROLS = listOf("Terminal view", "Conversation view")
+
+private val ROW = listOf("Back to the herd", "Terminal view", "Conversation view", "Show pane actions")
 
 private fun info(agent: String?) = PaneInfo(
     id = PANE_ID,
@@ -157,6 +162,24 @@ class PaneStatusPlacementTest {
             }
         }
         assertEquals(emptyList(), moved)
+    }
+
+    @Test
+    fun aPhoneHeaderIsOneRowOfControls() {
+        val strays = LAYOUTS.filter { !it.desktop }.flatMap { layout ->
+            LOOKS.flatMap { look ->
+                var bounds: Map<String, Rect> = emptyMap()
+                runSkikoComposeUiTest(Size(layout.width.value, layout.height.value), Density(1f)) {
+                    show(layout, look)
+                    bounds = described()
+                }
+                val row = ROW.mapNotNull { name -> bounds[name]?.let { name to it } }
+                val back = row.first().second.center.y
+                listOfNotNull("${layout.name}, ${look.name}: only ${row.map { it.first }}".takeIf { row.size < ROW.size }) +
+                    row.filter { abs(it.second.center.y - back) > 2f }.map { "${layout.name}, ${look.name}: ${it.first} at ${it.second}, back at $back" }
+            }
+        }
+        assertEquals(emptyList(), strays)
     }
 
     @Test

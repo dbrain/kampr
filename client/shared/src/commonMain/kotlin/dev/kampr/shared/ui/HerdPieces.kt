@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.absolutePadding
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -19,6 +20,7 @@ import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -462,10 +464,18 @@ fun Badge(box: Dp, glyph: Dp, icon: Icon, tint: Color, label: String? = null) {
 
 // Filled for what the agent is doing; outlined with a glyph for what is wrong with the picture or
 // the keyboard, so "Quiet" never reads as a second kind of "Working" when the two share a tone.
+// An upright phone's header draws its statuses as one mark, so there a badge is drawn as nothing
+// and only its words are kept, over the mark, for a reader.
+val LocalStatusUnseen = staticCompositionLocalOf { false }
+
 @Composable
 fun StatusBadge(text: String, tone: Color, background: Color, label: String? = null, icon: Icon? = null, outlined: Boolean = false) {
     val tokens = Kampr.tokens
     val shape = RoundedCornerShape(tokens.radii.pill)
+    if (LocalStatusUnseen.current) {
+        Box(Modifier.let { if (label != null) it.named(label) else it }.fillMaxSize())
+        return
+    }
     Row(
         Modifier
             .let { if (label != null) it.named(label) else it }

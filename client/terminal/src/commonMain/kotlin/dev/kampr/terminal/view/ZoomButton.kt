@@ -16,6 +16,7 @@ import dev.kampr.shared.ui.Hint
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
+import dev.kampr.shared.ui.LocalZoomGlyph
 import dev.kampr.shared.ui.action
 import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.touchable
@@ -32,9 +33,11 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
     // its off switch is on. ADR 0013.
     val held = session.view.holdsPane
     val spoken = "Zoom, currently ${zoomLabel(session.view.displayZoom)}"
+    val glyph = LocalZoomGlyph.current
+    if (glyph && !held) return
     Box(
         modifier
-            .defaultMinSize(minWidth = 68.dp)
+            .defaultMinSize(minWidth = if (glyph) 36.dp else 68.dp)
             .background(if (open) tokens.color.accentSoft else tokens.color.surface, shape)
             .edge(tokens.card, shape)
             .touchable()
@@ -51,16 +54,18 @@ fun ZoomButton(session: PaneSession, modifier: Modifier = Modifier) {
         contentAlignment = Alignment.CenterStart,
     ) {
         Row(
-            Modifier.padding(horizontal = 12.dp),
+            Modifier.padding(horizontal = if (glyph) 10.dp else 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             IconGlyph(KamprIcons.zoom, 15.dp, if (open) tokens.color.accent else tokens.color.dim)
-            KText(
-                zoomLabel(session.view.displayZoom),
-                tokens.type.key,
-                if (open) tokens.color.accent else tokens.color.dim,
-            )
+            if (!glyph) {
+                KText(
+                    zoomLabel(session.view.displayZoom),
+                    tokens.type.key,
+                    if (open) tokens.color.accent else tokens.color.dim,
+                )
+            }
             if (held) KText("held", tokens.type.key, tokens.color.working)
         }
         Hint(spoken)

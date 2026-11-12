@@ -23,6 +23,11 @@ import dev.kampr.shared.wire.SizeMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 
+// Set on an upright phone's single header row, which has no room for the zoom control: there the
+// zoom lives in the pane's actions, and the control shows only while it holds the pane, because a
+// hold must be said in the header on the control that releases it (ADR 0013).
+val LocalZoomGlyph = staticCompositionLocalOf { false }
+
 interface PaneSurfaces {
     @Composable
     fun Terminal(pane: PaneState, info: PaneInfo?, modifier: Modifier)

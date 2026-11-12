@@ -7,8 +7,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.onAllNodesWithContentDescription
-import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.v2.runComposeUiTest
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -101,7 +102,7 @@ class TerminalPendingTest {
             "the terminal drew answer chips over a grid that is already showing the dialog",
         )
         assertTrue(
-            onAllNodesWithText("blocked", substring = true, ignoreCase = true)
+            onAllNodes(hasText("blocked", substring = true, ignoreCase = true) or hasContentDescription("blocked", substring = true, ignoreCase = true))
                 .fetchSemanticsNodes()
                 .isNotEmpty(),
             "the terminal says nothing about the pane being blocked, which is the one thing the " +

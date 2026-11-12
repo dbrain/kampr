@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -75,7 +77,9 @@ private val DESK_HEADER: Dp = 42.dp
 // leaves it, which on some heights is the window's edge.
 private val DESK_FOOT: Dp = 8.dp
 
-private val PHONE_HEADER: Dp = 88.dp
+private val PHONE_HEADER: Dp = 56.dp
+
+private val PHONE_TITLE: Dp = 48.dp
 
 // Why this pane will never paint, when there is nothing on its surface to read instead. The
 // node's own refusal about this pane stands in where the herd entry says nothing: a failure the
@@ -131,6 +135,26 @@ private fun StatusChip(info: PaneInfo?) {
     }
 }
 
+// The agent's state as the herd list draws it, colour and shape, on every pane including one with
+// nothing to report, so the title beside it never moves. Anything wrong with the pane is a warning
+// corner on it in the most serious one's colour; the badges themselves are composed unseen so each
+// still says its own sentence to a reader.
+@Composable
+private fun StatusMarkFor(info: PaneInfo?, warnings: List<PaneStatus>) {
+    val tokens = Kampr.tokens
+    val status = info?.let(::statusOf) ?: AgentStatus.Unknown
+    val word = statusWord(status)
+    Box(
+        Modifier.size(18.dp, PHONE_TITLE).announce("This agent is ${word.lowercase()}", urgent = status == AgentStatus.Blocked),
+        contentAlignment = Alignment.Center,
+    ) {
+        StatusMark(status, 10.dp)
+        warnings.firstOrNull()?.let { IconGlyph(KamprIcons.warning, 10.dp, it.tone, Modifier.align(Alignment.Center).offset(6.dp, (-7).dp)) }
+        CompositionLocalProvider(LocalStatusUnseen provides true) { warnings.forEach { it.draw() } }
+        Hint((listOf(word) + warnings.map { it.words }).joinToString(" · "))
+    }
+}
+
 // The name a pane had, held past the herd entry that carried it. A pane that leaves the herd takes
 // its title and its geometry with it, and every fallback in this header is the raw id — which is
 // what the operator saw when a shell exited. Monotone on purpose: nothing here is ever cleared,
@@ -145,7 +169,7 @@ private fun rememberLastKnown(paneId: String, info: PaneInfo?): PaneInfo? {
 // What the header says *about* the pane rather than which pane it is. `words` is what the overflow
 // pill lists when this one does not fit, and `tone` is what that pill borrows when this is the most
 // serious one hidden.
-private class PaneStatus(val words: String, val tone: Color, val draw: @Composable () -> Unit)
+private class PaneStatus(val words: String, val tone: Color, val agent: Boolean = false, val draw: @Composable () -> Unit)
 
 // One order on every layout: what the agent is doing first, then what is wrong with the pane, the
 // keyboard or the device, most serious first. Every host keeps them after the controls, so a status
@@ -155,7 +179,7 @@ private fun paneStatuses(pane: PaneState, info: PaneInfo?, readOnly: Boolean, go
     val tokens = Kampr.tokens
     val agent = info?.let(::statusOf) ?: AgentStatus.Unknown
     return listOfNotNull(
-        statusLabel(agent)?.let { PaneStatus(it, statusColor(agent)) { StatusChip(info) } },
+        statusLabel(agent)?.let { PaneStatus(it, statusColor(agent), agent = true) { StatusChip(info) } },
         gone?.let { PaneStatus(goneWord(it), tokens.color.blocked) { GoneBadge(it) } },
         pane.undelivered.takeIf { it > 0 }?.let { PaneStatus("Not sent", tokens.color.blocked) { UnsentBadge(it) } },
         PaneStatus("No stream", tokens.color.blocked) { StreamBadge() }.takeIf { info?.detail != null && info.paints },
@@ -280,47 +304,47 @@ fun PaneScreenMobile(
                 Modifier
                     .fillMaxWidth()
                     .background(tokens.color.bar)
-                    .let { if (landscape) it.edgeBottom() else it }
-                    .absolutePadding(
-                        left = 4.dp + safe.left,
-                        top = safe.top + 3.dp,
-                        right = 8.dp + safe.right,
-                        bottom = if (landscape) 3.dp else 0.dp,
-                    ),
+                    .edgeBottom()
+                    .absolutePadding(left = (if (landscape) 4.dp else 0.dp) + safe.left, top = safe.top + 3.dp, right = 8.dp + safe.right, bottom = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(if (landscape) 8.dp else 4.dp),
             ) {
-                BackAction(backLabel, onBack, target = if (landscape) LANDSCAPE_TOUCH else TOUCH)
-                KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f).asHeading())
-                watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
                 if (landscape) {
+                    BackAction(backLabel, onBack, target = LANDSCAPE_TOUCH)
+                } else {
+                    // Flush with the screen's edge rather than inset from it, so the full touch
+                    // target costs the title nothing past the chevron's own width.
+                    BackAction(backLabel, onBack, Modifier.size(TOUCH, PHONE_TITLE))
+                }
+                if (landscape) {
+                    KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f).asHeading())
+                    watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
                     StatusLine(paneStatuses(pane, info, readOnly, gone, shown), Modifier.weight(1f).height(LANDSCAPE_TOUCH))
                     if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
                     if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true)
+                } else {
+                    // One row on a phone held upright, and one width for the title whatever the
+                    // pane is doing: every status is the one mark before it, which names them all on
+                    // a long press. A second row cost the grid a line, a line of status under the
+                    // title moved the title, a status beside the controls pushed the switch out from
+                    // under the thumb, and an icon per status after the title cut "kampr · claude"
+                    // short on a 360 dp phone.
+                    Row(
+                        Modifier.weight(1f).height(PHONE_TITLE),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        StatusMarkFor(info, paneStatuses(pane, info, readOnly, gone, shown).filterNot { it.agent })
+                        KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f, fill = false).asHeading())
+                        watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
+                    }
+                    CompositionLocalProvider(LocalZoomGlyph provides true) {
+                        if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
+                    }
+                    if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true, glyphs = true)
                 }
                 NewAction(pane.id, target = LANDSCAPE_TOUCH)
                 PaneManageAction(pane.id, target = LANDSCAPE_TOUCH)
-            }
-            if (!landscape) {
-                // The controls lead and the statuses follow, end-aligned and flowing onto lines of
-                // their own: stale, unsent and read-only together outrun a 360 dp phone, and when
-                // they shared one flow with the switch, "Quiet" arriving pushed it out from under
-                // the thumb.
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(tokens.color.bar)
-                        .edgeBottom()
-                        .absolutePadding(left = 12.dp + safe.left, right = 12.dp + safe.right, bottom = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    // Glyphs rather than words on a phone held upright: the words took 200 of a
-                    // 360 dp row and left the statuses beside them no room to say anything.
-                    if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true, glyphs = true)
-                    if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
-                    StatusLine(paneStatuses(pane, info, readOnly, gone, shown), Modifier.weight(1f).height(LANDSCAPE_TOUCH))
-                }
             }
             TabStrip(tab, pane.id, onTab, onSideBySide = null, Modifier.absolutePadding(left = safe.left, right = safe.right))
             gone?.let { GoneStrip(it, Modifier.fillMaxWidth()) }

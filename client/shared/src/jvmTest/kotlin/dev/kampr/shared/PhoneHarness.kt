@@ -16,6 +16,7 @@ import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.TypeScale
 import dev.kampr.shared.theme.themeOf
 import dev.kampr.shared.ui.LocalSafeArea
+import dev.kampr.shared.ui.LocalZoomGlyph
 import dev.kampr.shared.ui.ManageIo
 import dev.kampr.shared.ui.PaneSurfaces
 import dev.kampr.shared.ui.SafeArea
@@ -53,7 +54,9 @@ object BlankSurfaces : PaneSurfaces {
 
     @Composable override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) = Box(modifier)
 
-    @Composable override fun Zoom(pane: PaneState, modifier: Modifier) = Box(modifier.size(40.dp))
+    @Composable override fun Zoom(pane: PaneState, modifier: Modifier) {
+        if (!LocalZoomGlyph.current) Box(modifier.size(40.dp))
+    }
 }
 
 // `LocalManage` defaults to refusing, and a header without the + and the ... is not the header the

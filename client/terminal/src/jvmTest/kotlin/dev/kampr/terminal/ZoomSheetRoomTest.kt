@@ -1,22 +1,27 @@
 package dev.kampr.terminal
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.ComposeUiTest
 import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
-import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.v2.runDesktopComposeUiTest
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.ui.LocalManage
@@ -75,6 +80,9 @@ private class Measured(private val real: TerminalSurfaces = TerminalSurfaces()) 
     override fun Zoom(pane: PaneState, modifier: Modifier) = real.Zoom(pane, modifier)
 
     @Composable
+    override fun Tools(paneId: String, onUsed: () -> Unit) = real.Tools(paneId, onUsed)
+
+    @Composable
     override fun KeyRow(pane: PaneState, compact: Boolean, modifier: Modifier) {
         val density = LocalDensity.current
         real.KeyRow(
@@ -113,14 +121,18 @@ class ZoomSheetRoomTest {
                 LocalManage provides RoomManage,
                 LocalSafeArea provides Phone.BARS,
             ) {
+                val pane = remember { Phone.shell() }
                 PaneScreenMobile(
-                    Phone.shell(), ROOM_INFO, PaneView.Terminal, surfaces, landscape, false,
+                    pane, ROOM_INFO, PaneView.Terminal, surfaces, landscape, false,
                     onBack = {}, onView = {}, modifier = Modifier.fillMaxSize(),
                 )
+                // An upright phone's header has no zoom control; there it is a row of the pane's
+                // actions sheet, which the app root composes and this test stands in for.
+                if (!landscape) Box(Modifier.size(1.dp)) { surfaces.Tools(pane.id) {} }
             }
         }
         waitForIdle()
-        onNodeWithContentDescription("Zoom, currently", substring = true).performClick()
+        onNodeWithContentDescription("Zoom, currently", substring = true).performSemanticsAction(SemanticsActions.OnClick)
         waitForIdle()
 
         val top = assertNotNull(surfaces.headerBottom, "the pane header never measured itself")

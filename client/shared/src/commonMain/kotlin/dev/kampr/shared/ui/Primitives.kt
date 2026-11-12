@@ -275,7 +275,16 @@ fun Segmented(
                         role = Role.Tab,
                         selected = active,
                     )
-                    .padding(horizontal = if (compact) 10.dp else 0.dp, vertical = if (compact) 0.dp else 8.dp),
+                    .padding(
+                        horizontal = if (icons != null) {
+                            6.dp
+                        } else if (compact) {
+                            10.dp
+                        } else {
+                            0.dp
+                        },
+                        vertical = if (compact) 0.dp else 8.dp,
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 if (icons != null) {
