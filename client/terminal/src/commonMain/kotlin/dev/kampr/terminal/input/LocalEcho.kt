@@ -72,7 +72,7 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
             rows[pending] = row
             cols[pending] = col
             glyphs[pending] = ch.code
-            if (trusted >= TRUST && firstShown == MAX_PENDING) firstShown = pending
+            if (trusted >= TRUST && firstShown == MAX_PENDING) firstShown = 0
             pending++
         }
         publish()
@@ -89,11 +89,14 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
         while (confirmed < pending) {
             val row = rows[confirmed]
             val col = cols[confirmed]
-            if (cell(col, row) == glyphs[confirmed]) {
+            val waiting = caret.row == row && caret.col == col
+            // A typed space lands on a cell that was already blank, and a letter can land on its
+            // own double, so the cell alone says nothing until the caret has left it (#663).
+            if (!waiting && cell(col, row) == glyphs[confirmed]) {
                 confirmed++
                 continue
             }
-            if (caret.row != row || caret.col != col) {
+            if (!waiting) {
                 learnWrap(cell, caret, col, row, glyphs[confirmed])
                 distrust()
                 return
@@ -105,6 +108,10 @@ class LocalEcho(private val clock: TimeSource = TimeSource.Monotonic) {
         expectCol = cols[confirmed - 1] + 1
         expectRow = rows[confirmed - 1]
         drop(confirmed)
+        if (trusted >= TRUST && pending > 0 && firstShown == MAX_PENDING) {
+            firstShown = 0
+            publish()
+        }
     }
 
     fun expire() {

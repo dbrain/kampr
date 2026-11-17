@@ -76,6 +76,42 @@ class LocalEchoTest {
         assertEquals(line.caret, line.echo.caret(line.caret))
     }
 
+    // A pane a few keys behind. The cell a typed space will land on is already blank, so it reads
+    // as the space's echo before the pane has sent one: only a caret that has moved past a cell
+    // says the pane wrote it. Taken for an echo, it left the next word guessed one column short,
+    // in the space's own cell, and the line jumped when the pane caught up.
+    @Test
+    fun aBlankCellIsNotTheEchoOfASpaceTheCaretHasNotPassed() {
+        val line = Line()
+        line.type("ab")
+        line.echoes("ab")
+        line.type("c d")
+        line.echoes("c")
+        assertEquals(" d", line.shown(), "the blank the space will land on was read as its echo")
+        line.type("e")
+        assertEquals(" de", line.shown())
+        assertEquals(Cursor(8, 0, true), line.echo.caret(line.caret), "the word after the space was guessed in the space's cell")
+        line.echoes(" ")
+        assertEquals("de", line.shown())
+        line.echoes("de")
+        assertEquals("", line.shown())
+        line.type("f")
+        assertEquals("f", line.shown(), "a line that echoed every key where it was typed lost its trust")
+    }
+
+    // Keys typed before the line had earned its trust are still on their way when it does, and
+    // drawing only the keys typed after them leaves a hole where they will land.
+    @Test
+    fun keysStillUnansweredWhenTheLineEarnsItsTrustAreDrawnWithTheRest() {
+        val line = Line()
+        line.type("abcd")
+        assertEquals("", line.shown())
+        line.echoes("ab")
+        assertEquals("cd", line.shown(), "the keys behind the ones that earned the trust were left undrawn")
+        line.type("e")
+        assertEquals("cde", line.shown())
+    }
+
     // `sudo` asking for a password after a line that was echoing: the guess is drawn for one round
     // trip and gone the moment the pane answers without it — and the line is not trusted again
     // until it echoes again.

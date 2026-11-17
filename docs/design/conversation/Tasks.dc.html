@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tasks sheet with live output</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0e0f13; color: #e8eaf0; font-family: Manrope, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+
+<div style="flex: none; height: 150px; padding: 12px 14px; font-size: 13.5px; line-height: 19px; color: #8d93a3; overflow: hidden; display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 11px; font-weight: 700; letter-spacing: 0.04em">CLAUDE</div>
+<div>The handler now keeps the kind. While the suite runs, the transcript side: each retry is a system record with its attempt and delay, so the pane can say which attempt it is on.</div>
+</div>
+
+<section aria-label="Tasks" style="flex: 1; min-height: 0; display: flex; flex-direction: column; background: #12141a; border-top: 1px solid #1e2129; border-radius: 16px 16px 0 0">
+<div style="display: flex; align-items: center; height: 44px; padding: 0 6px 0 14px; flex: none">
+<div style="flex: 1; font-size: 14px; font-weight: 700">Running now</div>
+<button style="height: 44px; padding: 0 10px; font-size: 13px; color: #8d93a3">Finished (7)</button>
+<button aria-label="Close" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round"><path d="M6 9l6 6 6-6"/></svg></button>
+</div>
+
+<div style="flex: none; display: flex; flex-direction: column; font-size: 13px; border-top: 1px solid #1e2129">
+<button style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px; text-align: left; background: #171a21; border-left: 3px solid #6ea8fe">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<span style="flex: 1; min-width: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cargo nextest run -p kampr-node</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #ffc857; flex: none">0:42</span>
+</button>
+<button style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px 0 17px; text-align: left; border-top: 1px solid #1e2129">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Explore · who reads api_error</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8d93a3; flex: none">1:10</span>
+</button>
+<button style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px 0 39px; text-align: left; border-top: 1px solid #1e2129">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<span style="flex: 1; min-width: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">rg -n isApiErrorMessage crates client</span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8d93a3; flex: none">0:03</span>
+</button>
+<button style="display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 14px 0 17px; text-align: left; border-top: 1px solid #1e2129">
+<span style="width: 8px; height: 8px; border-radius: 2px; background: #8d93a3; flex: none"></span>
+<span style="flex: 1; min-width: 0; font-family: 'IBM Plex Mono', monospace; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">npm run dev</span>
+<span style="font-size: 12px; color: #8d93a3; flex: none">background · 2 h</span>
+</button>
+</div>
+
+<div style="flex: none; display: flex; align-items: center; gap: 4px; height: 44px; padding: 0 8px 0 14px; border-top: 1px solid #1e2129; font-size: 13px">
+<div style="flex: 1; color: #8d93a3; font-size: 12px">Output · 214 lines · following</div>
+<button style="height: 36px; padding: 0 10px; color: #6ea8fe; font-weight: 600">Copy all</button>
+<button style="height: 36px; padding: 0 10px; color: #8d93a3">Background</button>
+<button style="height: 36px; padding: 0 10px; color: #ff6b6b; font-weight: 600">Stop</button>
+</div>
+<pre style="flex: 1; min-height: 0; margin: 0; padding: 10px 14px; background: #090a0d; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; line-height: 17px; color: #8d93a3; overflow: hidden; white-space: pre">    Starting 37 tests across 1 binary
+        PASS [0.38s] native::hooks::a_permission_request_is
+        PASS [0.41s] native::hooks::a_held_request_is_let_go
+        PASS [0.44s] native::hooks::a_question_is_asked_one
+        PASS [0.52s] native::hooks::message_display_is_the
+        PASS [0.55s] native::hooks::requests_on_one_pane
+<span style="color: #e8eaf0">        PASS [0.56s] native::hooks::a_subagents_request_out</span>
+<span style="color: #ffc857">     Running 31/37</span></pre>
+<div style="flex: none; display: flex; align-items: center; height: 40px; padding: 0 14px; border-top: 1px solid #1e2129; font-size: 12px; color: #8d93a3; gap: 12px">
+<button style="height: 40px; color: #8d93a3">Wrap lines</button>
+<button style="height: 40px; color: #8d93a3">Find</button>
+<span style="flex: 1"></span>
+<button style="height: 40px; color: #8d93a3">Go to its call</button>
+</div>
+</section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

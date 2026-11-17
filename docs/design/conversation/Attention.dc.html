@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Asks and trouble</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0e0f13; color: #e8eaf0; font-family: Manrope, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+
+<header style="height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 0; background: #12141a; border-bottom: 1px solid #1e2129">
+<button aria-label="Back" style="width: 30px; height: 44px; display: flex; align-items: center; justify-content: flex-start; padding-left: 4px"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+<span style="width: 10px; height: 10px; border-radius: 2px; background: #ff6b6b; flex: none"></span>
+<div style="flex: 1; min-width: 0; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Report retries in the hooks handler</div>
+<button aria-label="Session controls and actions" style="width: 40px; height: 44px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="#8d93a3"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+</header>
+
+<sc-if value="{{retrying}}" hint-placeholder-val="{{ true }}">
+<div role="status" style="flex: none; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 6px 6px 14px; background: #2a2414; border-bottom: 1px solid #1e2129; font-size: 13px">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<div style="flex: 1"><span style="font-weight: 600">Anthropic is overloaded.</span> Retry 3 of 10 in 8 s</div>
+<button style="height: 36px; padding: 0 10px; color: #ffc857; font-weight: 600">Stop</button>
+</div>
+</sc-if>
+<sc-if value="{{loggedOut}}" hint-placeholder-val="{{ false }}">
+<div role="alert" style="flex: none; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 6px 6px 14px; background: #2c1b20; border-bottom: 1px solid #1e2129; font-size: 13px">
+<span style="width: 8px; height: 8px; border-radius: 2px; background: #ff6b6b; flex: none"></span>
+<div style="flex: 1"><span style="font-weight: 600">Claude is not logged in</span> on desk-3. Nothing was sent.</div>
+<button style="height: 36px; padding: 0 10px; color: #ff9c9c; font-weight: 600">Log in</button>
+</div>
+</sc-if>
+<sc-if value="{{limited}}" hint-placeholder-val="{{ false }}">
+<div role="alert" style="flex: none; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 6px 6px 14px; background: #2c1b20; border-bottom: 1px solid #1e2129; font-size: 13px">
+<span style="width: 8px; height: 8px; border-radius: 2px; background: #ff6b6b; flex: none"></span>
+<div style="flex: 1"><span style="font-weight: 600">Weekly limit reached.</span> Held, not sent: continuing would spend usage credits. Resets Fri 17:00</div>
+<button style="height: 36px; padding: 0 10px; color: #ff9c9c; font-weight: 600">Options</button>
+</div>
+</sc-if>
+
+<main style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; font-size: 13.5px; line-height: 19px">
+<div style="display: flex; flex-direction: column; gap: 2px">
+<div style="font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em">CLAUDE</div>
+<div>All 37 pass, and the suite fails with the arm reverted. I'll push the branch once the review agent is done.</div>
+</div>
+<div style="display: flex; flex-direction: column; border: 1px solid #1e2129; border-radius: 8px; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 18px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 7px 10px">
+<span style="width: 8px; height: 8px; border-radius: 2px; background: #ff6b6b; flex: none"></span>
+<span style="color: #8d93a3; flex: none">Bash</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">git push origin hooks-trouble</span>
+<span style="color: #ff9c9c; flex: none">asking</span>
+</div>
+</div>
+</main>
+
+<section aria-label="Waiting on you" style="flex: none; display: flex; flex-direction: column; background: #171a21; border-top: 2px solid #ff6b6b">
+<div style="display: flex; align-items: center; height: 40px; padding: 0 4px 0 14px; font-size: 12px; color: #8d93a3">
+<div style="flex: 1"><span style="color: #e8eaf0; font-weight: 700">Bash</span> · Claude · 1 of 2 waiting</div>
+<button style="height: 40px; padding: 0 10px; color: #8d93a3">Next: Review agent, Write</button>
+</div>
+<div style="margin: 0 14px; padding: 10px; background: #090a0d; border-radius: 8px; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 19px; display: flex; align-items: flex-start; gap: 8px">
+<div style="flex: 1; min-width: 0; word-break: break-all">git push origin hooks-trouble</div>
+<button aria-label="Copy command" style="width: 32px; height: 32px; margin: -6px -6px -6px 0; display: flex; align-items: center; justify-content: center; flex: none"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg></button>
+</div>
+<div style="padding: 6px 14px 0; font-size: 12px; color: #8d93a3">Push the branch to the remote</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; padding: 10px 14px 6px">
+<button style="height: 48px; border-radius: 10px; background: #22262f; font-weight: 600; font-size: 14px">Deny</button>
+<button style="height: 48px; border-radius: 10px; background: #6ea8fe; color: #0e0f13; font-weight: 700; font-size: 14px">Allow</button>
+<button style="height: 48px; border-radius: 10px; background: #22262f; font-weight: 600; font-size: 13px">Always git push</button>
+</div>
+<div style="display: flex; align-items: center; gap: 4px; padding: 0 8px 10px; font-size: 12px; color: #8d93a3">
+<button style="height: 36px; padding: 0 8px">Deny and say why</button>
+<button style="height: 36px; padding: 0 8px">Edit the command</button>
+<span style="flex: 1"></span>
+<button style="height: 36px; padding: 0 8px">Open at terminal</button>
+</div>
+</section>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"trouble":{"editor":"enum","options":["retrying","logged out","limit reached","none"],"default":"retrying"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+const t = this.props.trouble ?? 'retrying';
+return { retrying: t === 'retrying', loggedOut: t === 'logged out', limited: t === 'limit reached' };
+}
+}
+</script>
+</body>
+</html>

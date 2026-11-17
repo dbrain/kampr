@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Conversation on a wide screen</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 1280px; height: 800px; box-sizing: border-box; background: #0e0f13; color: #e8eaf0; font-family: Manrope, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; font-size: 14px">
+
+<header style="height: 44px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 12px 0 16px; background: #12141a; border-bottom: 1px solid #1e2129">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<div style="font-weight: 700">Report retries in the hooks handler</div>
+<div style="font-size: 12px; color: #8d93a3; flex: 1">kampr · desk-3 · ~/dev/kampr</div>
+<button style="height: 32px; padding: 0 10px; border-radius: 8px; background: #171a21; font-size: 12px">Fable 5 · medium</button>
+<button style="height: 32px; padding: 0 10px; border-radius: 8px; background: #171a21; font-size: 12px; color: #ffc857">bypass permissions</button>
+<button style="height: 32px; padding: 0 10px; border-radius: 8px; background: #171a21; font-size: 12px">ctx 212k · 180k cached</button>
+<button style="height: 32px; padding: 0 10px; border-radius: 8px; background: #171a21; font-size: 12px; color: #ffc857">Max plan · week 97%</button>
+<button style="height: 32px; padding: 0 10px; border-radius: 8px; background: #171a21; font-size: 12px; color: #8d93a3">Open in terminal</button>
+</header>
+
+<div style="flex: 1; min-height: 0; display: flex">
+
+<div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<main style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 14px; padding: 18px 40px; line-height: 21px">
+<div style="display: flex; flex-direction: column; gap: 2px; max-width: 720px; padding-left: 12px; border-left: 3px solid #6ea8fe">
+<div style="font-size: 11px; font-weight: 700; color: #6ea8fe; letter-spacing: 0.04em">YOU · 14:02</div>
+<div>StopFailure carries the error kind. Surface it in the pane, with the retry count.</div>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px; max-width: 720px">
+<div style="display: flex; align-items: center; gap: 8px"><div style="font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em; flex: 1">CLAUDE · 14:03</div><button style="height: 24px; padding: 0 8px; font-size: 12px; color: #8d93a3">Copy</button><button style="height: 24px; padding: 0 8px; font-size: 12px; color: #8d93a3">Markdown</button><button style="height: 24px; padding: 0 8px; font-size: 12px; color: #8d93a3">Quote</button></div>
+<div>The handler treats StopFailure as a plain Stop today, so the kind is dropped. I'll read it there and fold the transcript's retry records into one state.</div>
+</div>
+<div style="display: flex; flex-direction: column; max-width: 720px; border: 1px solid #1e2129; border-radius: 8px; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 12.5px; line-height: 18px">
+<button style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; text-align: left; border-bottom: 1px solid #1e2129"><span style="width: 8px; height: 8px; border-radius: 50%; background: #58d68d; flex: none"></span><span style="color: #8d93a3; width: 44px; flex: none">Read</span><span style="flex: 1">crates/kampr-node/src/hooks.rs</span><span style="color: #8d93a3">497 lines</span></button>
+<button style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; text-align: left; border-bottom: 1px solid #1e2129"><span style="width: 8px; height: 8px; border-radius: 50%; background: #58d68d; flex: none"></span><span style="color: #8d93a3; width: 44px; flex: none">Edit</span><span style="flex: 1">crates/kampr-node/src/hooks.rs</span><span style="color: #58d68d">+14</span><span style="color: #ff6b6b">−3</span></button>
+<button style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; text-align: left; border-bottom: 1px solid #1e2129; background: #171a21; box-shadow: inset 3px 0 0 #6ea8fe"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span><span style="color: #8d93a3; width: 44px; flex: none">Bash</span><span style="flex: 1">cargo nextest run -p kampr-node</span><span style="color: #ffc857">0:42</span></button>
+<button style="display: flex; align-items: center; gap: 10px; padding: 7px 12px; text-align: left"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span><span style="color: #8d93a3; width: 44px; flex: none">Agent</span><span style="flex: 1">Explore · who reads api_error</span><span style="color: #8d93a3">6 calls · 1:10</span></button>
+</div>
+<div style="max-width: 720px">The handler now keeps the kind. While the suite runs, the transcript side: each retry is a system record with its attempt and delay, so the pane can say</div>
+</main>
+<footer style="flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 40px 14px; border-top: 1px solid #1e2129; background: #12141a">
+<label style="flex: 1; max-width: 720px; display: flex; align-items: center; height: 44px; padding: 0 12px; background: #171a21; border: 1px solid #1e2129; border-radius: 12px"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%)">Reply</span><input type="text" placeholder="Reply, or queue behind this turn.  /  for commands,  @  for files" style="flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: #e8eaf0; font: inherit"></label>
+<button style="height: 44px; padding: 0 16px; border-radius: 12px; background: #6ea8fe; color: #0e0f13; font-weight: 700">Queue</button>
+<button style="height: 44px; padding: 0 12px; border-radius: 12px; background: #22262f">Send now</button>
+<button style="height: 44px; padding: 0 12px; color: #ff6b6b; font-weight: 600">Stop</button>
+</footer>
+</div>
+
+<aside style="width: 460px; flex: none; display: flex; flex-direction: column; background: #12141a; border-left: 1px solid #1e2129">
+<div style="display: flex; align-items: center; height: 40px; padding: 0 8px; gap: 2px; border-bottom: 1px solid #1e2129; font-size: 13px">
+<button style="height: 40px; padding: 0 10px; font-weight: 700; box-shadow: inset 0 -2px 0 #6ea8fe">Tasks 3</button>
+<button style="height: 40px; padding: 0 10px; color: #8d93a3">Session</button>
+<button style="height: 40px; padding: 0 10px; color: #8d93a3">Files</button>
+<button style="height: 40px; padding: 0 10px; color: #8d93a3">Search</button>
+</div>
+<div style="display: flex; flex-direction: column; font-size: 13px">
+<button style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 14px; text-align: left; background: #171a21"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857"></span><span style="flex: 1; font-family: 'IBM Plex Mono', monospace; font-size: 12px">cargo nextest run -p kampr-node</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #ffc857">0:42</span></button>
+<button style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 14px; text-align: left; border-top: 1px solid #1e2129"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857"></span><span style="flex: 1">Explore · who reads api_error</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8d93a3">1:10</span></button>
+<button style="display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 14px 0 36px; text-align: left; border-top: 1px solid #1e2129"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857"></span><span style="flex: 1; font-family: 'IBM Plex Mono', monospace; font-size: 12px">rg -n isApiErrorMessage crates client</span><span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px; color: #8d93a3">0:03</span></button>
+</div>
+<div style="display: flex; align-items: center; height: 40px; padding: 0 6px 0 14px; border-top: 1px solid #1e2129; border-bottom: 1px solid #1e2129; font-size: 12px; color: #8d93a3; gap: 2px">
+<div style="flex: 1">Output · 214 lines · following</div>
+<button style="height: 32px; padding: 0 8px; color: #6ea8fe; font-weight: 600">Copy all</button>
+<button style="height: 32px; padding: 0 8px">Background</button>
+<button style="height: 32px; padding: 0 8px; color: #ff6b6b; font-weight: 600">Stop</button>
+</div>
+<pre style="flex: 1; min-height: 0; margin: 0; padding: 10px 14px; background: #090a0d; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 18px; color: #8d93a3; overflow: hidden; white-space: pre">    Starting 37 tests across 1 binary
+        PASS [0.38s] native::hooks::a_permission_request_is_a_hook
+        PASS [0.41s] native::hooks::a_held_request_is_let_go_when
+        PASS [0.44s] native::hooks::a_question_is_asked_one_at_a
+        PASS [0.52s] native::hooks::message_display_is_the_live
+        PASS [0.55s] native::hooks::requests_on_one_pane_queue
+<span style="color: #e8eaf0">        PASS [0.56s] native::hooks::a_subagents_request_outlasts</span>
+<span style="color: #ffc857">     Running 31/37</span></pre>
+</aside>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

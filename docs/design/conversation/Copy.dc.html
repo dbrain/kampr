@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Copying from the conversation</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0e0f13; color: #e8eaf0; font-family: Manrope, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+
+<header style="height: 48px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 4px 0 14px; background: #171a21; border-bottom: 1px solid #1e2129; font-size: 14px">
+<div style="flex: 1; font-weight: 700">2 turns selected</div>
+<button style="height: 44px; padding: 0 10px; color: #8d93a3">To end</button>
+<button style="height: 44px; padding: 0 10px; color: #8d93a3">All</button>
+<button style="height: 44px; padding: 0 12px; color: #6ea8fe; font-weight: 700">Done</button>
+</header>
+
+<main style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: 10px; padding: 10px 14px; font-size: 13.5px; line-height: 19px">
+
+<div style="display: flex; flex-direction: column; gap: 2px; color: #8d93a3; padding-left: 10px; border-left: 3px solid #6ea8fe">
+<div style="font-size: 11px; font-weight: 700; color: #6ea8fe; letter-spacing: 0.04em">YOU · 14:02</div>
+<div>StopFailure carries the error kind. Surface it in the pane, with the retry count.</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px; margin: 0 -8px; padding: 8px; background: #171a21; border-radius: 10px; box-shadow: inset 0 0 0 1.5px #6ea8fe">
+<div style="display: flex; align-items: center; height: 24px"><span style="flex: 1; font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em">CLAUDE · 14:03</span><button style="height: 32px; padding: 0 8px; font-size: 12px; font-weight: 600; color: #6ea8fe">Copy turn</button></div>
+<div>The fix is one arm in the handler. StopFailure keeps its kind and the pane reads it:</div>
+<div style="display: flex; flex-direction: column; border: 1px solid #1e2129; border-radius: 8px; overflow: hidden; background: #090a0d">
+<div style="display: flex; align-items: center; height: 36px; padding: 0 2px 0 10px; font-size: 11px; color: #8d93a3; border-bottom: 1px solid #1e2129">
+<span style="flex: 1; font-family: 'IBM Plex Mono', monospace">rust · hooks.rs</span>
+<button style="height: 36px; padding: 0 10px; color: #6ea8fe; font-weight: 600; font-size: 12px">Copy code</button>
+</div>
+<pre style="margin: 0; padding: 8px 10px; font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; line-height: 17px; white-space: pre; overflow: hidden">"StopFailure" => {
+    self.trouble(&pane, &event["error"]);
+    self.release(&pane, main_agent);
+}</pre>
+</div>
+<div style="display: flex; flex-direction: column; border: 1px solid #1e2129; border-radius: 8px; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 18px">
+<div style="display: flex; align-items: center; gap: 8px; padding: 0 2px 0 10px; min-height: 36px">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #58d68d; flex: none"></span>
+<span style="color: #8d93a3; flex: none">Bash</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cargo nextest run -p kampr-node</span>
+<button style="height: 36px; padding: 0 8px; color: #6ea8fe; font-family: Manrope, sans-serif; font-weight: 600">Command</button>
+<button style="height: 36px; padding: 0 8px; color: #6ea8fe; font-family: Manrope, sans-serif; font-weight: 600">Output</button>
+</div>
+</div>
+<div>All 37 pass, and the suite still fails with the arm reverted.</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 2px; margin: 0 -8px; padding: 8px 8px 8px 12px; background: #171a21; border-radius: 10px; box-shadow: inset 0 0 0 1.5px #6ea8fe, inset 4px 0 0 #6ea8fe">
+<div style="display: flex; align-items: center; height: 24px"><span style="flex: 1; font-size: 11px; font-weight: 700; color: #6ea8fe; letter-spacing: 0.04em">YOU · 14:09</span><button style="height: 32px; padding: 0 8px; font-size: 12px; font-weight: 600; color: #6ea8fe">Copy turn</button></div>
+<div>Good. Same for the transcript records?</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 2px; color: #8d93a3">
+<div style="font-size: 11px; font-weight: 700; letter-spacing: 0.04em">CLAUDE · 14:09</div>
+<div>Yes. Each retry is a system record with its attempt and delay, and the final one is marked as an API error, so the parser can fold them into one state.</div>
+</div>
+
+</main>
+
+<footer style="flex: none; display: flex; flex-direction: column; background: #12141a; border-top: 1px solid #1e2129; padding: 6px 6px 12px">
+<div style="padding: 4px 8px 6px; font-size: 11px; color: #8d93a3">Copy 2 turns · 1 code block · 1 tool call</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px">
+<button style="height: 48px; border-radius: 10px; background: #6ea8fe; color: #0e0f13; font-weight: 700; font-size: 14px">Copy as written</button>
+<button style="height: 48px; border-radius: 10px; background: #22262f; font-weight: 600; font-size: 14px">Copy as Markdown</button>
+<button style="height: 44px; border-radius: 10px; background: #22262f; font-size: 13px">Code only</button>
+<button style="height: 44px; border-radius: 10px; background: #22262f; font-size: 13px">With tool output</button>
+<button style="height: 44px; border-radius: 10px; background: #22262f; font-size: 13px">Share</button>
+<button style="height: 44px; border-radius: 10px; background: #22262f; font-size: 13px">Quote in reply</button>
+</div>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

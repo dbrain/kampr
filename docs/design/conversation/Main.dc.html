@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Conversation, compact transcript</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #0e0f13; color: #e8eaf0; font-family: Manrope, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden">
+
+<header style="height: 44px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 6px 0 0; background: #12141a; border-bottom: 1px solid #1e2129">
+<button aria-label="Back" style="width: 30px; height: 44px; display: flex; align-items: center; justify-content: flex-start; padding-left: 4px"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg></button>
+<span style="width: 10px; height: 10px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<div style="flex: 1; min-width: 0; font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Report retries in the hooks handler</div>
+<div style="display: flex; background: #171a21; border-radius: 8px; padding: 2px; flex: none">
+<button aria-label="Terminal" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l4 4-4 4M12 16h7"/></svg></button>
+<button aria-label="Conversation" style="width: 34px; height: 30px; display: flex; align-items: center; justify-content: center; background: #22262f; border-radius: 6px"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e8eaf0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 6h14M5 12h14M5 18h9"/></svg></button>
+</div>
+<button aria-label="Session controls and actions" style="width: 40px; height: 44px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="#8d93a3"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+</header>
+
+<div style="flex: none; display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 2px 0 14px; background: #171a21; border-bottom: 1px solid #1e2129; font-size: 12px">
+<span style="font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em; flex: none">CLAUDE · 14:03</span>
+<span style="flex: 1; min-width: 0; padding-left: 8px; color: #8d93a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">The handler treats StopFailure as a plain</span>
+<button aria-label="Copy this turn" style="width: 40px; height: 36px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg></button>
+<button aria-label="Collapse this turn" style="width: 40px; height: 36px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button>
+</div>
+
+<main style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; gap: {{gap}}; padding: {{pad}} 14px; font-size: {{size}}; line-height: {{lead}}">
+
+<div style="display: flex; flex-direction: column; border: 1px solid #1e2129; border-radius: 8px; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 18px">
+<button style="display: flex; align-items: center; gap: 8px; padding: {{row}} 10px; text-align: left; border-bottom: 1px solid #1e2129">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #58d68d; flex: none"></span>
+<span style="color: #8d93a3; flex: none">Edit</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">hooks.rs</span>
+<span style="color: #58d68d; flex: none">+14</span><span style="color: #ff6b6b; flex: none">−3</span>
+</button>
+<button style="display: flex; align-items: center; gap: 8px; padding: {{row}} 10px; text-align: left; color: #8d93a3; border-bottom: 1px solid #1e2129">
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+<span style="flex: 1">4 more calls, all finished</span>
+</button>
+<button style="display: flex; align-items: center; gap: 8px; padding: {{row}} 10px; text-align: left">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #58d68d; flex: none"></span>
+<span style="color: #8d93a3; flex: none">Bash</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cargo nextest run -p kampr-node</span>
+<span style="color: #8d93a3; flex: none">37 pass</span>
+</button>
+</div>
+<div>All 37 pass, and the suite fails with the arm reverted.</div>
+
+<div style="display: flex; flex-direction: column; gap: 2px; padding: 2px 0 2px 10px; border-left: 3px solid #6ea8fe">
+<div style="display: flex; align-items: center; height: 24px">
+<span style="flex: 1; font-size: 11px; font-weight: 700; color: #6ea8fe; letter-spacing: 0.04em">YOU · 14:09</span>
+<button aria-label="Copy this turn" style="width: 40px; height: 32px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg></button>
+<button aria-label="Collapse this turn" style="width: 40px; height: 32px; margin-right: -12px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button>
+</div>
+<div>Good. Same for the transcript records, and run the whole node suite.</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; align-items: center; height: 24px">
+<span style="flex: 1; font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em">CLAUDE · 14:09</span>
+<button aria-label="Copy this turn" style="width: 40px; height: 32px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 012-2h9"/></svg></button>
+<button aria-label="Collapse this turn" style="width: 40px; height: 32px; margin-right: -12px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg></button>
+</div>
+<div style="display: flex; flex-direction: column; border: 1px solid #1e2129; border-radius: 8px; overflow: hidden; font-family: 'IBM Plex Mono', monospace; font-size: 12px; line-height: 18px">
+<div style="display: flex; flex-direction: column; background: #090a0d">
+<button style="display: flex; align-items: center; gap: 8px; padding: {{row}} 10px; text-align: left">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<span style="color: #8d93a3; flex: none">Bash</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">cargo nextest run -p kampr-node</span>
+<span style="color: #ffc857; flex: none">0:42</span>
+</button>
+<div style="padding: 0 10px 8px 26px; color: #8d93a3; white-space: nowrap; overflow: hidden">
+<div style="overflow: hidden; text-overflow: ellipsis">PASS [0.41s] native::hooks::a_held_request_is_let_go</div>
+<div style="overflow: hidden; text-overflow: ellipsis; color: #e8eaf0">PASS [0.56s] native::hooks::a_subagents_request_outlasts</div>
+</div>
+</div>
+<button style="display: flex; align-items: center; gap: 8px; padding: {{row}} 10px; text-align: left; border-top: 1px solid #1e2129">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<span style="color: #8d93a3; flex: none">Agent</span>
+<span style="flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Explore · who reads api_error</span>
+<span style="color: #8d93a3; flex: none">6 calls</span>
+<svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+</button>
+</div>
+<div>While the suite runs, the transcript side: each retry is a system record with its attempt and delay, so the pane can say</div>
+</div>
+
+</main>
+
+<sc-if value="{{asBar}}" hint-placeholder-val="{{ true }}">
+<button style="flex: none; display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px; background: #12141a; border-top: 1px solid #1e2129; font-size: 13px; text-align: left; width: 100%">
+<span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857; flex: none"></span>
+<span style="font-family: 'IBM Plex Mono', monospace; font-size: 12px">Bash 0:42</span>
+<span style="color: #8d93a3; flex: 1">2 running · 1 agent</span>
+<span style="color: #8d93a3">Tasks</span>
+<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>
+</button>
+</sc-if>
+<sc-if value="{{asChips}}" hint-placeholder-val="{{ false }}">
+<div style="flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 14px; background: #12141a; border-top: 1px solid #1e2129; font-size: 12px">
+<button style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 16px; background: #22262f"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857"></span><span style="font-family: 'IBM Plex Mono', monospace">Bash 0:42</span></button>
+<button style="display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border-radius: 16px; background: #22262f"><span style="width: 8px; height: 8px; border-radius: 50%; background: #ffc857"></span>Explore 1:10</button>
+<span style="flex: 1"></span>
+<button style="height: 32px; padding: 0 6px; color: #8d93a3">All</button>
+</div>
+</sc-if>
+
+<footer style="flex: none; display: flex; flex-direction: column; gap: 4px; padding: 8px 10px 6px; background: #12141a; border-top: 1px solid #1e2129">
+<div style="display: flex; align-items: flex-end; gap: 8px">
+<label style="flex: 1; display: flex; align-items: center; min-height: 44px; padding: 0 12px; background: #171a21; border: 1px solid #1e2129; border-radius: 12px"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%)">Reply</span><input type="text" placeholder="Reply, or queue behind this turn" style="flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: #e8eaf0; font: inherit; font-size: 14px"></label>
+<button aria-label="Queue reply" style="width: 44px; height: 44px; border-radius: 12px; background: #6ea8fe; display: flex; align-items: center; justify-content: center; flex: none"><svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#0e0f13" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
+</div>
+<div style="display: flex; align-items: center; font-size: 12px; color: #8d93a3">
+<button aria-label="Commands" style="width: 40px; height: 32px; font-family: 'IBM Plex Mono', monospace; font-size: 15px">/</button>
+<button aria-label="Mention a file" style="width: 40px; height: 32px; font-family: 'IBM Plex Mono', monospace; font-size: 15px">@</button>
+<button aria-label="Attach" style="width: 40px; height: 32px; display: flex; align-items: center; justify-content: center"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg></button>
+<span style="flex: 1"></span>
+<button style="height: 32px; padding: 0 8px; color: #ffc857">bypass permissions</button>
+<button style="height: 32px; padding: 0 8px; color: #ff6b6b; font-weight: 600">Stop</button>
+</div>
+<button style="display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 4px; font-size: 11.5px; color: #8d93a3; text-align: left; border-top: 1px solid #1e2129; white-space: nowrap">
+<span style="color: #e8eaf0">Fable 5</span><span>medium</span>
+<span style="flex: 1"></span>
+<span>ctx <span style="color: #e8eaf0">212k</span> · 180k cached</span>
+<span style="flex: 1"></span>
+<span>5h 46% · wk <span style="color: #ffc857">97%</span></span>
+</button>
+</footer>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"density":{"editor":"enum","options":["compact","comfortable"],"default":"compact"},"activity":{"editor":"enum","options":["bar","chips"],"default":"bar"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() {
+const compact = (this.props.density ?? 'compact') === 'compact';
+const bar = (this.props.activity ?? 'bar') === 'bar';
+return {
+size: compact ? '13.5px' : '15px',
+lead: compact ? '19px' : '23px',
+gap: compact ? '10px' : '16px',
+pad: compact ? '10px' : '14px',
+row: compact ? '7px' : '11px',
+asBar: bar,
+asChips: !bar,
+};
+}
+}
+</script>
+</body>
+</html>

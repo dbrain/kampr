@@ -578,6 +578,7 @@ const CLEAR: &str = "\u{3}";
 /// Text runs to `W-3` before it wraps (#558, #564).
 const MEASURED: Measured = Measured {
     margin: 2,
+    wrap_ansi: true,
     clear: Some(CLEAR),
     keys: Some(EditKeys {
         images: true,

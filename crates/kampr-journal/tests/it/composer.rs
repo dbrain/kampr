@@ -316,3 +316,51 @@ fn only_a_harness_measured_booting_says_whether_it_is_listening() {
     assert!(agy().listening().is_none());
     assert!(omp().listening().is_none());
 }
+
+/// **Every row break Claude draws, read back as the key that made it** (#662). Each line of the
+/// fixture is a real composer after a run of keys: prose and words no row can hold (a path, a
+/// URL, an identifier, a run of one letter) at 60, 77, 95 and 121 columns, and two sentences
+/// captured after every key. A row filled to its last column, the row under one, and a word cut
+/// across rows are the breaks a rule about widths read as a space or a newline nobody typed.
+#[test]
+fn every_row_break_in_claudes_box_reads_back_as_what_was_typed() {
+    let path = common::fixtures()
+        .join("composer")
+        .join("claude-typed-rows.jsonl");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let mut wrong = Vec::new();
+    for line in text.lines() {
+        let shot: serde_json::Value = serde_json::from_str(line).expect("a capture");
+        let rows: Vec<&str> = shot["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row.as_str().expect("a row"))
+            .collect();
+        let at = |i: usize| shot["caret"][i].as_u64().expect("caret") as u16;
+        let frame = Frame {
+            cols: shot["cols"].as_u64().expect("cols") as u16,
+            faint_after_caret: false,
+        };
+        let typed = shot["typed"].as_str().expect("typed");
+        let read = claude().composer().expect("a reader")(
+            &rows,
+            Caret {
+                col: at(0),
+                row: at(1),
+            },
+            frame,
+        );
+        let got = read.map(|c| (c.text, c.caret));
+        if got != Some((typed.to_string(), typed.chars().count())) {
+            wrong.push(format!("{} columns: typed {typed:?}, read {got:?}", frame.cols));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "{} of {} misread:\n{}",
+        wrong.len(),
+        text.lines().count(),
+        wrong.join("\n")
+    );
+}

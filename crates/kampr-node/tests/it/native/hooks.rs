@@ -1449,6 +1449,24 @@ fn subagent(event: Value) -> Value {
     event
 }
 
+/// The main agent's turn ends, and a finished background task starts another, while a background
+/// subagent's request is still held (#657).
+#[tokio::test]
+async fn a_subagents_request_outlasts_the_main_agents_turn_and_ends_with_the_session() {
+    let mut c = Hooked::start().await;
+    c.watch(false).await;
+    let theirs = c.fire(subagent(request("toolu_sub", "touch made.txt")));
+    c.question().await;
+    for event in ["Stop", "UserPromptSubmit", "StopFailure"] {
+        c.fire(json!({ "hook_event_name": event, "prompt": "<task-notification>" }));
+        c.settle(Duration::from_millis(300)).await;
+        assert!(!c.exited(&theirs), "{event} let the subagent's request go");
+    }
+    c.fire(json!({ "hook_event_name": "SessionEnd" }));
+    assert_eq!(c.ran(&theirs).await.out, "");
+    c.cleared().await;
+}
+
 /// A subagent's dialog is not drawn on the main screen (#636), so its request outlives the main
 /// agent's dialog closing, and its card says whose it is.
 #[tokio::test]
@@ -1498,7 +1516,7 @@ async fn a_subagents_request_says_whose_it_is_and_outlasts_the_main_agents_dialo
         card["header"], "Colour · 1 of 2 · general-purpose subagent",
         "{card}"
     );
-    c.fire(json!({ "hook_event_name": "Stop" }));
+    c.fire(json!({ "hook_event_name": "SessionEnd" }));
     assert_eq!(c.ran(&asked).await.out, "");
 }
 

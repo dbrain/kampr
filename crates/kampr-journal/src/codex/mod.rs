@@ -430,6 +430,7 @@ const CLEAR: &str = "\u{15}";
 /// Text runs to `W-2` before it wraps (#558, #564).
 const MEASURED: Measured = Measured {
     margin: 1,
+    wrap_ansi: false,
     clear: Some(CLEAR),
     keys: Some(EditKeys {
         images: true,

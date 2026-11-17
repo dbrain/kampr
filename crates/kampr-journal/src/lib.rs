@@ -16,6 +16,7 @@ pub mod omp;
 mod output;
 pub mod presence;
 pub mod process;
+mod rewrap;
 pub mod root;
 pub(crate) mod scan;
 pub mod search;

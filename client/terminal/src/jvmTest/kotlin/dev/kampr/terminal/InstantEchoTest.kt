@@ -31,7 +31,7 @@ class InstantEchoTest {
     // The pane's own echo: the character written where the caret was, and the caret one on.
     private fun ComposeUiTest.echo(pane: PaneState, text: String) {
         val caret = pane.cursor
-        val line = pane.cells.rowText(caret.row).trimEnd() + text
+        val line = pane.cells.rowText(caret.row).take(caret.col).padEnd(caret.col) + text
         pane.applyPatch(
             ServerMsg.GridPatch(
                 Phone.PANE,
@@ -58,6 +58,12 @@ class InstantEchoTest {
         return true
     }
 
+    private fun blank(map: PixelMap, box: IntArray): Boolean {
+        val ground = map[box[0], box[1]]
+        for (y in box[1] until box[3]) for (x in box[0] until box[2]) if (map[x, y] != ground) return false
+        return true
+    }
+
     @Test
     fun aKeyOnALineThatEchoesIsDrawnBeforeItsAnswerAndOnlyOnceAfter() = runDesktopComposeUiTest(411, 914) {
         val pane = Phone.shell()
@@ -79,5 +85,35 @@ class InstantEchoTest {
         assertEquals(0, session.echo.shown, "the answer left the guess standing beside it")
         val answered = onRoot().captureToImage().toPixelMap()
         assertTrue(same(guessed, answered, box), "the guess was not drawn the way the pane's own echo is")
+    }
+
+    // A network a few keys behind: the pane has answered the word and not yet the space after it.
+    // The blank the space will land on is not its echo, and the next word is drawn past it.
+    @Test
+    fun aWordTypedAheadOfItsSpaceIsDrawnOneCellPastTheSpace() = runDesktopComposeUiTest(411, 914) {
+        val pane = Phone.shell()
+        val session = PaneSession(Phone.PANE)
+        phoneTerminal(pane, session)
+        type("a")
+        echo(pane, "a")
+        type("b")
+        echo(pane, "b")
+
+        val at = pane.cursor
+        type("c")
+        type(" ")
+        echo(pane, "c")
+        type("d")
+        val guessed = onRoot().captureToImage().toPixelMap()
+        val panned = session.grid.originX
+        assertTrue(blank(guessed, cell(session, at.row, at.col + 1)), "the next word was drawn in the cell its space is about to take")
+        val word = cell(session, at.row, at.col + 2)
+        assertTrue(!blank(guessed, word), "the word typed after an unanswered space was not drawn past it")
+
+        echo(pane, " ")
+        echo(pane, "d")
+        assertEquals(0, session.echo.shown)
+        assertEquals(panned, session.grid.originX, "the view followed the guess and then moved again under the answer")
+        assertTrue(same(guessed, onRoot().captureToImage().toPixelMap(), word), "the word moved when the pane caught up")
     }
 }

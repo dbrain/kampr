@@ -1,0 +1,19 @@
+{
+  "v": 3,
+  "createdOnFiles": {"v": 1, "at": "2026-11-13T05:10:00Z"},
+  "title": "Kampr conversation pane options",
+  "launch": {"view": "canvas"},
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {"x": 0, "y": 0, "w": 390, "h": 844, "title": "1 · Compact transcript"},
+    "Tasks.dc.html": {"x": 470, "y": 0, "w": 390, "h": 844, "title": "2 · Tasks, live"},
+    "Copy.dc.html": {"x": 940, "y": 0, "w": 390, "h": 844, "title": "3 · Copying"},
+    "Session.dc.html": {"x": 1410, "y": 0, "w": 390, "h": 844, "title": "4 · Session controls and actions"},
+    "Attention.dc.html": {"x": 1880, "y": 0, "w": 390, "h": 844, "title": "5 · Asks and trouble"},
+    "Wide.dc.html": {"x": 0, "y": 964, "w": 1280, "h": 800, "title": "6 · Wide screen"},
+    "Minimal.dc.html": {"x": 1360, "y": 964, "w": 390, "h": 844, "title": "7 · A source that declares little"}
+  },
+  "order": ["Main.dc.html", "Tasks.dc.html", "Copy.dc.html", "Session.dc.html", "Attention.dc.html", "Wide.dc.html", "Minimal.dc.html"],
+  "notes": {},
+  "designSystems": []
+}

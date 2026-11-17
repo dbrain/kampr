@@ -25,6 +25,7 @@ first.** Several deliberate conventions here look like defects without it.
 | Mesh, notifications, passkeys | [`docs/15`](./docs/15-mesh-deployment.md), [`docs/16`](./docs/16-notifications.md), [`docs/10`](./docs/10-passkeys.md) |
 | Terminal client, harness transcripts, fleet runs, agent status | [`docs/11`](./docs/11-cli-briefs.md), [`docs/12`](./docs/12-harness-briefs.md), [`docs/13`](./docs/13-fleet-runs.md), [`docs/14`](./docs/14-agent-status.md) |
 | Native sessions, muffit sessions, Docker containers | [`docs/17`](./docs/17-native-sessions.md), [`docs/18`](./docs/18-muffit.md), [`docs/19`](./docs/19-docker.md) |
+| What Claude reports without its terminal, and the plan for a pane that needs none | [`docs/20`](./docs/20-conversation-parity.md), [`docs/21`](./docs/21-conversation-sources.md) |
 
 `docs/01`, `02`, `05` and `06` are history, not status.
 

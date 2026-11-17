@@ -754,7 +754,10 @@ fun TerminalView(
         // opening top … I couldn't see anything without scrolling left again"*. The axis is left
         // exactly where it is rather than handed back, because a hand that panned still owns it.
         // pi is the exception: it hides the caret for its whole run and types behind it (#552).
-        LaunchedEffect(pane.cursor, view.followCursor, view.following) {
+        // The column chased is the guessed caret's, so the pan a typed key needs happens with the
+        // key and not again, under the reader, when the pane answers it.
+        val chased = session.echo.caret(pane.cursor).col
+        LaunchedEffect(pane.cursor, chased, view.followCursor, view.following) {
             if (!pane.cursor.visible && io.info(pane.id)?.agent !in TYPES_BEHIND_A_HIDDEN_CARET) {
                 return@LaunchedEffect
             }
@@ -763,7 +766,7 @@ fun TerminalView(
                     followCursorPan(
                         view.panX,
                         geometry.minPanX,
-                        pane.cursor.col,
+                        chased,
                         metrics.width,
                         stage.width,
                     ),

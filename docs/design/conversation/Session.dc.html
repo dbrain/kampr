@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Session controls and actions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:pointer}
+</style>
+</helmet>
+<div style="width: 390px; height: 844px; box-sizing: border-box; background: #12141a; color: #e8eaf0; font-family: Manrope, system-ui, sans-serif; display: flex; flex-direction: column; overflow: hidden; font-size: 14px">
+
+<header style="flex: none; display: flex; align-items: center; height: 48px; padding: 0 4px 0 14px; border-bottom: 1px solid #1e2129">
+<div style="flex: 1; font-weight: 700">Session</div>
+<button style="height: 44px; padding: 0 12px; color: #6ea8fe; font-weight: 700">Done</button>
+</header>
+
+<div style="flex: none; padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid #1e2129">
+<div style="display: flex; align-items: baseline; gap: 8px">
+<div style="font-weight: 600; flex: 1">Paid by your Max plan</div>
+<div style="font-size: 12px; color: #8d93a3">no overage</div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; font-size: 12px; color: #8d93a3">
+<div style="display: flex; flex-direction: column; gap: 4px"><div style="display: flex"><span style="flex: 1">5 hours</span><span style="color: #e8eaf0">46%</span></div><div style="height: 4px; border-radius: 2px; background: #22262f"><div style="width: 46%; height: 4px; border-radius: 2px; background: #6ea8fe"></div></div><div>resets 17:00</div></div>
+<div style="display: flex; flex-direction: column; gap: 4px"><div style="display: flex"><span style="flex: 1">Week</span><span style="color: #ffc857">97%</span></div><div style="height: 4px; border-radius: 2px; background: #22262f"><div style="width: 97%; height: 4px; border-radius: 2px; background: #ffc857"></div></div><div>resets Fri 17:00</div></div>
+</div>
+<div style="font-size: 12px; color: #8d93a3">Context 212k of 1M · 180k read from cache, 32k new · about $4.10 at list price</div>
+</div>
+
+<label style="flex: none; display: flex; align-items: center; gap: 8px; height: 44px; margin: 10px 14px 4px; padding: 0 12px; background: #171a21; border: 1px solid #1e2129; border-radius: 10px">
+<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/></svg>
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%)">Find a setting or command</span>
+<input type="text" placeholder="Find a setting or command" style="flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: #e8eaf0; font: inherit">
+</label>
+
+<div style="flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column">
+<div style="padding: 10px 14px 4px; font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em">SETTINGS</div>
+<button style="display: flex; align-items: center; min-height: 46px; padding: 0 14px; text-align: left; gap: 10px"><span style="flex: 1">Model</span><span style="color: #8d93a3">Fable 5</span><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+<div style="display: flex; align-items: center; min-height: 46px; padding: 0 14px; gap: 10px; border-top: 1px solid #1e2129"><span style="flex: 1">Effort</span>
+<div style="display: flex; background: #171a21; border-radius: 8px; padding: 2px; font-size: 12px">
+<button style="height: 30px; padding: 0 9px; color: #8d93a3">low</button>
+<button style="height: 30px; padding: 0 9px; background: #22262f; border-radius: 6px; font-weight: 600">medium</button>
+<button style="height: 30px; padding: 0 9px; color: #8d93a3">high</button>
+<button style="height: 30px; padding: 0 9px; color: #8d93a3">max</button>
+</div></div>
+<button style="display: flex; align-items: center; min-height: 46px; padding: 0 14px; text-align: left; gap: 10px; border-top: 1px solid #1e2129"><span style="flex: 1">Permissions</span><span style="color: #ffc857">bypass permissions</span><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+<button style="display: flex; align-items: center; min-height: 46px; padding: 0 14px; text-align: left; gap: 10px; border-top: 1px solid #1e2129"><span style="flex: 1; display: flex; flex-direction: column"><span>Fast mode</span><span style="font-size: 12px; color: #ffc857">Billed outside your plan · asks first</span></span><span style="width: 40px; height: 24px; border-radius: 12px; background: #22262f; display: flex; align-items: center; padding: 0 3px; box-sizing: border-box"><span style="width: 18px; height: 18px; border-radius: 50%; background: #8d93a3"></span></span></button>
+<button style="display: flex; align-items: center; min-height: 46px; padding: 0 14px; text-align: left; gap: 10px; border-top: 1px solid #1e2129"><span style="flex: 1">MCP servers</span><span style="color: #8d93a3">3 on · 1 off</span><svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#8d93a3" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></button>
+
+<div style="padding: 14px 14px 4px; font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em">ACTIONS</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; padding: 4px 14px">
+<button style="height: 44px; border-radius: 10px; background: #171a21; border: 1px solid #1e2129">Compact</button>
+<button style="height: 44px; border-radius: 10px; background: #171a21; border: 1px solid #1e2129">Rewind</button>
+<button style="height: 44px; border-radius: 10px; background: #171a21; border: 1px solid #1e2129">Add directory</button>
+<button style="height: 44px; border-radius: 10px; background: #171a21; border: 1px solid #1e2129">Open in terminal</button>
+</div>
+<div style="padding: 10px 14px 4px; font-size: 11px; font-weight: 700; color: #8d93a3; letter-spacing: 0.04em">COMMANDS · 68</div>
+<button style="display: flex; align-items: baseline; min-height: 44px; padding: 0 14px; text-align: left; gap: 10px"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">/code-review</span><span style="flex: 1; min-width: 0; font-size: 12px; color: #8d93a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Review the current diff</span></button>
+<button style="display: flex; align-items: baseline; min-height: 44px; padding: 0 14px; text-align: left; gap: 10px; border-top: 1px solid #1e2129"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">/context</span><span style="flex: 1; min-width: 0; font-size: 12px; color: #8d93a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">What fills the context window</span></button>
+<button style="display: flex; align-items: baseline; min-height: 44px; padding: 0 14px; text-align: left; gap: 10px; border-top: 1px solid #1e2129"><span style="font-family: 'IBM Plex Mono', monospace; font-size: 13px">/security-review</span><span style="flex: 1; min-width: 0; font-size: 12px; color: #8d93a3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">Review pending changes for security</span></button>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

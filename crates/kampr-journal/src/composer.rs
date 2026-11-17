@@ -54,6 +54,9 @@ pub const EDIT_KEYS: EditKeys = EditKeys {
 pub struct Measured {
     /// Columns the harness keeps free right of its text before it wraps (#558).
     pub margin: usize,
+    /// The box wraps the way `wrap-ansi` does with its spaces kept and its long words cut
+    /// (#662), so a reading can be checked by wrapping it again.
+    pub wrap_ansi: bool,
     pub clear: Option<&'static str>,
     pub keys: Option<EditKeys>,
 }
@@ -98,6 +101,9 @@ pub type ListeningReader = fn(&[&str], Caret) -> bool;
 /// if it holds one, and inside a word too long for any row if it does not; one whose next row's
 /// first word would not have fitted after it broke at a space; and one that stopped short of a
 /// word that would have fitted was ended by the operator.
+///
+/// That is a guess from the widths, and a box whose wrapping has been measured exactly is read
+/// by [`crate::rewrap`] instead, which keeps only a reading that wraps back into the rows drawn.
 pub fn read(
     screen: &[&str],
     caret: Caret,
@@ -117,6 +123,30 @@ pub fn read(
         return Some(composed(String::new(), 0));
     }
     let limit = (frame.cols as usize).saturating_sub(measured.margin + 1);
+    if measured.wrap_ansi {
+        let drawn: Vec<String> = (head..=last)
+            .map(|at| {
+                let start = if at == head { layout.input } else { layout.indent };
+                let seg: String = screen[at].chars().skip(start).collect();
+                let kept = seg.trim_end().chars().count();
+                let reach = match at == last && at == caret_row {
+                    true => kept.max((caret.col as usize).saturating_sub(start)),
+                    false => kept,
+                };
+                seg.chars().chain(std::iter::repeat(' ')).take(reach).collect()
+            })
+            .collect();
+        let start = if caret_row == head {
+            layout.input
+        } else {
+            layout.indent
+        };
+        let at = (caret_row - head, (caret.col as usize).saturating_sub(start));
+        let columns = (limit + 1).saturating_sub(layout.indent);
+        if let Some((text, caret)) = crate::rewrap::unwrap(&drawn, columns, at) {
+            return Some(composed(text, caret));
+        }
+    }
     let rows: Vec<(usize, String)> = (head..=last)
         .map(|at| {
             let start = if at == head { layout.input } else { layout.indent };

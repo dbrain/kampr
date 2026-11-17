@@ -358,14 +358,20 @@ impl Hooks {
                 let tool = event["tool_use_id"].as_str();
                 self.release(&pane, |ask| tool.is_some() && ask.tool_use_id.as_deref() == tool);
             }
+            // The main agent's turn ends, and a finished background task starts the next, while a
+            // background subagent's request is still held (#657).
             "UserPromptSubmit" => {
-                self.release(&pane, |_| true);
+                self.release(&pane, |ask| !ask.card.subagent());
                 self.quiet(&pane);
                 if let Some(prompt) = event["prompt"].as_str() {
                     let _ = self.heard.send((pane, prompt.to_string()));
                 }
             }
-            "Stop" | "StopFailure" | "SessionEnd" => {
+            "Stop" | "StopFailure" => {
+                self.release(&pane, |ask| !ask.card.subagent());
+                self.quiet(&pane);
+            }
+            "SessionEnd" => {
                 self.release(&pane, |_| true);
                 self.quiet(&pane);
             }
