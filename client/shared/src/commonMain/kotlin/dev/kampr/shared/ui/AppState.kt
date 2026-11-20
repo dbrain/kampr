@@ -147,6 +147,7 @@ private const val KEY_AGENT_ARGS = "agent.args."
 private const val KEY_RAIL = "sidebar.collapsed"
 private const val KEY_CONFIRM = "confirm.risky"
 private const val KEY_LAST_PANE = "pane.last"
+private const val KEY_AGENT_VIEW = "pane.agent.view"
 private const val KEY_FOLDS = "herd.folds"
 
 private const val RECENT_ADDRESSES = 5
@@ -652,8 +653,8 @@ class AppState(
     // the harness clears the scrollback when it takes the screen (#30, #231). So that branch was
     // spending the operator's own choice on a guess about a pane with something to show regardless.
     // Whether this client is drawing at phone size. Set by the composable that knows the window,
-    // and the only thing that moves the default view: a 213-column grid on a 411 dp screen is not
-    // a terminal anybody can use, and a conversation is. On a desktop — and in the CLI, which made
+    // and what moves the default view until this device has chosen one for an agent: a 213-column
+    // grid on a 411 dp screen is not a terminal anybody can use, and a conversation is. On a desktop — and in the CLI, which made
     // the same change for the same reason — the terminal is what a terminal client opens on.
     var compact: Boolean = false
 
@@ -682,6 +683,7 @@ class AppState(
             return
         }
         val remembered = store.prefsFor(paneId).view?.let(::viewOf)
+        talking = paneId to store.paneInfo(paneId).talks
         awaitingRemembered = prefer == null && remembered == null
         go(Screen.Pane(paneId, prefer ?: remembered ?: defaultViewOf(paneId), origin()))
     }
@@ -696,12 +698,24 @@ class AppState(
     // on. `converses` rather than `hasConversation`: a session that opened a minute ago has an
     // adapter and no transcript file, and it is exactly the one somebody is about to talk to.
     private fun defaultViewOf(paneId: String): PaneView {
-        if (!compact) return PaneView.Terminal
         val pane = store.herd.value.panes.firstOrNull { it.id == paneId } ?: return PaneView.Terminal
-        return when (pane.talks) {
-            true -> PaneView.Conversation
-            false -> PaneView.Terminal
-        }
+        return if (pane.talks) agentView() else PaneView.Terminal
+    }
+
+    // The last view this device chose on any agent, so a pane nobody has chosen for opens the way
+    // the operator usually reads one.
+    private fun agentView(): PaneView = prefs.get(KEY_AGENT_VIEW)?.let(::viewOf) ?: if (compact) PaneView.Conversation else PaneView.Terminal
+
+    private var talking: Pair<String, Boolean>? = null
+
+    // A shell offers no switch, so the view it opened on was never a choice, and an agent launched
+    // in it would otherwise be read through the shell's terminal for as long as it runs.
+    private fun followLaunchedAgent(herd: Herd) {
+        val current = screen as? Screen.Pane ?: return
+        val talks = herd.panes.firstOrNull { it.id == current.paneId }?.talks ?: return
+        val was = talking?.takeIf { it.first == current.paneId }?.second
+        talking = current.paneId to talks
+        if (was == false && talks) screen = current.copy(view = agentView())
     }
 
     private fun adoptRememberedView() {
@@ -745,6 +759,7 @@ class AppState(
         if (current !is Screen.Pane) return
         awaitingRemembered = false
         screen = current.copy(view = view)
+        if (store.paneInfo(current.paneId).talks) prefs.set(KEY_AGENT_VIEW, view.key)
         connection.send(ClientMsg.SetPrefs(current.paneId, mapOf("view" to view.key)))
     }
 
@@ -893,6 +908,7 @@ class AppState(
             store.herd.collect {
                 reattach(it)
                 leaveClosedPane(it)
+                followLaunchedAgent(it)
                 openWhenItArrives(it)
                 reconcileNotifications(it)
             }

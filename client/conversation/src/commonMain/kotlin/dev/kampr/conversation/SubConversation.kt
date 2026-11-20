@@ -136,11 +136,11 @@ fun SubConversationView(
             Box(Modifier.fillMaxSize()) {
                 if (turns.isEmpty()) {
                     KText(
-                        if (state?.loaded == true) "nothing written down yet" else "fetching the conversation",
+                        if (state?.loaded == true) "no messages yet" else "fetching the conversation",
                         tokens.type.caption,
                         tokens.color.mute,
                         Modifier.align(Alignment.Center).announce(
-                            if (state?.loaded == true) "Nothing written down yet" else "Fetching the conversation",
+                            if (state?.loaded == true) "No messages yet" else "Fetching the conversation",
                         ),
                     )
                 }

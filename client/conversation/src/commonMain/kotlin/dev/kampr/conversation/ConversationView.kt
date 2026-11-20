@@ -553,7 +553,7 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
                     if (turns.isEmpty() && sending.isEmpty()) {
                         KText(
                             if (info?.hasConversation == false) {
-                                "nothing written down yet \u2014 what you send is what starts it"
+                                "no messages yet \u2014 send one to get started"
                             } else {
                                 "waiting for the transcript"
                             },

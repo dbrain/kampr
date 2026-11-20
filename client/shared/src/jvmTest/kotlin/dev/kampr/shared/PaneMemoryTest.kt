@@ -91,6 +91,16 @@ private const val MIXED = """
         "updated_at":"2026-08-21T13:44:02Z"}]}
 """
 
+// The same herd a moment after somebody typed `claude` into the shell.
+private val LAUNCHED = MIXED.replace(
+    """"workspace":"shell","tab":"1",
+        "cwd":"/home/dbrain","agent_status":"unknown",
+        "cols":94,"rows":40,"scrollback_rows":900,"has_conversation":false,"converses":false,""",
+    """"workspace":"shell","tab":"1",
+        "cwd":"/home/dbrain","agent":"claude","agent_status":"working",
+        "cols":94,"rows":40,"scrollback_rows":0,"has_conversation":false,"converses":true,""",
+).also { check(it != MIXED) }
+
 // The greeting's third frame when this device has never chosen anything, which the node sends
 // whether or not it holds a row.
 private const val NO_PREFS = """{"t":"prefs","panes":{}}"""
@@ -258,6 +268,84 @@ class PaneMemoryTest {
             app.compact = true
             app.openPane(CLAUDE)
             assertEquals(CLAUDE to PaneView.Terminal, opened(app), "the operator's own choice wins")
+        } finally {
+            scope.cancel()
+        }
+    }
+}
+
+// The report: *"when I launch claude from a terminal it stays in terminal mode even if I usually use
+// Claude in conversation mode"*. A shell offers no switch, so nothing about it was ever chosen, and
+// the view it opened on stood after an agent took it over.
+class LaunchedAgentViewTest {
+    @Test
+    fun anAgentLaunchedInAShellOnAPhoneMovesToItsConversation() {
+        val (app, scope) = state(MIXED, NO_PREFS)
+        try {
+            app.compact = true
+            app.openPane(SHELL)
+            assertEquals(SHELL to PaneView.Terminal, opened(app))
+
+            app.store.feed(LAUNCHED)
+            assertEquals(SHELL to PaneView.Conversation, opened(app), "the agent was left in the shell's view")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun anAgentLaunchedInAShellOnADesktopTakesTheViewThisDeviceUsesForAgents() {
+        val (app, scope) = state(MIXED, NO_PREFS)
+        try {
+            app.openPane(CLAUDE)
+            app.setPaneView(PaneView.Conversation)
+            app.openPane(SHELL)
+            assertEquals(SHELL to PaneView.Terminal, opened(app))
+
+            app.store.feed(LAUNCHED)
+            assertEquals(SHELL to PaneView.Conversation, opened(app), "the usual view for an agent was ignored")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun aPhoneThatUsuallyReadsTheTerminalKeepsItWhenAnAgentLaunches() {
+        val (app, scope) = state(MIXED, NO_PREFS)
+        try {
+            app.compact = true
+            app.openPane(CLAUDE)
+            app.setPaneView(PaneView.Terminal)
+            app.openPane(SHELL)
+            app.store.feed(LAUNCHED)
+            assertEquals(SHELL to PaneView.Terminal, opened(app), "the usual view was overruled by the screen size")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun theViewThisDeviceUsesForAgentsIsWhatAnUnchosenAgentPaneOpensOn() {
+        val (app, scope) = state(HERD, NO_PREFS)
+        try {
+            app.openPane(CLAUDE)
+            app.setPaneView(PaneView.Conversation)
+            app.openPane(CODEX)
+            assertEquals(CODEX to PaneView.Conversation, opened(app))
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun aPaneAlreadyTalkingWhenOpenedIsNotMovedByTheNextHerd() {
+        val (app, scope) = state(MIXED, NO_PREFS)
+        try {
+            app.compact = true
+            app.openPane(FRESH)
+            app.setPaneView(PaneView.Terminal)
+            app.store.feed(LAUNCHED)
+            assertEquals(FRESH to PaneView.Terminal, opened(app), "a pane's own choice was overruled by a herd update")
         } finally {
             scope.cancel()
         }

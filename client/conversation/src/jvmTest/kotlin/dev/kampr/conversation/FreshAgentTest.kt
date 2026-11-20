@@ -76,7 +76,7 @@ class FreshAgentTest {
     fun anAgentThatHasNotSaidAnythingYetIsStillSomethingYouCanTalkTo() = runComposeUiTest {
         conversation(demoInfo(conversation = false, converses = true, status = "idle"))
         onNodeWithContentDescription(REPLY).assertIsDisplayed()
-        onNodeWithText("nothing written down yet", substring = true).assertIsDisplayed()
+        onNodeWithText("no messages yet", substring = true).assertIsDisplayed()
     }
 
     @Test
@@ -132,7 +132,7 @@ class FreshAgentTest {
         )
         waitForIdle()
 
-        onNodeWithText("nothing written down yet", substring = true).assertIsDisplayed()
+        onNodeWithText("no messages yet", substring = true).assertIsDisplayed()
         onNodeWithContentDescription(REPLY).assertIsDisplayed()
         onNodeWithText("loading earlier turns").assertDoesNotExist()
         assertEquals(
