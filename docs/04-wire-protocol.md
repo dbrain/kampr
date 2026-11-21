@@ -575,6 +575,13 @@ restarted has no history for anybody. Then the page says so.
 - **Absent or `false`** — merge, as before. Every page `convo.load` answers with is one of these:
   they are older slices of the transcript already on the screen.
 
+A pane whose harness has written nothing since it started, whose session marker is gone because
+it is closing ([#664](./03-probe-log.md)), or that runs no harness at all, is sent `fresh: true`
+with `turns: []` and no `cursor` once per pump. A sticky harness between tools is the exception:
+finding nothing there says nothing. Without it a client that
+reconnected after an agent was quit and run again keeps the run before on screen, because there is
+no first page of the new one to replace it until the first prompt is written.
+
 **Additive.** A client that has never heard of the field merges, which is what every build did
 before it — including the case this field exists for, so an older phone is no worse off than it is
 today. A hub relaying a peer's pane sets it on the **first** page it hands each client for that

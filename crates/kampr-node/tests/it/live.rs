@@ -4077,7 +4077,7 @@ async fn become_harness(session: &Session, local: &str, dir: &Path, agent: &str)
 /// The pid of the process called `name` that herdr reports in the pane's foreground. Given up on
 /// at the same minute as [`a_pane_at_its_shell`] and for the same reason: this is setup, and
 /// under the whole live suite a shell has taken over ten seconds to run what it was sent.
-async fn foreground_named(session: &Session, local: &str, name: &str) -> u32 {
+async fn foreground_named(session: &impl Calls, local: &str, name: &str) -> u32 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     while tokio::time::Instant::now() < deadline {
         let info = session
@@ -6121,15 +6121,26 @@ async fn pump(socket: &mut Socket, pane: &str) {
 /// is written by hand is only the *contents* of `~/.claude/sessions/<pid>.json`, whose shape is
 /// checked against a verbatim capture of `claude` 2.1.239 in
 /// `kampr-journal/tests/fixtures/identity`.
-struct Harnessed {
+/// A herdr session the [`Harnessed`] fixture can drive, whichever suite started it.
+pub(crate) trait Calls {
+    fn call(&self, method: &str, params: Value) -> impl std::future::Future<Output = Value>;
+}
+
+impl Calls for Session {
+    fn call(&self, method: &str, params: Value) -> impl std::future::Future<Output = Value> {
+        Session::call(self, method, params)
+    }
+}
+
+pub(crate) struct Harnessed {
     home: PathBuf,
     project: PathBuf,
-    cwd: String,
+    pub(crate) cwd: String,
     binary: PathBuf,
 }
 
 impl Harnessed {
-    fn new(home: &Path, work: &Path) -> Self {
+    pub(crate) fn new(home: &Path, work: &Path) -> Self {
         let cwd = work.canonicalize().unwrap().display().to_string();
         let project = home.join(".claude/projects").join(cwd.replace('/', "-"));
         std::fs::create_dir_all(&project).unwrap();
@@ -6145,7 +6156,7 @@ impl Harnessed {
     }
 
     /// Runs the harness in the pane and waits for herdr to report it, answering with its pid.
-    async fn start(&self, session: &Session, local: &str) -> u32 {
+    pub(crate) async fn start(&self, session: &impl Calls, local: &str) -> u32 {
         session
             .call(
                 "pane.send_text",
@@ -6155,7 +6166,7 @@ impl Harnessed {
         foreground_named(session, local, "claude").await
     }
 
-    async fn stop(&self, session: &Session, local: &str, pid: u32) {
+    pub(crate) async fn stop(&self, session: &impl Calls, local: &str, pid: u32) {
         let _ = std::fs::remove_file(self.session_file(pid));
         session
             .call("pane.send_keys", json!({ "pane_id": local, "keys": ["ctrl+c"] }))
@@ -6174,7 +6185,7 @@ impl Harnessed {
 
     /// What the harness publishes about itself, with the pid and `procStart` of the process that
     /// is really running — so a node that checks them against `/proc` is checking real values.
-    fn announce(&self, pid: u32, id: &str) {
+    pub(crate) fn announce(&self, pid: u32, id: &str) {
         self.announce_status(pid, id, "idle");
     }
 
@@ -6246,7 +6257,7 @@ impl Harnessed {
 
     /// A one-turn transcript for a session, stamped `offset` seconds from now — so a test can put
     /// another run's transcript *ahead* of the one the pane is really on.
-    fn transcript(&self, id: &str, text: &str, offset: i64) {
+    pub(crate) fn transcript(&self, id: &str, text: &str, offset: i64) {
         let at = (time::OffsetDateTime::now_utc() + time::Duration::seconds(offset))
             .replace_nanosecond(0)
             .unwrap()
@@ -7058,6 +7069,193 @@ async fn an_agent_quit_and_run_again_takes_the_previous_conversation_off_the_cli
     retired(&mut socket, &pane, &stale).await;
 }
 
+/// The same restart reached by a socket that was never sent the first session: a phone that
+/// reconnected, or a hub relaying for one. The client still holds the turns of the run before, and
+/// the node has no record of them to withdraw by name — so a pump that finds the new session has
+/// written nothing yet and therefore says nothing leaves the old conversation on the screen until
+/// something re-watches after the first prompt (the operator's audit log, 2026-11-21: the new
+/// transcript was served only on a re-watch four minutes after the restart).
+///
+/// The mutation that must fail: drop the empty page sent for a named session with no transcript,
+/// and this hangs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarted_agent_with_nothing_written_empties_a_socket_that_never_saw_the_first() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("rerun-new-socket", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let first = fixture.start(&h._session, &local).await;
+    fixture.announce(first, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    fixture.stop(&h._session, &local, first).await;
+    let second = fixture.start(&h._session, &local).await;
+    fixture.announce(second, "22222222-2222-4222-8222-222222222222");
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let page = until_pane(&mut socket, "convo", &pane, 25).await;
+    assert_eq!(page["fresh"], true, "{page}");
+    assert_eq!(page["turns"], json!([]), "{page}");
+}
+
+/// A harness that never names its session is resolved by directory, bounded by when its process
+/// started — so a fresh one has nothing until its first prompt, and a socket that never saw the run
+/// before is holding it all the same. Claude itself is one: a Claude started from inside another
+/// writes no marker (#393). Codex, omp and agy announce nothing either.
+///
+/// The mutation that must fail: send the empty page only for a named session, and this hangs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_restarted_agent_that_names_no_session_empties_a_socket_that_never_saw_the_first() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("rerun-unnamed", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let first = fixture.start(&h._session, &local).await;
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", 1);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+    let token = h.token(Role::Full).await;
+    let mut first_socket = h.connect(&token).await;
+    until(&mut first_socket, "hello", 10).await;
+    let watch = json!({ "t": "watch", "pane": pane, "conversation": true });
+    send(&mut first_socket, watch.clone()).await;
+    let opening = until_pane(&mut first_socket, "convo", &pane, 25).await;
+    assert_eq!(
+        opening["turns"][0]["blocks"][0]["text"], "FIRST SESSION",
+        "{opening}"
+    );
+    drop(first_socket);
+
+    tokio::time::sleep(Duration::from_millis(2100)).await;
+    fixture.stop(&h._session, &local, first).await;
+    fixture.start(&h._session, &local).await;
+
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(&mut socket, watch).await;
+    let page = until_pane(&mut socket, "convo", &pane, 25).await;
+    assert_eq!(page["fresh"], true, "{page}");
+    assert_eq!(page["turns"], json!([]), "{page}");
+}
+
+/// **Claude removes its marker 0.27 s into `/exit` and lives on without it** (#476), and a running
+/// Claude's marker is never otherwise missing (#664). The directory fallback filled that window
+/// with whatever was newest there — on the operator's node an unrelated older session, paged to
+/// the phone as the pane's conversation. A harness that named a session and now names none is
+/// closing, and its conversation goes with it.
+///
+/// The mutation that must fail: let a closing harness resolve by directory, and the decoy is paged.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_closing_agent_is_not_given_the_directorys_newest_conversation() {
+    let home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = Harnessed::new(home.path(), work.path());
+    let home_path = home.path().display().to_string();
+    let h = harness!("closing", |c: &mut Config| c.journals.home = home_path);
+    h._session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+    let pane = h.pane_with_cwd(&fixture.cwd).await.expect("the convo pane");
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let pid = fixture.start(&h._session, &local).await;
+    fixture.announce(pid, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "CLOSING SESSION", 0);
+    fixture.transcript("99999999-9999-4999-8999-999999999999", "SOMEBODY ELSE", 5);
+    h._session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    send(
+        &mut socket,
+        json!({ "t": "watch", "pane": pane, "conversation": true }),
+    )
+    .await;
+    let opening = until_pane(&mut socket, "convo", &pane, 25).await;
+    assert_eq!(
+        opening["turns"][0]["blocks"][0]["text"], "CLOSING SESSION",
+        "{opening}"
+    );
+    let stale: Vec<String> = opening["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap().to_string())
+        .collect();
+
+    std::fs::remove_file(fixture.session_file(pid)).unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    let mut withdrawn = false;
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut socket, Duration::from_millis(500)).await else {
+            continue;
+        };
+        if message["pane"] != pane {
+            continue;
+        }
+        let turns = message["turns"].as_array().cloned().unwrap_or_default();
+        let drawn = |t: &&Value| t["blocks"].as_array().is_some_and(|b| !b.is_empty());
+        assert!(
+            !(message["t"] == "convo" || message["t"] == "convo.turn") || !turns.iter().any(|t| drawn(&t)),
+            "a closing agent was handed another conversation: {message}"
+        );
+        withdrawn |= message["t"] == "convo.turn"
+            && stale
+                .iter()
+                .all(|id| turns.iter().any(|t| t["id"] == id.as_str() && !drawn(&t)));
+        withdrawn |= message["t"] == "convo" && message["fresh"] == true && turns.is_empty();
+    }
+    assert!(
+        withdrawn,
+        "the closing session's conversation stayed on the client"
+    );
+}
+
 /// **A conversation found by working directory has no session name to disagree with.**
 ///
 /// The operator's report: a fresh `claude` in a pane that had run one before, in the same
@@ -7655,6 +7853,10 @@ async fn moved_to(socket: &mut Socket, pane: &str, stale: &[String], text: &str)
                 .filter_map(|t| t["id"].as_str())
                 .collect();
             withdrawn |= stale.iter().all(|id| retired.contains(&id.as_str()));
+        }
+        if message["t"] == "convo" && message["fresh"] == true && turns.is_empty() {
+            withdrawn = true;
+            continue;
         }
         if message["t"] == "convo" {
             let texts: Vec<&str> = turns

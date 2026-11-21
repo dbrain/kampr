@@ -7,7 +7,7 @@ use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
 use kampr_journal::{
     Change, Composed, ComposerFeed, ComposerReader, FacetFeed, Facets, Harness, Journal, JournalError,
-    Registry as Journals, Role, SessionKind, SessionMarker, SessionRef, Turn, Watch,
+    PaneProcess, Registry as Journals, Role, SessionKind, SessionMarker, SessionRef, Turn, Watch,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -390,8 +390,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     // neighbouring handles saw `A -> none` and then `none -> B`, was certain of neither, and left
     // the first session's conversation on the screen for the reader to page and be refused.
     let mut named = handle.as_ref().and_then(|h| h.identity.announced.clone());
+    let mut named_by = handle.as_ref().and_then(namer);
     let mut due = true;
     let mut misses = 0u32;
+    let mut emptied = false;
     let mut live = Watch::default();
     let mut was_working = false;
     let mut desk = ComposerFeed::default();
@@ -455,8 +457,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         if handle.as_ref() != Some(&now) || opened.as_deref().is_some_and(|p| !p.is_file()) {
             let elsewhere = moved(named.as_ref(), now.identity.announced.as_ref());
             let unnamed = named.is_none() && now.identity.announced.is_some();
+            let closed = closing(&now, named_by.as_ref());
             if let Some(session) = now.identity.announced.clone() {
                 named = Some(session);
+                named_by = namer(&now);
             }
             handle = Some(now.clone());
             opened = None;
@@ -483,12 +487,13 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             // ended stayed on the screen — until another one opened, or for good. `Absent` is
             // this node having looked in procfs and found no harness, which is a fact and not
             // the absence of one, and a pane with no harness has no conversation.
-            let gone = matches!(now.identity.harness, Harness::Absent);
+            let gone = matches!(now.identity.harness, Harness::Absent) || closed;
             if (elsewhere || gone) && !retire(&wire, &global, &held) {
                 return;
             }
             due = true;
             misses = 0;
+            emptied = false;
             screen_seen = None;
         }
         // Off the handle on every pass rather than when it moves: a re-watch inherits a handle
@@ -556,10 +561,24 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             due = true;
         }
 
-        if due && opened.is_none() {
+        // A closing harness is left with nothing open: the directory would answer for it with
+        // whichever transcript there is newest (#476, #664).
+        if due && opened.is_none() && !closing(&now, named_by.as_ref()) {
             retry_at = Instant::now() + RETRY_EVERY;
             due = false;
             match resolve(&journals, &state_dir, &now) {
+                // A pane naming a session that has written nothing, or running no harness, has an
+                // empty conversation, and the client may hold another one this pump never sent: a
+                // phone that reconnected, or a hub relaying for one. Nothing names those turns to
+                // withdraw, so an empty `fresh` page is the only thing that takes them off before
+                // the first prompt is written.
+                None if !emptied && settled_empty(&journals, &now) => {
+                    misses += 1;
+                    emptied = true;
+                    if !empty(&wire, &global, &held) {
+                        return;
+                    }
+                }
                 None => misses += 1,
                 Some(fresh) => {
                     misses = 0;
@@ -578,6 +597,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         "conversation opened",
                     );
                     opened = Some(path.clone());
+                    emptied = false;
                     inherited = false;
                     *journal.lock().unwrap() = Some(fresh);
                     warm.lock().unwrap().opened = opened.clone();
@@ -1294,6 +1314,53 @@ fn retire(wire: &Wire, pane: &str, held: &Held) -> bool {
         return false;
     }
     wire.send(&ServerMsg::ConvoFacets {
+        pane: pane.to_string(),
+        facets: Facets::default(),
+    })
+}
+
+/// The harness process that announced the pane's session, kept so its losing the name can be told
+/// from a different process that never had one.
+fn namer(handle: &Handle) -> Option<PaneProcess> {
+    handle.identity.announced.as_ref()?;
+    handle.identity.harness.process().cloned()
+}
+
+/// A running Claude's marker is never missing until `/exit` removes it, a second before the process
+/// goes (#476, #664): the process that named a session naming none is that second. Measured for
+/// Claude only; omp's handle is a held descriptor nobody has watched for gaps.
+fn closing(now: &Handle, named_by: Option<&PaneProcess>) -> bool {
+    now.agent.as_deref() == Some("claude")
+        && now.identity.announced.is_none()
+        && now
+            .identity
+            .harness
+            .process()
+            .is_some_and(|p| Some(p) == named_by)
+}
+
+/// Whether finding no transcript means the conversation is empty rather than unknown. A sticky
+/// harness names its session only while a tool runs (#542), so between tools nothing resolving
+/// says nothing about it, and a host that cannot see processes cannot tell either.
+fn settled_empty(journals: &Journals, now: &Handle) -> bool {
+    now.identity.announced.is_some()
+        || match &now.identity.harness {
+            Harness::Absent => true,
+            Harness::Running(_) => !journals.sticky(now.agent.as_deref()),
+            Harness::Unknown => false,
+        }
+}
+
+fn empty(wire: &Wire, pane: &str, held: &Held) -> bool {
+    held.lock().unwrap().take();
+    wire.send(&ServerMsg::Convo {
+        pane: pane.to_string(),
+        cursor: None,
+        more: false,
+        fresh: true,
+        sub: None,
+        turns: Vec::new(),
+    }) && wire.send(&ServerMsg::ConvoFacets {
         pane: pane.to_string(),
         facets: Facets::default(),
     })

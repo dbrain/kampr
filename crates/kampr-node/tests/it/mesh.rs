@@ -2911,3 +2911,116 @@ async fn a_peer_with_no_herdr_serves_its_native_sessions_through_the_hub() {
 
     mesh.stop();
 }
+
+impl crate::live::Calls for Session {
+    fn call(&self, method: &str, params: Value) -> impl std::future::Future<Output = Value> {
+        Session::call(self, method, params)
+    }
+}
+
+/// The operator's report, on the path it was reported from: a phone reaching the pane through the
+/// hub. The agent is quit and run again with nothing written yet, and the client that comes back to
+/// the pane is still holding the run before — so what reaches it through the hub has to say the
+/// conversation is now empty, not leave it to the first prompt.
+///
+/// The mutation that must fail: drop the empty page the peer sends for a session with no
+/// transcript, and this hangs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_client_on_the_hub_is_told_a_restarted_agent_has_said_nothing_yet() {
+    let peer_session = Session::start("rerun-peer").await;
+    let hub_home = Home::new();
+    let hub = Running::hub(&hub_home, "front").await;
+    let now = kampr_auth::now();
+    let code = hub
+        .node
+        .auth
+        .store()
+        .mesh()
+        .invite(now, now + 600)
+        .await
+        .expect("a join code");
+
+    let claude_home = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let fixture = crate::live::Harnessed::new(claude_home.path(), work.path());
+    peer_session
+        .call(
+            "workspace.create",
+            json!({ "label": "convo", "cwd": fixture.cwd }),
+        )
+        .await;
+
+    let peer_home = Home::new();
+    let peer_node_id = peer_home.settle("laptop");
+    join(&peer_home, "laptop", &peer_node_id, &hub.origin, &code).await;
+    let journals = claude_home.path().display().to_string();
+    let peer = Running::spawn_with(&peer_home, "laptop", peer_session.socket.clone(), true, |c| {
+        c.journals.home = journals
+    })
+    .await;
+
+    let cwd = fixture.cwd.clone();
+    herd_becomes(&hub.node, 45, |herd| {
+        herd.panes
+            .iter()
+            .any(|p| p.node_id.starts_with(&peer_node_id) && p.cwd.as_deref() == Some(&cwd))
+    })
+    .await;
+    let pane = hub
+        .node
+        .herd()
+        .panes
+        .iter()
+        .find(|p| p.node_id.starts_with(&peer_node_id) && p.cwd.as_deref() == Some(&cwd))
+        .expect("the convo pane, listed by the hub")
+        .id
+        .clone();
+    let local = pane.rsplit('/').next().unwrap().to_string();
+
+    let first = fixture.start(&peer_session, &local).await;
+    fixture.announce(first, "11111111-1111-4111-8111-111111111111");
+    fixture.transcript("11111111-1111-4111-8111-111111111111", "FIRST SESSION", -60);
+    peer_session
+        .call(
+            "pane.report_agent",
+            json!({ "pane_id": local, "agent": "claude", "source": "kampr-test", "state": "idle" }),
+        )
+        .await;
+
+    let watch = json!({ "t": "watch", "pane": pane, "scrollback": true, "conversation": true });
+    let mut client = hub.connect().await;
+    until(&mut client, "hello", 10).await;
+    send(&mut client, watch.clone()).await;
+    let opening = until(&mut client, "convo", 30).await;
+    assert_eq!(
+        opening["turns"][0]["blocks"][0]["text"], "FIRST SESSION",
+        "{opening}"
+    );
+    send(&mut client, json!({ "t": "unwatch", "pane": pane })).await;
+
+    fixture.stop(&peer_session, &local, first).await;
+    let second = fixture.start(&peer_session, &local).await;
+    fixture.announce(second, "22222222-2222-4222-8222-222222222222");
+
+    send(&mut client, watch).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while tokio::time::Instant::now() < deadline {
+        let Some(message) = recv(&mut client, Duration::from_secs(1)).await else {
+            continue;
+        };
+        if message["t"] != "convo" || message["pane"] != pane.as_str() {
+            continue;
+        }
+        let turns = message["turns"].as_array().cloned().unwrap_or_default();
+        assert!(
+            turns.iter().all(|t| t["blocks"][0]["text"] != "FIRST SESSION"),
+            "the hub served the run before: {message}"
+        );
+        if message["fresh"] == true && turns.is_empty() {
+            peer.stop();
+            hub.stop();
+            return;
+        }
+    }
+    panic!("nothing through the hub told the client the conversation was empty");
+}
