@@ -80,6 +80,29 @@ TRIALS = [
     ("words + bracketed picture, 300ms", "bracketed", 0.3, False),
 ]
 
+# A reply box's whole text in one unbracketed write, as `ComposerMirror.submit` sends a box that
+# was never typed live: lines joined by a bare `\n`, then the Enter on its own. `TEXT=1` runs these.
+if os.environ.get("TEXT"):
+    TRIALS = [
+        ("870 bytes, 300ms", "text870", 0.3, False),
+        ("870 bytes, 600ms", "text870", 0.6, False),
+        ("870 bytes, 1s", "text870", 1.0, False),
+        ("870 bytes, box redrawn", "text870", "quiet", False),
+        ("1500 bytes, 300ms", "text1500", 0.3, False),
+        ("1500 bytes, 1s", "text1500", 1.0, False),
+        ("1500 bytes, box redrawn", "text1500", "quiet", False),
+        ("400 bytes, 300ms", "text400", 0.3, False),
+    ]
+
+
+def lines(words, size):
+    out = words + "\n"
+    row = 0
+    while len(out) < size:
+        row += 1
+        out += f"item {row} - " + "a line of an issue list pasted from somewhere else " * 3 + "\n"
+    return out[:size].rstrip("\n")
+
 
 def main():
     cwd = subprocess.run(["mktemp", "-d", "/tmp/kampr-burst-XXXXXX"], capture_output=True, text=True).stdout.strip()
@@ -112,7 +135,7 @@ def main():
                     send(pane, "\x03")
                 if dels == "split":
                     time.sleep(1.0)
-            send(pane, {"front": f"{IMAGE} {words}", "back": f"{words} {IMAGE}", "slash": f"/tmp {words}", "long": f"{words} " + "and some more words " * 5, "report": f"{IMAGE} {words} " + "and then some more of what I wanted to say " * 6 + f"END{marker}", "bracketed": f"{words} \x1b[200~{IMAGE}\x1b[201~", "double": f"{IMAGE} {words} " + "and then some more of what I wanted to say " * 15, "append": f" {IMAGE}", None: words}[path])
+            send(pane, {"front": f"{IMAGE} {words}", "back": f"{words} {IMAGE}", "slash": f"/tmp {words}", "long": f"{words} " + "and some more words " * 5, "report": f"{IMAGE} {words} " + "and then some more of what I wanted to say " * 6 + f"END{marker}", "bracketed": f"{words} \x1b[200~{IMAGE}\x1b[201~", "double": f"{IMAGE} {words} " + "and then some more of what I wanted to say " * 15, "append": f" {IMAGE}", None: words, "text870": lines(words, 870), "text1500": lines(words, 1500), "text400": lines(words, 400)}[path])
             if gap in ("drawn", "drawn+"):
                 waited = drawn(pane, f"END{marker}")
                 print(f"    drawn after {waited:.2f}s", flush=True)

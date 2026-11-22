@@ -23,6 +23,9 @@ private const val LINE = "look [Image #1] here"
 // A mirror that has heard the pane's box drawn and holding `pane`, with the reply box in step.
 private fun inStep(pane: String = ""): ComposerMirror = ComposerMirror().also { it.heard(drawn(pane), box = pane, now = 0) }
 
+// The same, on a node that paces a reply's writes (#666).
+private fun pacedInStep(): ComposerMirror = ComposerMirror().also { it.heard(DeskLine("", "\u0003", 0, KEYS.copy(paced = true)), box = "", now = 0) }
+
 class ComposerMirrorTest {
     private data class Edit(val name: String, val pane: String, val caret: Int, val after: String, val keys: List<String>)
 
@@ -105,10 +108,63 @@ class ComposerMirrorTest {
         assertNull(inStep().typed("", "p", live = false, now = 10), "typed while not live")
     }
 
-    // Past the length a harness turns into a `[Pasted text]` placeholder (#564) a paste is not
-    // typed at all: the box holds it and the send carries it whole.
+    // **A paste is typed, not held** (#666): a harness draws a placeholder for a write longer than
+    // it types (#564), so a long paste goes as pieces the node paces, every line its own run of
+    // them, and the box stays the pane's line, with nothing left for the send but the Enter.
     @Test
-    fun aPasteLongerThanAHarnessTypesIsHeldForTheSend() {
+    fun aLongPasteIsTypedInPiecesAndTheSendIsOnlyTheEnter() {
+        val first = "a".repeat(ComposerMirror.PIECE * 2 + 10)
+        val second = "b".repeat(ComposerMirror.PIECE - 1)
+        val paste = "look\n$first\n$second"
+        val mirror = pacedInStep()
+        val keys = mirror.typed("", paste, live = true, now = 0)!!
+        assertEquals(
+            listOf("look", "\n", "a".repeat(ComposerMirror.PIECE), "a".repeat(ComposerMirror.PIECE), "a".repeat(10), "\n", second),
+            keys,
+        )
+        assertEquals(listOf("\r"), mirror.submit(paste, now = 10))
+    }
+
+    // The pane takes the paste in at the node's pace, so its line reads short of the box until the
+    // last piece is in, and a reading taken before then is the paste still arriving, not the desk.
+    @Test
+    fun aPasteStillArrivingIsNotTakenForTheDesksLine() {
+        val paste = "x".repeat(6_000)
+        val mirror = pacedInStep()
+        mirror.typed("", paste, live = true, now = 0)
+        val partway = ComposerMirror.QUIET + 1_000
+        assertNull(mirror.heard(drawn("x".repeat(2_000)), box = paste, now = partway))
+        assertNull(mirror.settled(box = paste, now = partway + 100))
+        assertNull(mirror.heard(drawn(paste), box = paste, now = 5_000))
+    }
+
+    // **A box taller than the harness lets it grow scrolls** (#666), and the pane's reading is the
+    // last of its words, a newline at the cut sometimes read as a space. That is the box's own line
+    // seen through its window, not the desk emptying the front of it.
+    @Test
+    fun aBoxScrolledPastItsTopIsStillTheBoxsLine() {
+        val paste = (0 until 6).joinToString("\n") { "$it:" + "the quick brown fox ".repeat(30) }
+        val mirror = pacedInStep()
+        mirror.typed("", paste, live = true, now = 0)
+        val seen = paste.substring(paste.length - 1_300).replace('\n', ' ')
+        val after = 10_000L
+        assertNull(mirror.heard(DeskLine(seen, "\u0003", seen.length, KEYS.copy(paced = true)), box = paste, now = after))
+        assertNull(mirror.settled(box = paste, now = after + 100))
+        assertEquals(listOf("\r"), mirror.submit(paste, now = after + 200))
+    }
+
+    // A box that went its own way sends its words in the same pieces.
+    @Test
+    fun aLongReplyOutOfStepIsSentInPieces() {
+        val reply = "y".repeat(ComposerMirror.PIECE + 5)
+        val mirror = pacedInStep().also { it.heard(DeskLine("x", "\u0003", 1, KEYS.copy(paced = true)), box = "mine", now = 0) }
+        assertEquals(listOf(BACK, "y".repeat(ComposerMirror.PIECE), "y".repeat(5), "\r"), mirror.submit(reply, now = 10))
+    }
+
+    // A node from before the pacing writes the pieces back to back, which a harness draws as the
+    // placeholder they are cut to avoid: there a paste is held for the send and goes whole.
+    @Test
+    fun aPasteToANodeThatDoesNotPaceIsHeldForTheSend() {
         val long = "x".repeat(ComposerMirror.BURST + 1)
         val mirror = inStep()
         assertNull(mirror.typed("", long, live = true, now = 0))

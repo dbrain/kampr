@@ -10,7 +10,7 @@ use base64::Engine;
 use kampr_auth::{Device, Entry, Role};
 use kampr_core::PaneRegistry;
 use kampr_core::provider::Input;
-use kampr_core::registry::{PaneHold, Written};
+use kampr_core::registry::{PaneHold, Source, Written};
 use kampr_core::wire::{ClientMsg, ErrorCode, PROTOCOL, PendingSource, ServerMsg};
 use kampr_journal::ListeningReader;
 use kampr_mesh::peers::PeerHold;
@@ -1633,6 +1633,7 @@ impl Session {
                 .await;
             return true;
         }
+        let source = if typed { Source::Terminal } else { Source::Reply };
         let reader = (!typed).then(|| self.boot_hold_reader(pane)).flatten();
         match reader {
             Some((listening, agent)) => {
@@ -1649,7 +1650,7 @@ impl Session {
                 entry.hold.notify.notify_one();
                 true
             }
-            None => match session.registry.send(&local, input).await {
+            None => match session.registry.send(&local, input, source).await {
                 Written::Done(Ok(())) => true,
                 Written::Done(Err(e)) => {
                     self.wire
@@ -1812,10 +1813,10 @@ impl Session {
                         warn!(pane = %pane, "the harness never started reading its keys; the input goes anyway");
                         warned = true;
                     }
-                    break session.registry.write(&local, input).await;
+                    break session.registry.write(&local, input, Source::Reply).await;
                 }
                 if Self::reading(&session, &local, &hold).await {
-                    break session.registry.write(&local, input).await;
+                    break session.registry.write(&local, input, Source::Reply).await;
                 }
                 let look = match frames {
                     Some(_) => BOOT_BACKSTOP,
@@ -2030,7 +2031,7 @@ impl Session {
         for stroke in keystrokes {
             if let Err(e) = session
                 .registry
-                .write(&local, Input::Bytes(stroke.into_bytes()))
+                .write(&local, Input::Bytes(stroke.into_bytes()), Source::Reply)
                 .await
             {
                 self.wire
@@ -2168,7 +2169,7 @@ impl Session {
         for stroke in keys {
             if let Err(e) = session
                 .registry
-                .write(&local, Input::Bytes(stroke.as_bytes().to_vec()))
+                .write(&local, Input::Bytes(stroke.as_bytes().to_vec()), Source::Reply)
                 .await
             {
                 self.wire

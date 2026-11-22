@@ -6,6 +6,9 @@ it (the desk poll), and a key typed through the node to the frame that carries i
 
 Stands up an isolated herdr and `kampr serve` with keystroke-latency/up.sh; tears both down.
 Usage: round-trip.py [claude|codex|agy ...]
+PIECE=400 cuts each line into writes of at most that many characters, as ComposerMirror does for a
+node whose `keys` carry `paced: true`, and PASTE=<n> ends the run with a paste of about n
+characters in four lines (#666).
 """
 import json, os, subprocess, sys, threading, time
 
@@ -42,13 +45,20 @@ class Mirror:
             out.append(RIGHT * by)
         if removed:
             out.append(BACK * removed)
+        cut = int(os.environ.get("PIECE", "0")) or len(after) + 1
         for i, piece in enumerate(inserted.split("\n")):
             if i:
                 out.append(NEWLINE)
-            if piece:
-                out.append(piece)
+            out += [piece[at:at + cut] for at in range(0, len(piece), cut)]
         self.line, self.caret = after, shared + len(inserted)
         return out
+
+
+def seen(text, box):
+    """The box read back whole, or, scrolled past its top, its last words (#666)."""
+    words = lambda t: " ".join(t.split())
+    return text == box or (os.environ.get("PASTE") and len(text) < len(box) and words(text)
+                           and words(box).endswith(words(text)))
 
 
 class Feed:
@@ -72,7 +82,7 @@ class Feed:
         while time.perf_counter() < end:
             with self.lock:
                 for at, m in self.log:
-                    if at >= t0 and (m.get("text") or "") == want and "keys" in m:
+                    if at >= t0 and seen(m.get("text") or "", want) and "keys" in m:
                         return at, m
             time.sleep(0.003)
         with self.lock:
@@ -136,6 +146,11 @@ def run(harness, cfg, call):
         ("edit", "push the main branch\nand tag it"), ("edit", "push the main branch\nand tag"),
         ("edit", "git push the main branch\nand tag"),
     ]
+    if os.environ.get("PASTE"):
+        per = int(os.environ["PASTE"]) // 4
+        words = "the quick brown fox jumps over the lazy dog while the kettle boils "
+        lines = [(f"{i}:" + words * (per // len(words) + 1))[:per].rstrip() for i in range(4)]
+        steps.append(("edit", "git push the main branch\nand tag\n" + "\n".join(lines)))
     through = []
     ok = 0
     for kind, what in steps:
@@ -145,7 +160,7 @@ def run(harness, cfg, call):
         for k in keys:
             ws.send(json.dumps({"t": "input", "pane": pane, "text": k}))
         box = after
-        at, last = feed.wait(t0, box, 4)
+        at, last = feed.wait(t0, box, 4 + len(box) / 1000)
         if at is None:
             print(f"  MISMATCH after {kind} {what!r}: box {box!r} pane {last and last.get('text')!r} caret {last and last.get('caret')}")
             break
@@ -155,6 +170,21 @@ def run(harness, cfg, call):
             print(f"  caret: pane {last.get('caret')} mirror {mirror.caret} after {what!r}")
     print(f"  box -> pane -> convo.composer: {ok}/{len(steps)} in step; ms p50 "
           f"{sorted(through)[len(through)//2]:.0f} max {max(through):.0f}" if through else "  nothing came back")
+    if os.environ.get("PASTE") and ok == len(steps) and harness == "claude":
+        time.sleep(0.5)
+        ws.send(json.dumps({"t": "input", "pane": pane, "text": "\r"}))
+        record = None
+        for _ in range(40):
+            time.sleep(0.5)
+            for f in __import__("glob").glob(os.path.expanduser("~/.claude/projects/" + cwd.replace("/", "-") + "/*.jsonl")):
+                for line in open(f):
+                    r = json.loads(line)
+                    if r.get("type") == "user" and not r.get("isMeta"):
+                        c = r["message"]["content"]
+                        record = c if isinstance(c, str) else "".join(b.get("text", "") for b in c if isinstance(b, dict))
+            if record:
+                break
+        print(f"  submitted: {'verbatim' if record == box else 'pasted' if record and '<pasted_content' in record else repr(record)[:200]}")
     send(BACK * 80); time.sleep(1)
     ws.close()
     subprocess.run(["rm", "-rf", cwd])

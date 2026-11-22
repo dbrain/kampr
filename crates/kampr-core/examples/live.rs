@@ -79,7 +79,13 @@ async fn main() -> Result<()> {
     println!("  watcher_count = {}", registry.watcher_count(&target));
     println!("  observe children = {}", observe_children(&target));
 
-    registry.write(&target, Input::Bytes(b"clear\n".to_vec())).await?;
+    registry
+        .write(
+            &target,
+            Input::Bytes(b"clear\n".to_vec()),
+            kampr_core::registry::Source::Terminal,
+        )
+        .await?;
     drain(&mut a, Duration::from_millis(1200)).await;
     drain(&mut b, Duration::from_millis(200)).await;
 
@@ -93,8 +99,7 @@ async fn main() -> Result<()> {
                     "for i in $(seq 1 {LINES}); do printf '\\033[38;5;%dmSB-%04d\\033[0m coloured scrollback row\\n' $((i % 214 + 16)) $i; [ $((i % 200)) -eq 0 ] && sleep 0.75; done\n"
                 )
                 .into_bytes(),
-            ),
-        )
+            ), kampr_core::registry::Source::Terminal)
         .await?;
     let ua = drain(&mut a, Duration::from_secs(12)).await;
     let ub = drain(&mut b, Duration::from_secs(1)).await;
@@ -188,6 +193,7 @@ async fn main() -> Result<()> {
             Input::Bytes(
                 format!("for i in $(seq 1 {BURST}); do printf 'BURST-%04d\\n' $i; done\n").into_bytes(),
             ),
+            kampr_core::registry::Source::Terminal,
         )
         .await?;
     tokio::time::sleep(Duration::from_secs(8)).await;
@@ -227,8 +233,7 @@ async fn main() -> Result<()> {
                     "for i in $(seq 1 {PACED}); do printf 'PACED-%04d\\n' $i; [ $((i % 300)) -eq 0 ] && sleep 0.3; done\n"
                 )
                 .into_bytes(),
-            ),
-        )
+            ), kampr_core::registry::Source::Terminal)
         .await?;
     for _ in 0..7 {
         tokio::time::sleep(Duration::from_millis(600)).await;
@@ -311,7 +316,11 @@ async fn main() -> Result<()> {
     println!("  socket back; observe children = {}", observe_children(&target));
     let _ = drain(&mut b, Duration::from_secs(2)).await;
     registry
-        .write(&target, Input::Bytes(b"echo RECOVERED-OK\n".to_vec()))
+        .write(
+            &target,
+            Input::Bytes(b"echo RECOVERED-OK\n".to_vec()),
+            kampr_core::registry::Source::Terminal,
+        )
         .await?;
     let after = drain(&mut b, Duration::from_secs(4)).await;
     let alive = after

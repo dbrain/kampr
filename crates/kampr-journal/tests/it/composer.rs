@@ -145,19 +145,24 @@ fn a_caret_sent_home_is_the_line_with_the_caret_at_its_front() {
 
 /// The keys a reply box types with are the node's, like the clearing key: measured per harness
 /// (#564), and absent where nobody has measured them — omp's box is read and never typed into.
-/// Claude and Codex draw a pasted picture as one `[Image #n]` the keys step over whole (#620).
+/// Claude and Codex draw a pasted picture as one `[Image #n]` the keys step over whole (#620), and
+/// take a paste typed at the node's pace (#666).
 #[test]
 fn a_harness_carries_the_keys_measured_to_edit_its_box_and_omp_carries_none() {
     let images = EditKeys {
         images: true,
+        paced: true,
         ..EDIT_KEYS
     };
     assert_eq!(composed(&claude(), "claude-typed").unwrap().keys, Some(images));
     assert_eq!(composed(&codex(), "codex-typed").unwrap().keys, Some(images));
     assert_eq!(composed(&agy(), "agy-typed").unwrap().keys, Some(EDIT_KEYS));
     assert_eq!(
-        composed(&agy(), "agy-typed").unwrap().keys.map(|k| k.images),
-        Some(false)
+        composed(&agy(), "agy-typed")
+            .unwrap()
+            .keys
+            .map(|k| (k.images, k.paced)),
+        Some((false, false))
     );
     assert_eq!(composed(&omp(), "omp-typed").unwrap().keys, None);
 }
@@ -363,4 +368,40 @@ fn every_row_break_in_claudes_box_reads_back_as_what_was_typed() {
         text.lines().count(),
         wrong.join("\n")
     );
+}
+
+/// **A box taller than the harness lets it grow scrolls inside itself** (#666): Claude and Codex
+/// keep the caret's end in view and draw the start of the message off the top, Claude with no mark
+/// of it and Codex with a `↑` at the end of a row, which is the box's scroll mark and none of the
+/// operator's words. The reading is the end of the message, word for word; with the start of a
+/// paragraph out of sight, a newline is not always told from a wrap. Captured at the node's pace by
+/// `research/probe/mirror/clipped-box.py`.
+#[test]
+fn a_box_scrolled_past_its_top_reads_as_the_last_words_of_its_message() {
+    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let typed = words(
+        &std::fs::read_to_string(common::fixtures().join("composer").join("clipped-typed.txt")).unwrap(),
+    );
+    for (adapter, name) in [
+        (&claude() as &dyn JournalAdapter, "claude-clipped"),
+        (&codex(), "codex-clipped"),
+    ] {
+        let text = words(&read(adapter, name).unwrap_or_else(|| panic!("{name}: no reading")));
+        assert!(
+            text.len() > 1000 && text.len() < typed.len(),
+            "{name}: read {} of {}",
+            text.len(),
+            typed.len()
+        );
+        let tail = (0..=text.len())
+            .find(|&i| text.is_char_boundary(i) && typed.ends_with(&text[i..]))
+            .unwrap();
+        assert_eq!(
+            tail,
+            0,
+            "{name}: before the last {} words read: {:?}",
+            text.len() - tail,
+            &text[tail.saturating_sub(60)..tail]
+        );
+    }
 }

@@ -434,6 +434,7 @@ const MEASURED: Measured = Measured {
     clear: Some(CLEAR),
     keys: Some(EditKeys {
         images: true,
+        paced: true,
         ..EDIT_KEYS
     }),
 };
@@ -446,6 +447,17 @@ pub fn live(screen: &[&str]) -> Option<LiveBlock> {
     crate::live::read(screen, &LAYOUT)
 }
 
+/// A box taller than Codex lets it grow scrolls, and marks it with an arrow in the last column,
+/// where its text never runs (#558, #666).
 pub fn composer(screen: &[&str], caret: Caret, frame: Frame) -> Option<Composed> {
-    crate::composer::read(screen, caret, frame, &LAYOUT, &MEASURED)
+    let edge = (frame.cols as usize).saturating_sub(1);
+    let unmarked: Vec<String> = screen
+        .iter()
+        .map(|row| match row.char_indices().nth(edge) {
+            Some((at, '↑' | '↓')) => row[..at].trim_end().to_string(),
+            _ => row.to_string(),
+        })
+        .collect();
+    let rows: Vec<&str> = unmarked.iter().map(String::as_str).collect();
+    crate::composer::read(&rows, caret, frame, &LAYOUT, &MEASURED)
 }

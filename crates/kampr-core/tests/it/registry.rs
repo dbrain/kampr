@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use kampr_core::provider::{Input, PaneEvent, PaneInfo, PaneStream, Provider, RawScrollback};
 use kampr_core::push::{PaneChanges, Pulse};
 use kampr_core::registry::{
-    HistoryPolicy, PaneRegistry, PaneUpdate, RegistryConfig, RowRate, SUBMIT_GAP, Watcher, Written,
+    HistoryPolicy, PaneRegistry, PaneUpdate, RegistryConfig, RowRate, SUBMIT_GAP, Source, Watcher, Written,
 };
 use kampr_core::wire::Cursor;
 use std::collections::HashMap;
@@ -351,8 +351,12 @@ async fn a_pane_with_no_output_still_resets_so_a_restart_is_visible() {
 async fn input_reaches_the_provider() {
     let (p, reg) = setup().await;
     let _a = reg.watch("p").await.unwrap();
-    reg.write("p", Input::Bytes(b"\x1b[5~".to_vec())).await.unwrap();
-    reg.write("p", Input::Keys(vec!["ctrl+c".into()])).await.unwrap();
+    reg.write("p", Input::Bytes(b"\x1b[5~".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
+    reg.write("p", Input::Keys(vec!["ctrl+c".into()]), Source::Terminal)
+        .await
+        .unwrap();
     let w = p.writes.lock().await;
     assert_eq!(w.len(), 2);
     assert!(matches!(&w[0].1, Input::Bytes(b) if b == b"\x1b[5~"));
@@ -367,10 +371,12 @@ async fn input_reaches_the_provider() {
 async fn an_enter_close_behind_a_write_waits_until_the_write_has_been_read() {
     let (p, reg) = setup().await;
     let start = tokio::time::Instant::now();
-    reg.write("p", Input::Bytes(b"look at this".to_vec()))
+    reg.write("p", Input::Bytes(b"look at this".to_vec()), Source::Terminal)
         .await
         .unwrap();
-    reg.write("p", Input::Bytes(b"\r".to_vec())).await.unwrap();
+    reg.write("p", Input::Bytes(b"\r".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
     assert_eq!(
         start.elapsed(),
         SUBMIT_GAP,
@@ -379,9 +385,15 @@ async fn an_enter_close_behind_a_write_waits_until_the_write_has_been_read() {
 
     tokio::time::advance(Duration::from_secs(5)).await;
     let alone = tokio::time::Instant::now();
-    reg.write("p", Input::Bytes(b"\r".to_vec())).await.unwrap();
-    reg.write("q", Input::Bytes(b"words".to_vec())).await.unwrap();
-    reg.write("p", Input::Bytes(b"\r".to_vec())).await.unwrap();
+    reg.write("p", Input::Bytes(b"\r".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
+    reg.write("q", Input::Bytes(b"words".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
+    reg.write("p", Input::Bytes(b"\r".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
     assert_eq!(
         alone.elapsed(),
         Duration::ZERO,
@@ -389,10 +401,52 @@ async fn an_enter_close_behind_a_write_waits_until_the_write_has_been_read() {
     );
 
     let typed = tokio::time::Instant::now();
-    reg.write("p", Input::Bytes(b"a".to_vec())).await.unwrap();
-    reg.write("p", Input::Bytes(b"b".to_vec())).await.unwrap();
+    reg.write("p", Input::Bytes(b"a".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
+    reg.write("p", Input::Bytes(b"b".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
     assert_eq!(typed.elapsed(), Duration::ZERO, "a keystroke waited");
     assert_eq!(p.writes.lock().await.len(), 7);
+}
+
+/// **A reply's words arrive no faster than a harness reads them as typing** (#666): Claude and
+/// Codex took writes of 400 characters back to back, or even 50 ms apart on Codex, for a paste and
+/// drew a placeholder, and took every one written at 2,000 characters a second as typing. So the
+/// next write to the pane waits for the last piece of a reply to have been read, and a keystroke
+/// at the terminal holds nothing up behind it.
+#[tokio::test(start_paused = true)]
+async fn a_replys_words_hold_the_next_write_back_by_their_length() {
+    let (p, reg) = setup().await;
+    let piece = vec![b'w'; 400];
+    let start = tokio::time::Instant::now();
+    reg.write("p", Input::Bytes(piece.clone()), Source::Reply)
+        .await
+        .unwrap();
+    assert_eq!(start.elapsed(), Duration::ZERO, "the first piece waited");
+    reg.write("p", Input::Bytes(piece.clone()), Source::Reply)
+        .await
+        .unwrap();
+    assert_eq!(
+        start.elapsed(),
+        Duration::from_millis(200),
+        "the second piece went on the heels of the first"
+    );
+    reg.write("q", Input::Bytes(piece.clone()), Source::Reply)
+        .await
+        .unwrap();
+    assert_eq!(start.elapsed(), Duration::from_millis(200), "another pane waited");
+    reg.write("p", Input::Bytes(piece.clone()), Source::Terminal)
+        .await
+        .unwrap();
+    let keys = tokio::time::Instant::now();
+    reg.write("p", Input::Bytes(b"x".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
+    assert_eq!(keys.elapsed(), Duration::ZERO, "the terminal's keys were paced");
+    assert_eq!(start.elapsed(), Duration::from_millis(400));
+    assert_eq!(p.writes.lock().await.len(), 5);
 }
 
 /// A held Enter waits on its own: a socket that sent it goes on to other panes at once, while the
@@ -401,20 +455,27 @@ async fn an_enter_close_behind_a_write_waits_until_the_write_has_been_read() {
 async fn a_held_enter_holds_up_only_its_own_pane() {
     let (p, reg) = setup().await;
     let start = tokio::time::Instant::now();
-    reg.write("p", Input::Bytes(b"look at this".to_vec()))
+    reg.write("p", Input::Bytes(b"look at this".to_vec()), Source::Terminal)
         .await
         .unwrap();
-    let Written::Held(enter) = reg.send("p", Input::Bytes(b"\r".to_vec())).await else {
+    let Written::Held(enter) = reg
+        .send("p", Input::Bytes(b"\r".to_vec()), Source::Terminal)
+        .await
+    else {
         panic!("an Enter on the heels of the words did not wait");
     };
-    reg.write("q", Input::Bytes(b"elsewhere".to_vec())).await.unwrap();
+    reg.write("q", Input::Bytes(b"elsewhere".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
     assert_eq!(
         start.elapsed(),
         Duration::ZERO,
         "another pane waited behind the Enter"
     );
 
-    reg.write("p", Input::Bytes(b"next".to_vec())).await.unwrap();
+    reg.write("p", Input::Bytes(b"next".to_vec()), Source::Terminal)
+        .await
+        .unwrap();
     assert_eq!(
         start.elapsed(),
         SUBMIT_GAP,

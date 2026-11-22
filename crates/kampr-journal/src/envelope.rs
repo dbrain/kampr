@@ -64,10 +64,40 @@ pub fn push_text(turn: &mut Turn, text: String) {
         turn.blocks.push(Block::md(text));
         return;
     }
-    let said = spoken(&text);
+    let said = unpasted(spoken(&text));
     if !said.trim().is_empty() {
         turn.blocks.push(Block::md(said.into_owned()));
     }
+}
+
+/// A pasted block is the operator's words in tags the harness mints (#665). The tags go and the
+/// words stay, or the reply box cannot recognise the record as the reply it sent.
+fn unpasted(text: Cow<'_, str>) -> Cow<'_, str> {
+    if !text.contains("<pasted_content id=\"") {
+        return text;
+    }
+    const OPEN: &str = "<pasted_content id=\"";
+    const CLOSE: &str = "</pasted_content id=\"";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_ref();
+    while let Some(at) = [OPEN, CLOSE].iter().filter_map(|tag| rest.find(tag)).min() {
+        let Some(end) = rest[at..].find('>').map(|end| at + end + 1) else {
+            break;
+        };
+        let closing = rest[at..].starts_with(CLOSE);
+        let before = &rest[..at];
+        out.push_str(if closing {
+            before.strip_suffix('\n').unwrap_or(before)
+        } else {
+            before
+        });
+        rest = &rest[end..];
+        if !closing {
+            rest = rest.strip_prefix('\n').unwrap_or(rest);
+        }
+    }
+    out.push_str(rest);
+    Cow::Owned(out.trim().to_string())
 }
 
 /// What is left of a command result once the harness's own header is taken off it.

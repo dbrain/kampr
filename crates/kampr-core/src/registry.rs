@@ -262,8 +262,48 @@ impl Drop for PaneEntry {
 /// of it and kept it as a newline; one written 300 ms later submitted every time.
 pub const SUBMIT_GAP: Duration = Duration::from_millis(300);
 
-/// How a write left [`PaneRegistry::send`]: written, or an Enter waiting out [`SUBMIT_GAP`] on its
-/// own while it keeps the pane's turn.
+/// How fast a reply's words go into a pane (#666): Claude and Codex drew a paste placeholder for
+/// 400-character writes back to back, Codex for them 50 ms apart, and neither for any written at
+/// this rate. Each write a reply makes holds the pane's next write back by its own length.
+pub const REPLY_BYTES_PER_SEC: u64 = 2_000;
+
+/// Who a write is from: keys pressed at the terminal go at once, and a reply's words are paced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Source {
+    Terminal,
+    Reply,
+}
+
+#[derive(Default)]
+struct Turn {
+    wrote: Option<tokio::time::Instant>,
+    free: Option<tokio::time::Instant>,
+}
+
+impl Turn {
+    fn due(&self, submit: bool) -> Option<tokio::time::Instant> {
+        let gap = self.wrote.filter(|_| submit).map(|at| at + SUBMIT_GAP);
+        gap.max(self.free)
+            .filter(|due| *due > tokio::time::Instant::now())
+    }
+
+    fn took(&mut self, input: &Input, submit: bool, source: Source) {
+        if submit {
+            return;
+        }
+        let now = tokio::time::Instant::now();
+        self.wrote = Some(now);
+        self.free = match (source, input) {
+            (Source::Reply, Input::Bytes(bytes)) => {
+                Some(now + Duration::from_micros(bytes.len() as u64 * 1_000_000 / REPLY_BYTES_PER_SEC))
+            }
+            _ => None,
+        };
+    }
+}
+
+/// How a write left [`PaneRegistry::send`]: written, or waiting on its own while it keeps the
+/// pane's turn, an Enter out [`SUBMIT_GAP`] or a reply's words behind its last ones.
 pub enum Written {
     Done(Result<()>),
     Held(tokio::task::JoinHandle<Result<()>>),
@@ -276,8 +316,8 @@ pub struct PaneRegistry {
     config: RegistryConfig,
     panes: Mutex<HashMap<String, Weak<PaneEntry>>>,
     /// Each pane's turn to be written to, taken in the order writes arrive from every socket, and
-    /// when the pane last took something other than an Enter.
-    turns: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<tokio::time::Instant>>>>>,
+    /// when the pane last took something other than an Enter and may take more.
+    turns: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Turn>>>>,
     opening: tokio::sync::Mutex<()>,
     /// A revision, not a count: it only ever goes up, and a reader wants the edge.
     watcher_changes: Arc<tokio::sync::watch::Sender<u64>>,
@@ -309,17 +349,17 @@ impl PaneRegistry {
         self.provider.topology()
     }
 
-    pub async fn write(self: &Arc<Self>, pane_id: &str, input: Input) -> Result<()> {
-        match self.send(pane_id, input).await {
+    pub async fn write(self: &Arc<Self>, pane_id: &str, input: Input, source: Source) -> Result<()> {
+        match self.send(pane_id, input, source).await {
             Written::Done(written) => written,
             Written::Held(enter) => enter.await?,
         }
     }
 
-    /// Writes in the order writes arrive, but returns once the write has its turn: an Enter that
+    /// Writes in the order writes arrive, but returns once the write has its turn: a write that
     /// has to wait goes on waiting by itself, so the caller is free for other panes, and the
     /// next write to this pane queues behind it.
-    pub async fn send(self: &Arc<Self>, pane_id: &str, input: Input) -> Written {
+    pub async fn send(self: &Arc<Self>, pane_id: &str, input: Input, source: Source) -> Written {
         let turn = self
             .turns
             .lock()
@@ -332,20 +372,15 @@ impl PaneRegistry {
             Input::Bytes(bytes) => bytes == b"\r",
             Input::Keys(keys) => keys.len() == 1 && keys[0] == "Enter",
         };
-        if !submit {
-            *turn = Some(tokio::time::Instant::now());
-        }
-        let due = turn
-            .filter(|_| submit)
-            .map(|at| at + SUBMIT_GAP)
-            .filter(|due| *due > tokio::time::Instant::now());
-        let Some(due) = due else {
+        let Some(due) = turn.due(submit) else {
+            turn.took(&input, submit, source);
             return Written::Done(self.provider.write_pane(pane_id, input).await);
         };
         let registry = self.clone();
         let pane = pane_id.to_string();
         Written::Held(tokio::spawn(async move {
             tokio::time::sleep_until(due).await;
+            turn.took(&input, submit, source);
             let written = registry.provider.write_pane(&pane, input).await;
             drop(turn);
             written

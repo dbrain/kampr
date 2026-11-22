@@ -1,0 +1,41 @@
+caret 87 37
+
+ ▐▛███▛█   Claude Code v2.1.323
+▝▜██████▀  Haiku 5.5 · Claude Max
+ ▝▝   ▝▝   /tmp/kampr-clip-eZtRde · /rc
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                                                                      ctrl+g to edit in Vim
+─────────────────────────────────────────────────────────────────────────────────────────────
+❯ jumps over the lazy dog while the kettle boils the quick brown fox jumps over the lazy
+  dog while the kettle boils the quick brown fox jumps over the lazy dog while the kettle
+  boils the quick brown fox jumps over the lazy dog while the kettle boils the quick brown
+  fox jumps over the lazy dog while the kettle boils the quick brown fox jumps over the
+  lazy dog while the kettle boils the quick brown fox jumps over the lazy dog while the
+  kettle boils the quick brown fox jumps over the lazy dog while the kettle boils the quick
+  brown fox jumps over the lazy dog while the kettle boils the quick brown fox jumps ov
+  5:the quick brown fox jumps over the lazy dog while the kettle boils the quick brown fox
+  jumps over the lazy dog while the kettle boils the quick brown fox jumps over the lazy
+  dog while the kettle boils the quick brown fox jumps over the lazy dog while the kettle
+  boils the quick brown fox jumps over the lazy dog while the kettle boils the quick brown
+  fox jumps over the lazy dog while the kettle boils the quick brown fox jumps over the
+  lazy dog while the kettle boils the quick brown fox jumps over the lazy dog while the
+  kettle boils the quick brown fox jumps over the lazy dog while the kettle boils the quick
+  brown fox jumps over the lazy dog while the kettle boils the quick brown fox jumps ov
+─────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ don't ask on (shift+tab to cycle)

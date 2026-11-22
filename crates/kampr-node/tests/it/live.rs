@@ -11938,7 +11938,7 @@ async fn claudes_box_reaches_the_reply_box_whole_with_its_caret_and_its_keys() {
     assert_eq!(composer["caret"], want.chars().count(), "{composer}");
     assert_eq!(
         composer["keys"],
-        json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n", "images": true }),
+        json!({ "back": "\u{7f}", "left": "\u{1b}[D", "right": "\u{1b}[C", "newline": "\n", "images": true, "paced": true }),
         "{composer}"
     );
 

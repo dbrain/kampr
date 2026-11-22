@@ -119,6 +119,7 @@ server convo.composer .keys.back: string
 server convo.composer .keys.images: bool
 server convo.composer .keys.left: string
 server convo.composer .keys.newline: string
+server convo.composer .keys.paced: bool
 server convo.composer .keys.right: string
 server convo.composer .keys: object
 server convo.composer .pane: string

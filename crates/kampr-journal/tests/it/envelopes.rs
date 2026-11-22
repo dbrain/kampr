@@ -142,3 +142,33 @@ fn a_compaction_summary_is_named_as_one_rather_than_left_in_the_operators_voice(
         "an ordinary turn carries no kind at all"
     );
 }
+
+// Claude 2.1.304 on files a pasted block inside the prompt it was pasted into, wrapped in tags of
+// its own whose id it mints (#665). The words are the operator's; the tags are not. Left in, the
+// reader saw the tags, and the reply box never recognised the record as the reply it had sent,
+// so a pasted prompt that had arrived stayed on resend/dismiss.
+const PASTED: &str = r#"{"type":"user","uuid":"u-1","timestamp":"2026-11-21T12:32:04.220Z","message":{"role":"user","content":"kobapp issues from testing:\n\n<pasted_content id=\"1ea3\">\nmobile - a black screen before starting\ntv - down from season 10 focuses the eye icon\n</pasted_content id=\"1ea3\">\n"}}
+{"type":"user","uuid":"u-2","timestamp":"2026-11-21T12:40:00.000Z","message":{"role":"user","content":[{"type":"text","text":"\n\n<pasted_content id=\"9b0c\">\nonly a paste\n</pasted_content id=\"9b0c\">\n"}]}}
+"#;
+
+#[test]
+fn a_pasted_block_is_the_operators_words_without_the_harnesss_tags() {
+    let scratch = scratch_dir("envelope-pasted");
+    let path = scratch.join("session.jsonl");
+    std::fs::write(&path, PASTED).unwrap();
+
+    let mut journal = FileJournal::new(path, claude_parser(), Some(kampr_journal::claude::live));
+    let turns = journal.poll().unwrap();
+
+    assert_eq!(
+        said(&turns),
+        vec![
+            (
+                Role::User,
+                "kobapp issues from testing:\n\nmobile - a black screen before starting\ntv - down from season 10 focuses the eye icon"
+                    .to_string()
+            ),
+            (Role::User, "only a paste".to_string()),
+        ],
+    );
+}

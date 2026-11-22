@@ -582,6 +582,7 @@ const MEASURED: Measured = Measured {
     clear: Some(CLEAR),
     keys: Some(EditKeys {
         images: true,
+        paced: true,
         ..EDIT_KEYS
     }),
 };

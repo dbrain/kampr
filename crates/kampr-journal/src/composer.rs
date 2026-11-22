@@ -36,6 +36,12 @@ pub struct EditKeys {
     /// A bracketed paste of an image path is drawn as one `[Image #n]` that a single `back`,
     /// `left` or `right` takes whole, and the picture is sent with the message (#620).
     pub images: bool,
+    /// A paste longer than one write may be typed into this box: the node types a reply's words at
+    /// `kampr_core::registry::REPLY_BYTES_PER_SEC`, which this harness takes as typing, and a box
+    /// it scrolls reads back as the last words of its message (#666). Not agy, whose scrolled box
+    /// reads as words from its middle. A node from before the pacing sends none, and wrote a paste's
+    /// pieces as they came, which a harness drew as a placeholder.
+    pub paced: bool,
 }
 
 /// Claude 2.1.285, Codex and agy alike (#564): one `\x7f` takes the character before the
@@ -47,6 +53,7 @@ pub const EDIT_KEYS: EditKeys = EditKeys {
     right: "\u{1b}[C",
     newline: "\n",
     images: false,
+    paced: false,
 };
 
 /// What one harness's box has been measured to do.

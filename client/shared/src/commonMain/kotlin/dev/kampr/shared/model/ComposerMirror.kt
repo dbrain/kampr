@@ -54,6 +54,11 @@ class ComposerMirror {
         unheard = null
         taken = desk
         val inStep = box == (line ?: "")
+        val held = line
+        if (inStep && held != null && scrolled(held, desk.text)) {
+            caret = (held.length - (desk.text.length - (desk.caret ?: desk.text.length))).coerceIn(0, held.length)
+            return null
+        }
         learn(line, desk.text)
         line = desk.text
         caret = (desk.caret ?: desk.text.length).coerceIn(0, desk.text.length)
@@ -80,14 +85,14 @@ class ComposerMirror {
         val tail = before.substring(shared).commonSuffixWith(after.substring(shared)).length
         val removed = before.length - shared - tail
         val inserted = after.substring(shared, after.length - tail)
-        if (inserted.length > BURST) return null
+        if (!keys.paced && inserted.length > BURST) return null
         val out = mutableListOf<String>()
         walk(keys, before, shared + removed)?.let(out::add)
         if (removed > 0) out += keys.back.repeat(steps(keys, before, shared, shared + removed))
         out += pieces(inserted, keys)
         line = after
         caret = shared + inserted.length
-        quietUntil = now + QUIET
+        quietUntil = now + QUIET + arriving(inserted)
         return out
     }
 
@@ -98,11 +103,11 @@ class ComposerMirror {
         val held = line
         val out = mutableListOf<String>()
         when {
-            keys == null || held == null -> out += box
+            keys == null || held == null -> out += cut(box, keys)
 
             held.trimEnd() == box.trimEnd() -> Unit
 
-            box.startsWith(held) && caret == held.length -> out += retyped(box.substring(held.length))
+            box.startsWith(held) && caret == held.length -> out += retyped(box.substring(held.length), keys)
 
             // Only where the two differ: a whole line taken back and typed again lost the pictures
             // in it and had its Enter kept as a newline (#619).
@@ -112,13 +117,13 @@ class ComposerMirror {
                 val removed = held.length - shared - tail
                 walk(keys, held, shared + removed)?.let(out::add)
                 if (removed > 0) out += keys.back.repeat(steps(keys, held, shared, shared + removed))
-                out += retyped(box.substring(shared, box.length - tail))
+                out += retyped(box.substring(shared, box.length - tail), keys)
             }
         }
         out += SUBMIT
         line = ""
         caret = 0
-        quietUntil = now + QUIET
+        quietUntil = now + QUIET + arriving(box)
         return out.filter { it.isNotEmpty() }
     }
 
@@ -150,16 +155,16 @@ class ComposerMirror {
         }
     }
 
-    private fun retyped(text: String): List<String> {
+    private fun retyped(text: String, keys: EditKeys): List<String> {
         val out = mutableListOf<String>()
         var at = 0
         for (token in IMAGE_TOKEN.findAll(text)) {
             val pasted = pictures[token.value] ?: continue
-            out += text.substring(at, token.range.first)
+            out += cut(text.substring(at, token.range.first), keys)
             out += pasted
             at = token.range.last + 1
         }
-        out += text.substring(at)
+        out += cut(text.substring(at), keys)
         return out
     }
 
@@ -179,18 +184,56 @@ class ComposerMirror {
     // A newline goes as its own write: it was measured alone (#564), and inside a burst Codex
     // took it for the end of the message.
     private fun pieces(inserted: String, keys: EditKeys): List<String> = inserted.split('\n').flatMapIndexed { at, piece ->
-        listOfNotNull(keys.newline.takeIf { at > 0 }, piece.takeIf { it.isNotEmpty() })
+        listOfNotNull(keys.newline.takeIf { at > 0 }) + cut(piece, keys)
     }
+
+    // Never between the two halves of a surrogate pair, which would be two writes of invalid text.
+    // A node that does not pace them writes the pieces back to back, which is the paste they are
+    // cut to avoid, so a box reaching one keeps its words whole.
+    private fun cut(text: String, keys: EditKeys?): List<String> {
+        if (keys?.paced != true) return listOfNotNull(text.takeIf { it.isNotEmpty() })
+        val out = mutableListOf<String>()
+        var at = 0
+        while (at < text.length) {
+            var end = minOf(at + PIECE, text.length)
+            if (end < text.length && text[end - 1].isHighSurrogate()) end--
+            out += text.substring(at, end)
+            at = end
+        }
+        return out
+    }
+
+    // A box taller than the harness lets it grow scrolls, and the pane reads only its last words,
+    // a newline at the cut sometimes read as a space (#666).
+    private fun scrolled(held: String, read: String): Boolean {
+        val seen = words(read)
+        return seen.isNotEmpty() && read.length < held.length && words(held).endsWith(seen)
+    }
+
+    private fun words(text: String): String = text.split(WHITESPACE).filter { it.isNotEmpty() }.joinToString(" ")
+
+    // How long the node takes to type `text` at its pace, which the pane's readings lag behind.
+    private fun arriving(text: String): Long = text.encodeToByteArray().size * 1_000L / REPLY_BYTES_PER_SEC
 
     companion object {
         // The longest single write measured to land as typing on all three harnesses; 1500 came
-        // back as a `[Pasted text]` placeholder on Claude and Codex (#564).
+        // back as a `[Pasted text]` placeholder on Claude and Codex (#564). Only a node that paces
+        // a reply's writes (#666) is typed a longer paste.
         const val BURST = 800
+
+        // The writes a reply is cut into: back to back, two of them drew a paste placeholder on
+        // Claude and Codex, and at the node's pace none did (#666).
+        const val PIECE = 400
+
+        // kampr-core's `REPLY_BYTES_PER_SEC`, the pace the node types a reply's pieces at.
+        private const val REPLY_BYTES_PER_SEC = 2_000L
 
         // Past the slowest keystroke-to-reading measured through a real node (#566), so the
         // box's own keys have come back before a line that disagrees is taken for the desk's.
         const val QUIET = 1_200L
 
         private const val SUBMIT = "\r"
+
+        private val WHITESPACE = Regex("\\s+")
     }
 }

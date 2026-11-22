@@ -1455,7 +1455,7 @@ directory. Both need write, are audited, and go to the node that owns the pane. 
 node -> client  { "t": "convo.composer", "pane": "01J/w1:p1",
                   "text": "push the branch when", "clear": "\u0003", "caret": 20,
                   "keys": { "back": "\u007f", "left": "\u001b[D", "right": "\u001b[C", "newline": "\n",
-                            "images": true } }
+                            "images": true, "paced": true } }
 ```
 
 The line the operator has **half-typed at the pane's own keyboard** and not yet sent.
@@ -1505,8 +1505,18 @@ A client mirrors its reply box through these and nothing else, as ordinary `inpu
   while the box is in step with the pane's line, `keys` is present, the socket is live and no
   question stands on the pane (a digit answers a dialog, #413/#421/#487). A write happens only
   because the operator pressed a key in the box: opening a view, switching to it and reconnecting
-  never write (rule 3). A paste longer than 800 characters is not typed — 1500 came back as a
-  `[Pasted text]` placeholder on Claude and Codex (#564) — and waits for the send.
+  never write (rule 3). Text goes in writes of at most 400 characters, each line its own run of
+  them, and the node types a reply's writes no faster than 2,000 bytes a second, holding the
+  pane's next write back by each one's length: back to back, two such writes came out as a
+  `[Pasted text]` placeholder on Claude and Codex, and at that pace none did (#564, #666). `keys`
+  carry `paced: true` where the harness takes a paste typed that way and a box it scrolls reads back
+  as the last words of the message (Claude, Codex); a client keeps its line through a reading that
+  is those last words. agy's scrolled box reads as words from its middle, so its `keys` say
+  `paced: false`, as every node from before the pacing does. Without it a paste longer than 800
+  characters is not typed and waits for the send, which goes whole.
+- **Pacing applies only to the reply box.** `input` marked `typed` (keys pressed at the terminal)
+  is written at once and holds nothing up behind it; every other `input`, and the keystrokes that
+  answer a dialog, is paced.
 - **Pane → box.** A line the desk typed is taken up into a reply box that is empty or still holds
   exactly what it last mirrored; a box the operator has written in out of step keeps its words, and
   the line is shown beside it as before. The box's own keys come back a frame or two behind it, so
