@@ -4074,6 +4074,37 @@ async fn become_harness(session: &Session, local: &str, dir: &Path, agent: &str)
     foreground_named(session, local, agent).await
 }
 
+/// [`become_harness`]'s painter: the same trick under the harness's name, reading one line per
+/// paint and writing it to the screen.
+///
+/// **A shell prompt on the pane is the defect's own shape.** The lift walks up from the row that
+/// opens the composer, and this machine's login prompt is `❯` — the glyph Claude uses for its own
+/// composer — so a block painted under a real shell sits *below* the row the reader takes for the
+/// composer and is never reached. It is the trap the painter exists for elsewhere in this suite:
+/// a shell re-renders what it was given, on its own schedule, over whatever was drawn.
+async fn become_painter(session: &Session, local: &str, dir: &Path, agent: &str) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    let binary = dir.join(agent);
+    std::fs::write(
+        &binary,
+        "#!/bin/sh\nstty -echo\nwhile IFS= read -r row; do printf \"%b\" \"$row\"; done\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    session
+        .call(
+            "pane.send_text",
+            json!({ "pane_id": local, "text": format!("exec {}\n", binary.display()) }),
+        )
+        .await;
+    foreground_named(session, local, agent).await
+}
+
+/// A painter line: the block's rows joined by the escape `printf %b` turns back into newlines.
+fn painted(lines: &[&str]) -> String {
+    lines.join("\\n")
+}
+
 /// The pid of the process called `name` that herdr reports in the pane's foreground. Given up on
 /// at the same minute as [`a_pane_at_its_shell`] and for the same reason: this is setup, and
 /// under the whole live suite a shell has taken over ten seconds to run what it was sent.
@@ -5831,24 +5862,6 @@ impl LiveTurn {
     }
 }
 
-/// Paints literal screen fragments, one shell command, with a pause between them — so a block is
-/// seen to *grow*, and only one echoed command line ever sits above it.
-fn paint(parts: &[&[&str]]) -> String {
-    let mut command = String::new();
-    for part in parts {
-        if !command.is_empty() {
-            command.push_str("sleep 1; ");
-        }
-        let quoted: Vec<String> = part
-            .iter()
-            .map(|l| format!("'{}'", l.replace('\'', "'\\''")))
-            .collect();
-        command.push_str(&format!("printf '%s\\n' {}; ", quoted.join(" ")));
-    }
-    command.push('\n');
-    command
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
     let fixture = LiveTurn::new();
@@ -5871,7 +5884,7 @@ async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
     // Herdr detects a harness by scraping the screen, so a test that wants a `claude` pane at
     // `working` says so through the same API a plugin would — over a pane that really is running
     // a process by that name, because a node serves no conversation to one that is not.
-    become_harness(&h._session, &local, fixture.home.path(), "claude").await;
+    become_painter(&h._session, &local, fixture.home.path(), "claude").await;
     h._session
         .call(
             "pane.report_agent",
@@ -5895,18 +5908,25 @@ async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
     );
 
     // The message arrives in two paints, because a block earns its preview by growing.
-    send(
+    paint_screen(
         &mut socket,
-        json!({ "t": "input", "pane": pane, "text": paint(&[
-            &[
-                "● The parser is a state machine over the byte stream, and every escape",
-                "  sequence is one walk through it.",
-            ],
-            &[
-                "  Printable text takes the short path and lands in a cell; a control byte",
-                "  takes the long one.",
-            ],
-        ]) }),
+        &pane,
+        &painted(&[
+            "● The parser is a state machine over the byte stream, and every escape",
+            "  sequence is one walk through it.",
+        ]),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    paint_screen(
+        &mut socket,
+        &pane,
+        &painted(&[
+            "● The parser is a state machine over the byte stream, and every escape",
+            "  sequence is one walk through it.",
+            "  Printable text takes the short path and lands in a cell; a control byte",
+            "  takes the long one.",
+        ]),
     )
     .await;
 
@@ -5964,15 +5984,20 @@ async fn a_turn_in_progress_streams_off_the_screen_and_yields_to_the_record() {
     send(&mut socket, json!({ "t": "unwatch", "pane": pane })).await;
     send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
     until_pane(&mut socket, "grid.reset", &pane, 20).await;
-    send(
+    paint_screen(
         &mut socket,
-        json!({ "t": "input", "pane": pane, "text": paint(&[
-            &[
-                "● A second message nobody asked to see, growing",
-                "  across two paints so it would qualify.",
-            ],
-            &["  And here is the second paint."],
-        ]) }),
+        &pane,
+        &painted(&["● A second message nobody asked to see, growing"]),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    paint_screen(
+        &mut socket,
+        &pane,
+        &painted(&[
+            "● A second message nobody asked to see, growing",
+            "  across two paints so it would qualify.",
+        ]),
     )
     .await;
     assert!(
