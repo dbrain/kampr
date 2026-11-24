@@ -239,6 +239,64 @@ class InputTest {
         assertEquals(listOf(Esc.PAGE_UP), recorder.text)
     }
 
+    // Every physical keyboard sends a back-tab for shift+tab, and the pane reads the difference:
+    // the tab cap used to send a plain tab with shift armed, so the pane saw the two as one.
+    @Test
+    fun shiftArmedTabIsABacktab() {
+        val (recorder, keys) = sink()
+        keys.latches.tap(Latch.Shift)
+        val tab = allCaps().first { it.label == "tab" }
+        keys.press(tab)
+        assertEquals(listOf(Esc.BACKTAB), recorder.text)
+        assertFalse(keys.latches.shift.active(), "the latch was armed for the tab and must be spent")
+    }
+
+    // The hardware tab arrives through the IME as a tab, and it is the same chord: the latch
+    // decorates it and the pane gets the back-tab.
+    @Test
+    fun shiftArmedTabFromTheImeIsABacktab() {
+        val (recorder, keys) = sink()
+        keys.latches.tap(Latch.Shift)
+        keys.type(Esc.TAB)
+        assertEquals(listOf(Esc.BACKTAB), recorder.text)
+    }
+
+    // A legacy terminal sends the same byte for Enter and shift+Enter, so a pane reading bytes
+    // cannot tell them apart: the chord goes out as a named key and the pane's side encodes it.
+    @Test
+    fun shiftArmedEnterGoesOutAsANamedKey() {
+        val (recorder, keys) = sink()
+        keys.latches.tap(Latch.Shift)
+        keys.type(Esc.ENTER)
+        val named = recorder.sent.filterIsInstance<ClientMsg.InputKeys>()
+        assertEquals(1, named.size, "no named key left: ${recorder.sent}")
+        assertEquals(listOf("shift+enter"), named.single().keys)
+        assertTrue(recorder.text.isEmpty(), "the Enter leaked out as text: ${recorder.text}")
+        assertFalse(keys.latches.shift.active(), "the latch was armed for the Enter and must be spent")
+    }
+
+    // Named keys are typed where they land, so the node's boot hold must not keep one waiting on
+    // a harness that has not drawn its composer (#535).
+    @Test
+    fun aNamedKeyIsMarkedTyped() {
+        val (recorder, keys) = sink()
+        keys.keys(listOf("shift+enter"))
+        val named = recorder.sent.single() as ClientMsg.InputKeys
+        assertTrue(named.typed, "the grid sent a key the node would hold as a reply")
+    }
+
+    // A control key through the IME is a keystroke too: the latch armed for it is spent, the
+    // way shift is spent by a shift+backspace on a physical keyboard, and it must not leak onto
+    // the character that follows.
+    @Test
+    fun aLatchIsSpentOnAControlKeyFromTheIme() {
+        val (recorder, keys) = sink()
+        keys.latches.tap(Latch.Shift)
+        keys.type(Esc.BACKSPACE)
+        keys.type("a")
+        assertEquals(listOf(Esc.BACKSPACE, "a"), recorder.text)
+    }
+
     // The arrow cluster is an inverted T on every layer: up sits directly above down, with left
     // and right flanking it, so a thumb finds the key without looking.
     @Test

@@ -7,6 +7,10 @@ pub enum Outcome {
     Do(Action),
     /// Bytes for the focused pane, over `input` as `text`. Never a terminal stream.
     ToPane(String),
+    /// Named keys for the focused pane, over `input` as `keys`: the pane's side encodes them,
+    /// for the chords no byte stream can carry (shift+Enter is indistinguishable from Enter in
+    /// one).
+    ToKeys(Vec<String>),
     /// The keymap on top of the stack changed; the footer has to be redrawn.
     Redrew,
 }
@@ -75,19 +79,19 @@ impl Router {
                     self.enter(Mode::Prefix);
                     return Outcome::Redrew;
                 }
-                encode(key).map_or(Outcome::Nothing, Outcome::ToPane)
+                to_pane(key, Outcome::Nothing)
             }
             Mode::Prefix => {
                 self.leave();
                 // `cat -v` printed `^B` once for `ctrl+b ctrl+b`, so the second prefix is
                 // delivered as a byte and is never looked up as a binding (#290).
                 if keymap::same(key, self.prefix) {
-                    return encode(key).map_or(Outcome::Nothing, Outcome::ToPane);
+                    return to_pane(key, Outcome::Nothing);
                 }
                 match keymap::prefix(key) {
                     Some(bind) => self.apply(bind),
                     // Anything that is not a binding after the prefix goes to the pane.
-                    None => encode(key).map_or(Outcome::Redrew, Outcome::ToPane),
+                    None => to_pane(key, Outcome::Redrew),
                 }
             }
             modal => match keymap::lookup(modal, key) {
@@ -111,6 +115,17 @@ impl Router {
             }
         }
     }
+}
+
+/// The keys that go to the pane, and the outcome an unbound key takes when `encode` has no
+/// bytes for it.
+fn to_pane(key: KeyEvent, unbound: Outcome) -> Outcome {
+    // A legacy terminal sends the same byte for the two, so the pane cannot tell them apart:
+    // the chord goes out as a named key and the pane's side encodes it.
+    if key.code == KeyCode::Enter && key.modifiers == KeyModifiers::SHIFT {
+        return Outcome::ToKeys(vec!["shift+enter".into()]);
+    }
+    encode(key).map_or(unbound, Outcome::ToPane)
 }
 
 /// One key as the bytes a PTY would have seen.

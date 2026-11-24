@@ -1146,7 +1146,25 @@ impl Provider for HerdrProvider {
                     .map_err(|_| anyhow::anyhow!("pane input must be valid UTF-8"))?;
                 self.inner.herdr.send_text(pane_id, &text).await
             }
-            Input::Keys(keys) => self.inner.herdr.send_keys(pane_id, &keys).await,
+            Input::Keys(keys) => match self.inner.herdr.send_keys(pane_id, &keys).await {
+                // A herdr without `pane.send_keys` is an installed one, and a chord must not die
+                // on it: the bytes a terminal would have sent go out as text instead, which for
+                // a shift+enter is the plain enter — the only byte a legacy pane has for it.
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    let bytes: Vec<u8> = keys
+                        .iter()
+                        .filter_map(|k| crate::keys::encode(k))
+                        .flatten()
+                        .collect();
+                    if bytes.is_empty() {
+                        return Err(e);
+                    }
+                    let text = String::from_utf8(bytes)
+                        .map_err(|_| anyhow::anyhow!("pane input must be valid UTF-8"))?;
+                    self.inner.herdr.send_text(pane_id, &text).await
+                }
+            },
             Input::Paste(text) => {
                 let canonical = self.inner.reads_lines(pane_id).await;
                 let framed = crate::paste::framed(&text, !canonical);

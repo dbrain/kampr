@@ -67,6 +67,17 @@ class InputSink(
         io.send(ClientMsg.InputText(paneId, text, typed = true, paste = onePaste(text)))
     }
 
+    // A chord no byte stream can carry: the pane's side encodes it for the program that sits in
+    // there, the way a terminal would.
+    fun keys(names: List<String>) {
+        if (names.isEmpty()) return
+        sends++
+        trace?.sent()
+        val first = names.firstOrNull().orEmpty()
+        typed(if (first == "enter" || first == "shift+enter") "\r" else "")
+        io.send(ClientMsg.InputKeys(paneId, names, typed = true))
+    }
+
     // The submit is the hook, not the keystroke: by the time a whole command has been typed it is
     // already in the PTY, so the only thing that can still be held back is the Enter that runs it.
     fun raw(text: String) {
@@ -134,12 +145,34 @@ class InputSink(
     }
 
     // Characters arrive already composed by the platform; a latch only ever decorates the first
-    // one, because the operator armed it for one keystroke. A payload that already starts with a
-    // control byte came from a hardware key rather than an IME and carries its own modifiers.
+    // one, because the operator armed it for one keystroke. A payload that starts with a control
+    // byte carries its own modifiers, except the two chords a latch can express: a shift-armed
+    // Enter and a shift-armed Tab, which the latches do.
     fun type(text: String) {
         if (text.isEmpty()) return
         if (text[0].code < 0x20 || text[0] == '\u007f') {
-            raw(text)
+            when {
+                // A legacy terminal sends the same byte for the two, so the chord goes out as a
+                // named key and the pane's side is the one that encodes it.
+                text == Esc.ENTER && latches.shift.active() -> {
+                    latches.consume()
+                    keys(listOf("shift+enter"))
+                }
+
+                // Every physical keyboard sends a back-tab for shift+tab, and the pane reads
+                // the difference.
+                text == Esc.TAB && latches.shift.active() -> {
+                    latches.consume()
+                    raw(Esc.BACKTAB)
+                }
+
+                else -> {
+                    // A control key is a keystroke, so the latch armed for it is spent here
+                    // rather than leaking onto the next character.
+                    latches.consume()
+                    raw(text)
+                }
+            }
             return
         }
         if (!latches.ctrl.active() && !latches.alt.active() && !latches.shift.active()) {
@@ -159,7 +192,12 @@ class InputSink(
     private fun decorate(text: String, ctrl: Boolean, alt: Boolean, shift: Boolean): String {
         if (text.isEmpty()) return text
         var out = text
-        if (shift && out.length == 1) out = shifted(out[0]).toString()
+        if (shift && out == Esc.TAB) {
+            // shift+tab is a back-tab on every physical keyboard, not a shifted tab.
+            out = Esc.BACKTAB
+        } else if (shift && out.length == 1) {
+            out = shifted(out[0]).toString()
+        }
         if (ctrl && out.length == 1) out = Esc.control(out[0]) ?: out
         if (alt) out = Esc.ESCAPE + out
         return out

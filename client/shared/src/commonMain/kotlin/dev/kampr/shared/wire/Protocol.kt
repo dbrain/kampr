@@ -725,7 +725,7 @@ sealed interface ClientMsg {
 
     data class InputB64(val pane: String, val b64: String) : ClientMsg
 
-    data class InputKeys(val pane: String, val keys: List<String>) : ClientMsg
+    data class InputKeys(val pane: String, val keys: List<String>, val typed: Boolean = false) : ClientMsg
 
     data class Answer(val pane: String, val key: String, val id: String? = null, val text: String? = null) : ClientMsg
 

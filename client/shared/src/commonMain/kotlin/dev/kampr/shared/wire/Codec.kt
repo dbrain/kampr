@@ -241,6 +241,7 @@ object Wire {
             put("t", "input")
             put("pane", msg.pane)
             put("keys", buildJsonArray { msg.keys.forEach { add(JsonPrimitive(it)) } })
+            if (msg.typed) put("typed", true)
         }
 
         is ClientMsg.Answer -> buildJsonObject {

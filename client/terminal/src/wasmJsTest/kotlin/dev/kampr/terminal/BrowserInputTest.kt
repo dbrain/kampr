@@ -4,6 +4,7 @@ import dev.kampr.shared.platform.touchBrowser
 import dev.kampr.terminal.input.PaneChord
 import dev.kampr.terminal.input.deliverChordsTo
 import dev.kampr.terminal.input.deliverInputTo
+import dev.kampr.terminal.input.deliverKeysTo
 import dev.kampr.terminal.input.drainInput
 import dev.kampr.terminal.input.focusInput
 import dev.kampr.terminal.input.holdsInput
@@ -44,6 +45,19 @@ private fun altKey(key: String) {
             var s = globalThis.__kamprInput;
             s.el.dispatchEvent(new KeyboardEvent('keydown', {
                 key: key, altKey: true, bubbles: true, cancelable: true,
+            }));
+        })()
+        """,
+    )
+}
+
+private fun shiftKey(key: String) {
+    js(
+        """
+        (function () {
+            var s = globalThis.__kamprInput;
+            s.el.dispatchEvent(new KeyboardEvent('keydown', {
+                key: key, shiftKey: true, bubbles: true, cancelable: true,
             }));
         })()
         """,
@@ -380,6 +394,38 @@ class BrowserInputTest {
         typeKey("ArrowUp")
         assertEquals("\u001b[A", drainInput(), "a hardware arrow never reached the pane")
         focusInput(false)
+    }
+
+    // Every physical keyboard sends a back-tab for shift+tab; the handler used to send a plain
+    // tab, so the pane read the two as one.
+    @Test
+    fun aShiftTabFromHardwareIsABacktab() {
+        installInput()
+        focusInput(true)
+        drainInput()
+        shiftKey("Tab")
+        assertEquals("\u001b[Z", drainInput(), "shift+tab reached the pane as a plain tab")
+        focusInput(false)
+    }
+
+    // A legacy terminal sends the same byte for Enter and shift+Enter, so the pane cannot tell
+    // them apart out of the text stream: the chord is a named key, delivered beside the queue.
+    @Test
+    fun aShiftEnterFromHardwareIsANamedKey() {
+        installInput()
+        focusInput(true)
+        drainInput()
+        val named = mutableListOf<String>()
+        deliverKeysTo { named += it }
+        try {
+            shiftKey("Enter")
+            assertEquals(listOf("shift+enter"), named, "the chord never left as a key")
+            assertEquals("", drainInput(), "the chord also leaked into the text stream")
+        } finally {
+            deliverKeysTo(null)
+            deliverInputTo(null)
+            focusInput(false)
+        }
     }
 
     // The report: alt+enter in a Claude prompt box sometimes opens a line and sometimes sends the

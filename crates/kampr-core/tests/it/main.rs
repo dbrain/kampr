@@ -1,5 +1,6 @@
 mod desk;
 mod events;
+mod key_fallback;
 mod naming;
 mod observe;
 mod protocol;

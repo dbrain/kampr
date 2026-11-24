@@ -13,6 +13,7 @@ import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.terminal.guard.SubmitGuard
 import dev.kampr.terminal.input.Esc
 import dev.kampr.terminal.input.InputSink
+import dev.kampr.terminal.input.Latch
 import dev.kampr.terminal.input.Latches
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -75,6 +76,18 @@ class SubmitGuardTest {
         sink.raw(Esc.ENTER)
         assertEquals("rm -rf build", guard.state.held?.command)
         assertTrue(io.text.isEmpty(), "the Enter must not have reached the pane")
+    }
+
+    // shift+Enter is a line break, not a submit: holding it would make a two-line command
+    // impossible on a machine whose only Enter is the soft one.
+    @Test
+    fun aShiftEnterIsNeverHeldByTheGuard() {
+        val pane = screen(80, "[13:44 dbrain@comingclean ~/dev/kampr]\$ rm -rf build")
+        val (io, sink, guard) = rig(pane)
+        sink.latches.tap(Latch.Shift)
+        sink.type(Esc.ENTER)
+        assertNull(guard.state.held, "the line break was kept as if it ran the command")
+        assertEquals(1, io.sent.filterIsInstance<ClientMsg.InputKeys>().size)
     }
 
     @Test

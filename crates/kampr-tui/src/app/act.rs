@@ -118,6 +118,7 @@ impl App {
             Outcome::Redrew => {}
             Outcome::Do(action) => self.act(action),
             Outcome::ToPane(text) => self.send(&text),
+            Outcome::ToKeys(keys) => self.send_keys(&keys),
         }
         self.copy_follows(before);
         if before != Mode::Navigate && self.router.mode() == Mode::Navigate {
@@ -390,6 +391,18 @@ impl App {
             return;
         }
         if !self.client.typed(&pane, text) {
+            self.note("not delivered — the socket is down");
+        }
+    }
+
+    fn send_keys(&mut self, keys: &[String]) {
+        let Some(pane) = self.focus.clone() else { return };
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        let names: Vec<&str> = keys.iter().map(String::as_str).collect();
+        if !self.client.keys(&pane, &names) {
             self.note("not delivered — the socket is down");
         }
     }

@@ -293,8 +293,10 @@ impl Client {
         }))
     }
 
+    /// Named keys typed at the grid, which the node never holds for a harness that has not drawn
+    /// its composer, the way [`Client::typed`] does for text (#535).
     pub fn keys(&self, pane: &str, keys: &[&str]) -> bool {
-        self.send(json!({ "t": "input", "pane": pane, "keys": keys }))
+        self.send(json!({ "t": "input", "pane": pane, "keys": keys, "typed": true }))
     }
 
     /// The node decides whether a submit key follows, per harness, so only a key that was offered

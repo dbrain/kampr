@@ -59,10 +59,19 @@ impl Line {
     }
 
     pub fn keys(&mut self, keys: &[String]) -> Vec<Step> {
-        keys.iter()
-            .filter_map(|key| kampr_core::keys::encode(key))
-            .flat_map(|bytes| self.feed(&String::from_utf8_lossy(&bytes)))
-            .collect()
+        let mut steps = Vec::new();
+        for key in keys {
+            // The legacy bytes for the chord are a plain enter, and a plain enter is what the
+            // composer reads as submit: the named key must carry the difference.
+            if key == "shift+enter" {
+                steps.extend(self.feed("\n"));
+                continue;
+            }
+            if let Some(bytes) = kampr_core::keys::encode(key) {
+                steps.extend(self.feed(&String::from_utf8_lossy(&bytes)));
+            }
+        }
+        steps
     }
 }
 
@@ -103,5 +112,18 @@ mod tests {
         assert_eq!(line.keys(&keys(&["ctrl+c"])), [Step::Interrupt]);
         assert_eq!(line.keys(&keys(&["Escape"])), [Step::Interrupt]);
         assert_eq!(line.keys(&keys(&["Up", "Left"])), []);
+    }
+
+    #[test]
+    fn a_shift_enter_is_a_line_break_and_not_a_submit() {
+        // The legacy bytes for the chord are a plain enter, and a plain enter is what the
+        // composer reads as submit: the named key must carry the difference.
+        let mut line = Line::default();
+        let keys = |names: &[&str]| names.iter().map(|k| k.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            line.keys(&keys(&["a", "shift+enter", "b", "Enter"])),
+            [Step::Submit("a\nb".into())],
+            "the line break ran the message"
+        );
     }
 }

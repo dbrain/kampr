@@ -178,6 +178,19 @@ fn the_keys_herdrs_grammar_rejects_are_escape_sequences() {
 }
 
 #[test]
+fn a_shift_enter_is_a_named_key_and_not_a_byte() {
+    // A legacy terminal sends the same byte for the two, so the pane cannot tell them apart:
+    // the chord goes out as a key and the pane's side encodes it.
+    let mut router = Router::default();
+    assert_eq!(
+        router.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT)),
+        Outcome::ToKeys(vec!["shift+enter".into()])
+    );
+    // And the plain Enter is the byte it always was.
+    assert_eq!(router.key(key(KeyCode::Enter)), Outcome::ToPane("\r".into()));
+}
+
+#[test]
 fn the_escape_hatch_moves_the_prefix_so_the_pane_gets_ctrl_b_untouched() {
     // herdr uses the *local* keybindings for `--remote` and ships a flag to take the server's
     // instead. herdr's own config is not on the wire and #296 measured that a client cannot read

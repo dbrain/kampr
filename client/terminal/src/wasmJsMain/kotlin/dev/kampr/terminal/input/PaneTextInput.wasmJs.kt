@@ -14,7 +14,7 @@ import kotlinx.coroutines.delay
 // the text path in a browser. The readable input is an offscreen contenteditable driven through
 // beforeinput / input / composition*, diffed against what it last held. keydown is kept
 // only for the keys a hardware keyboard sends and an IME never does.
-private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: () -> Unit) {
+private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: () -> Unit, keys: (String) -> Unit) {
     js(
         """
         (function () {
@@ -22,6 +22,7 @@ private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: (
                 globalThis.__kamprInput.notify = notify;
                 globalThis.__kamprInput.chord = chord;
                 globalThis.__kamprInput.reclaim = reclaim;
+                globalThis.__kamprInput.keys = keys;
                 return;
             }
             var el = document.createElement('div');
@@ -38,7 +39,7 @@ private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: (
                 'background:transparent;overflow:hidden;z-index:-1;';
             document.body.appendChild(el);
 
-            var state = { el: el, queue: [], hold: false, notify: notify, chord: chord, reclaim: reclaim };
+            var state = { el: el, queue: [], hold: false, notify: notify, chord: chord, reclaim: reclaim, keys: keys };
             state.typing = function () {
                 var active = document.activeElement;
                 while (active && active.shadowRoot && active.shadowRoot.activeElement) {
@@ -144,7 +145,17 @@ private fun installDom(notify: () -> Unit, chord: (String) -> String, reclaim: (
                 if (e.isComposing || e.keyCode === 229) return;
                 var sequence = named[e.key];
                 if (sequence) {
-                    if (sequence.length > 1) sequence = modified(sequence, e);
+                    if (sequence === '\t' && e.shiftKey) sequence = '\u001b[Z';
+                    else if (sequence === '\r' && e.shiftKey) {
+                        // A legacy terminal sends the same byte for Enter and shift+Enter, so
+                        // the chord leaves as a named key beside the queue: the pane's side is
+                        // the one that encodes it for the program there.
+                        if (state.keys) state.keys('shift+enter');
+                        else push('\r');
+                        e.preventDefault();
+                        return;
+                    }
+                    else if (sequence.length > 1) sequence = modified(sequence, e);
                     else if (e.altKey) sequence = '\u001b' + sequence;
                     push(sequence);
                     e.preventDefault();
@@ -212,6 +223,18 @@ internal fun deliverChordsTo(take: ((PaneChord) -> Unit)?) {
     chordTo = take
 }
 
+// A named key, the way a chord is delivered: it is not text, so it does not go through the
+// queue, and the pane's side is the one that encodes it for the program there.
+private var keysTo: ((String) -> Unit)? = null
+
+internal fun deliverKeysTo(take: ((String) -> Unit)?) {
+    keysTo = take
+}
+
+internal fun sendKey(name: String) {
+    keysTo?.invoke(name)
+}
+
 private fun flushInput() {
     val deliver = deliverTo ?: return
     val pending = drainInput()
@@ -243,7 +266,7 @@ private fun answerChord(descriptor: String): String {
     return if (chordSendsControl(ctrl = flags.contains('c'), meta = flags.contains('m'))) "control" else "pass"
 }
 
-internal fun installInput() = installDom(::flushInput, ::answerChord, ::reclaimInputFocus)
+internal fun installInput() = installDom(::flushInput, ::answerChord, ::reclaimInputFocus, ::sendKey)
 
 // `touchBrowser` and not the key row's reading, because these are two questions off one browser
 // and they want different thresholds. Here the question is whether focusing would raise a soft
@@ -359,7 +382,11 @@ actual fun PaneTextInput(
     }
     DisposableEffect(sink, enabled) {
         deliverInputTo(if (enabled) sink::type else null)
-        onDispose { deliverInputTo(null) }
+        deliverKeysTo(if (enabled) { name -> sink.keys(listOf(name)) } else null)
+        onDispose {
+            deliverInputTo(null)
+            deliverKeysTo(null)
+        }
     }
     // Ungated, because this is a route and not a permission: whether any key reaches the handler
     // at all is `holdsInput`'s answer, and a read-only pane never takes the focus. What a paste
