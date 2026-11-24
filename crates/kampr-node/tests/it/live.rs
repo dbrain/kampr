@@ -8740,21 +8740,50 @@ async fn a_paste_lands_on_the_node_and_its_path_is_typed_into_the_pane() {
     .await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    let mut grid: std::collections::BTreeMap<u64, String> = std::collections::BTreeMap::new();
     let mut typed: Option<String> = None;
     while tokio::time::Instant::now() < deadline && typed.is_none() {
         let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
             continue;
         };
-        if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
+        let kind = match message["t"].as_str() {
+            Some("grid.reset") => "rows_data",
+            Some("grid.patch") => "rows",
+            _ => continue,
+        };
+        if message["pane"] != pane.as_str() {
             continue;
         }
-        let painted = message.to_string();
-        if let Some(at) = painted.find("shot-") {
-            typed = Some(painted[at..].chars().take(64).collect());
+        // A path is typed in paced pieces, so the patch that first shows its head is not the one
+        // that shows its extension. Read the screen the client draws, patch by patch.
+        if kind == "rows_data" {
+            grid.clear();
+        }
+        for row in message[kind].as_array().cloned().unwrap_or_default() {
+            grid.insert(
+                row["row"].as_u64().unwrap_or(0),
+                text_of(&columns(&row["runs"])),
+            );
+        }
+        let screen = grid.values().cloned().collect::<Vec<_>>().join("\n");
+        if let Some(at) = screen.find("shot-") {
+            let tail: String = screen[at..].chars().take(64).collect();
+            if tail.contains(".png") {
+                typed = Some(tail);
+            }
         }
     }
 
-    let typed = typed.expect("the path was never typed into the pane");
+    let typed = match typed {
+        Some(typed) => typed,
+        None => {
+            let screen = grid.values().cloned().collect::<Vec<_>>().join("\n");
+            screen
+                .find("shot-")
+                .map(|at| screen[at..].chars().take(64).collect())
+                .expect("the path was never typed into the pane")
+        }
+    };
     assert!(
         typed.contains(".png"),
         "the extension came from somewhere other than the bytes: {typed}"
