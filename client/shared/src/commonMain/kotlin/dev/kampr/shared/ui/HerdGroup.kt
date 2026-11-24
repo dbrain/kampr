@@ -54,8 +54,9 @@ class HerdRowsCtx(
 fun GroupBody(group: NodeGroup, ctx: HerdRowsCtx, modifier: Modifier = Modifier) {
     val look = ctx.look
     val tokens = Kampr.tokens
+    val area = ctx.folds.area(group)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(look.gap)) {
-        when (ctx.folds.area(group)) {
+        when (area) {
             Area.Terminals -> {
                 if (group.panes.isEmpty() && group.node.containers.isEmpty() && group.children.isEmpty()) {
                     NodeQuiet(group.node, Modifier.padding(start = look.inset, bottom = 4.dp))
@@ -74,7 +75,10 @@ fun GroupBody(group: NodeGroup, ctx: HerdRowsCtx, modifier: Modifier = Modifier)
 
             Area.Muffit -> for (pane in group.background) PaneItem(pane, ctx)
         }
-        for (child in group.strayChildren) Nested(look.gap) { ChildNode(child, ctx) }
+        // The terminals area is the host's whole reach, so every adopted node's rows come with it;
+        // the other areas keep only the strays, the ones whose container row is gone.
+        val children = if (area == Area.Terminals) group.children else group.strayChildren
+        for (child in children) Nested(look.gap) { ChildNode(child, ctx) }
     }
 }
 

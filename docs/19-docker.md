@@ -215,12 +215,17 @@ its disk instead of forwarded. Both get a two-hop test and a fix.
   count capped at `9+`. Only the lists a host has are offered, and a host with only terminals has no
   switch. The pick is remembered per device and per node (prefs `herd.folds`); terminals is the default,
   and a pick whose list has gone falls back to it.
+- The terminals list is **every terminal this host can open**: its own, the shells into its containers,
+  and the terminals of the nodes adopted into them. One machine is one list, whatever a shell was
+  started in; a shell into a container carries the whale beside its directory and says so to a screen
+  reader. The containers list is the way in to the containers themselves, and lists the same shells
+  again under each — the two lists answer different questions, and neither hides what the other shows.
 - Containers group under their compose project when they have one (a caption, not a level). Shown
   by default: running, restarting, paused, unhealthy, or crashed within 24 h; the rest sit behind one
   **+N stopped** row that toggles them (also remembered).
 - A row: state dot, name, then uptime, or `exited 137 · OOM 3m ago`; badges `↻4` (restarts) and
   `unhealthy`; and, while it runs, a **+** that shells into it the way a host's **+** opens a session.
-  Shells into it (`PaneEntry.container`) list under it.
+  Shells into it (`PaneEntry.container`) list under it, and in the host's terminals list.
 - Tapping a container, or finding it in search (name, image, project, service or host), opens its sheet.
   The sheet holds one height whatever it shows. Its title carries the state as coloured chips (state,
   health, `OOM`, `↻N`); under it **Shell in**, **Restart**, **Stop**/**Start**, **Kill** (while it is
@@ -230,14 +235,16 @@ its disk instead of forwarded. Both get a two-hop test and a fix.
   (CPU and memory against the limit as meters, processes, network and disk), **Env** and **Mounts**.
   A spinner stands in until the first `docker.detail` answers. A removed container's sheet closes.
 - An adopted container's node (`parent` set) is drawn under its container row instead of as a top-level
-  host, with its own terminals and sections. Nesting indents by 8 dp with a hairline guide, never more,
-  so titles keep their width. An old client shows it as an ordinary top-level host.
+  host, with its own terminals and sections, and its terminals are in the host's terminals list too.
+  Nesting indents by 8 dp with a hairline guide, never more, so titles keep their width. An old client
+  shows it as an ordinary top-level host.
 
 ### Terminal client
 
 `kampr` (the TUI) mirrors this in its sidebar. A host's heading carries the same switch, drawn as
 `›_ │ ▣ 2 │ ◉ 1` (terminals, containers with the running count, muffit with its session count, each
 capped at `9+`), the list showing in reverse video, and only when the host has more than terminals.
+The terminals list is the same union, and a shell into a container ends its row in a `▣`.
 This machine's name is in the accent colour, and the heading carries no latency. The pick, and
 **+N stopped**, are saved per node in `tui.toml` (`[hosts.<node>]`); an older file's section folds
 are ignored. A running container's row ends in a **+** that shells into it.

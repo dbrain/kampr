@@ -215,10 +215,35 @@ class HerdDockerTest {
     }
 
     @Test
-    fun aShellIntoAContainerIsNotAlsoAmongTheHostsTerminals() = runComposeUiTest {
+    fun aShellIntoAContainerIsAmongTheHostsTerminals() = runComposeUiTest {
         setContent { Portrait(Folds()) }
         assertEquals(1, count("Open build"))
-        assertEquals(0, count("Open pg shell"))
+        assertEquals(1, count("Open pg shell"), "a shell into a container is one of the host's terminals")
+    }
+
+    @Test
+    fun aContainerShellSaysItsContainerAndAPlainTerminalDoesNot() = runComposeUiTest {
+        setContent { Portrait(Folds()) }
+        assertEquals(1, count("container kobbler-postgres-test-1"), "a reader hears which container the shell is in")
+        assertEquals(0, count("container kobbler-cache-1"), "the shell's own container, not the host's whole shelf")
+        val build = find("Open build").fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)
+        assertTrue(build?.contains("container") == false, "a plain terminal says no container")
+    }
+
+    @Test
+    fun theContainersAreaStillNestsTheShellUnderItsContainer() = runComposeUiTest {
+        setContent { Portrait(OPEN) }
+        val pg = find("Container kobbler-postgres-test-1,")
+        val shell = find("Open pg shell")
+        assertEquals(1, count("Open pg shell"), "the containers area draws the shell once, under its container")
+        assertTrue(shell.top() > pg.top())
+    }
+
+    @Test
+    fun anAdoptedNodesTerminalsAreAmongTheHostsTerminals() = runComposeUiTest {
+        setContent { Portrait(Folds()) }
+        assertEquals(1, count("Open inside"), "the adopted node's own terminal is listed in the host's terminals area")
+        assertTrue(find("Open inside").left() > find("front, ").left(), "it sits nested under its host")
     }
 
     @Test
@@ -274,6 +299,7 @@ class HerdDockerTest {
         setContent { Portrait(Folds().showing(HOST, Area.Muffit)) }
         assertEquals(1, count("Open wake"))
         assertEquals(0, count("Open build"))
+        assertEquals(0, count("Open pg shell"), "a container shell is a terminal, not a muffit session")
         assertEquals(0, count("Container worker,"))
     }
 
@@ -341,6 +367,8 @@ class HerdDockerTest {
             }
         }
         assertEquals(1, count("Open build"))
+        assertEquals(1, count("Open pg shell"), "the rail's terminals are the host's terminals")
+        assertEquals(1, count("Open inside"), "the rail lists the adopted node's terminals too")
         assertEquals(0, count("Open wake"))
         assertEquals(0, count("Container worker,"))
         folds = Folds().showing(HOST, Area.Muffit)

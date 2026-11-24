@@ -36,8 +36,9 @@ data class Herd(
 
 @Immutable
 data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>, val children: List<NodeGroup> = emptyList()) {
-    // A shell into one of this node's containers is listed under that container instead.
-    val terminals: List<PaneInfo> get() = panes.filterNot { it.isMuffit || node.containers.any { c -> c.name == it.container } }
+    // A shell into one of this node's containers is listed here and, in the containers area,
+    // nested under that container as well: the terminals area is every terminal the host can open.
+    val terminals: List<PaneInfo> get() = panes.filterNot { it.isMuffit }
 
     // Muffit sessions no terminal is showing: a daggit's wake, one the web UI or the + sheet
     // started in the background (docs/18).

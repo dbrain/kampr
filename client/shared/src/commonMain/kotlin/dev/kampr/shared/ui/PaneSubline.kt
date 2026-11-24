@@ -12,12 +12,14 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.PaneInfo
 
 // The facts ride the directory's line rather than the title's, so a 296 dp sidebar row gives none
-// of the pane's name to them. Spoken through `paneSpoken`, as `WatchersTag` is.
+// of the pane's name to them. Spoken through `paneSpoken`, as `WatchersTag` is. The whale is the
+// only mark a container shell carries: its words go to the reader, its picture to the eye.
 @Composable
 fun PaneSubline(pane: PaneInfo) {
     val tokens = Kampr.tokens
     val facts = nativeFacts(pane)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (pane.container != null) IconGlyph(KamprIcons.docker, 10.dp, tokens.color.mute)
         if (facts.isNotEmpty()) {
             KText(facts.joinToString(" · "), tokens.type.micro, if (pane.exited != null) tokens.color.dim else tokens.color.accent)
         }

@@ -141,8 +141,9 @@ fun HerdRail(
 private fun RailGroup(group: NodeGroup, ctx: HerdRowsCtx) {
     val node = group.node.id
     val pane: @Composable (PaneInfo) -> Unit = { RailPane(it, ctx.now, it.id == ctx.activePaneId) { ctx.onOpenPane(it.id) } }
+    val area = ctx.folds.area(group)
     RailNodeMark(group.node)
-    when (ctx.folds.area(group)) {
+    when (area) {
         Area.Terminals -> for ((index, section) in group.sections.withIndex()) {
             // No room for a name: a gap between workspaces, so two of them do not read as one.
             if (index > 0 && section.heading != null) Box(Modifier.height(6.dp).named("Workspace ${section.heading}"))
@@ -157,7 +158,10 @@ private fun RailGroup(group: NodeGroup, ctx: HerdRowsCtx) {
             group.childOf(container)?.let { RailGroup(it, ctx) }
         }
     }
-    for (child in group.strayChildren) RailGroup(child, ctx)
+    // The terminals area is the host's whole reach, so every adopted node's panes come with it;
+    // the other areas keep only the strays, the ones whose container row is gone.
+    val children = if (area == Area.Terminals) group.children else group.strayChildren
+    for (child in children) RailGroup(child, ctx)
 }
 
 @Composable

@@ -92,6 +92,7 @@ fun StatusMark(status: AgentStatus, size: Dp = 8.dp, modifier: Modifier = Modifi
 fun paneSpoken(pane: PaneInfo, now: Double): String = listOfNotNull(
     paneTitle(pane),
     statusWord(statusOf(pane)),
+    pane.container?.let { "container $it" },
     pane.cwd,
     "updated ${relativeTime(pane.updatedAt, now)}",
     nativeSpoken(pane),

@@ -239,7 +239,143 @@ fn the_containers_list_shows_the_live_ones_by_project_and_hides_the_stopped_behi
 }
 
 #[test]
-fn a_shell_sits_under_its_container_in_the_containers_list_and_not_among_the_terminals() {
+fn a_shell_into_a_container_sits_in_the_terminals_list_marked_as_docker() {
+    let mut n = host("01JA", "front");
+    n["containers"] = json!([container("web", "running")]);
+    let herd = herd(
+        json!([n]),
+        json!([term("01JA/w1:p1"), native("01JA/n1", "native", Some("web"))]),
+    );
+    let rows = sidebar::rows(&herd, Order::Grouped, None, &Hosts::default(), NOW, |_| None);
+
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, Row::Pane { pane, docker: true, .. } if pane == "01JA/n1")),
+        "the shell's row carries the docker mark: {rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, Row::Pane { pane, docker: false, .. } if pane == "01JA/w1:p1")),
+        "the herdr terminal's row is unmarked: {rows:#?}"
+    );
+
+    let buf = buffer(&rows, 30);
+    let screen = painted(&rows, 30);
+    let y = screen
+        .lines()
+        .position(|l| l.contains("n1"))
+        .unwrap_or_else(|| panic!("no shell row:\n{screen}"));
+    let line = screen.lines().nth(y).unwrap();
+    let (x, col) = line
+        .char_indices()
+        .rfind(|(_, c)| *c == '▣')
+        .map(|(i, _)| (i, line[..i].chars().count()))
+        .unwrap_or_else(|| panic!("no ▣ on {line}"));
+    assert_eq!(
+        buf[(col as u16, y as u16)].fg,
+        kampr_tui::theme::PHOSPHOR.mute,
+        "the mark is dim: {line}"
+    );
+    assert!(
+        line[x + 3..].chars().all(|c| c == ' '),
+        "the mark is in the right-hand slot: {line}"
+    );
+}
+
+#[test]
+fn a_muffit_session_stays_out_of_the_terminals_list() {
+    let mut n = host("01JA", "front");
+    n["containers"] = json!([container("web", "running")]);
+    let herd = herd(
+        json!([n]),
+        json!([
+            term("01JA/w1:p1"),
+            native("01JA/n1", "native", Some("web")),
+            native("01JA/m1", "muffit", None)
+        ]),
+    );
+
+    assert_eq!(
+        drawn(&herd, &Hosts::default()),
+        [
+            "host front",
+            "space kampr",
+            "pane 01JA/w1:p1",
+            "space srv",
+            "pane 01JA/n1",
+        ]
+    );
+    assert_eq!(
+        drawn(&herd, &showing(&[("01JA", Area::Muffit)])),
+        ["host front", "pane 01JA/m1"]
+    );
+}
+
+#[test]
+fn an_adopted_nodes_terminals_sit_in_the_hosts_terminals_list() {
+    let mut web = container("web", "running");
+    web["child"] = json!("01JA-c-web");
+    let mut n = host("01JA", "front");
+    n["containers"] = json!([web]);
+    let mut child = host("01JA-c-web", "web-node");
+    child["parent"] = json!("01JA");
+    child["kind"] = json!("peer");
+    let herd = herd(
+        json!([n, child]),
+        json!([term("01JA/w1:p1"), term("01JA-c-web/w1:p1")]),
+    );
+
+    assert_eq!(
+        drawn(&herd, &Hosts::default()),
+        [
+            "host front",
+            "space kampr",
+            "pane 01JA/w1:p1",
+            "│host web-node",
+            "│space kampr",
+            "│pane 01JA-c-web/w1:p1",
+        ]
+    );
+}
+
+#[test]
+fn the_terminals_tab_counts_the_container_shells() {
+    let mut n = host("01JA", "front");
+    n["docker"] = json!(true);
+    n["containers"] = json!([container("web", "running")]);
+    let herd = herd(
+        json!([n]),
+        json!([
+            term("01JA/w1:p1"),
+            native("01JA/n1", "native", Some("web")),
+            native("01JA/m1", "muffit", None)
+        ]),
+    );
+
+    assert_eq!(
+        tabs(&herd, &Hosts::default()),
+        (
+            vec![
+                Tab {
+                    area: Area::Terminals,
+                    count: 2
+                },
+                Tab {
+                    area: Area::Containers,
+                    count: 1
+                },
+                Tab {
+                    area: Area::Muffit,
+                    count: 1
+                },
+            ],
+            Area::Terminals
+        )
+    );
+}
+
+#[test]
+fn a_shell_into_a_container_sits_in_both_lists_and_never_twice_in_one() {
     let mut n = host("01JA", "front");
     n["containers"] = json!([container("web", "exited"), container("db", "running")]);
     let herd = herd(
@@ -247,12 +383,20 @@ fn a_shell_sits_under_its_container_in_the_containers_list_and_not_among_the_ter
         json!([term("01JA/w1:p1"), native("01JA/n1", "native", Some("web"))]),
     );
 
+    let terminals = drawn(&herd, &Hosts::default());
     assert_eq!(
-        drawn(&herd, &Hosts::default()),
-        ["host front", "space kampr", "pane 01JA/w1:p1"]
+        terminals,
+        [
+            "host front",
+            "space kampr",
+            "pane 01JA/w1:p1",
+            "space srv",
+            "pane 01JA/n1",
+        ]
     );
+    let containers = drawn(&herd, &showing(&[("01JA", Area::Containers)]));
     assert_eq!(
-        drawn(&herd, &showing(&[("01JA", Area::Containers)])),
+        containers,
         [
             "host front",
             "container db",
@@ -262,6 +406,13 @@ fn a_shell_sits_under_its_container_in_the_containers_list_and_not_among_the_ter
             "│pane 01JA/n1",
         ]
     );
+    for (area, rows) in [("terminals", &terminals), ("containers", &containers)] {
+        assert_eq!(
+            rows.iter().filter(|r| r.contains("01JA/n1")).count(),
+            1,
+            "once in the {area} list: {rows:#?}"
+        );
+    }
 }
 
 #[test]
@@ -283,7 +434,15 @@ fn an_adopted_node_hangs_under_its_container_and_a_stray_shows_whichever_list_is
 
     assert_eq!(
         drawn(&herd, &Hosts::default()),
-        ["host front", "space kampr", "pane 01JA/w1:p1", "│host old-node",]
+        [
+            "host front",
+            "space kampr",
+            "pane 01JA/w1:p1",
+            "│host web-node",
+            "│space kampr",
+            "│pane 01JA-c-web/w1:p1",
+            "│host old-node",
+        ]
     );
     assert_eq!(
         drawn(&herd, &showing(&[("01JA", Area::Containers)])),

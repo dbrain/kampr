@@ -68,13 +68,15 @@ fn muffit(pane: &PaneEntry) -> bool {
     pane.provider.as_deref() == Some("muffit")
 }
 
-/// A shell into one of the host's containers is listed under that container instead.
-pub(super) fn terminal(node: &NodeEntry, pane: &PaneEntry) -> bool {
+/// Every terminal this host can open; muffit sessions have their own list.
+pub(super) fn terminal(pane: &PaneEntry) -> bool {
     !muffit(pane)
-        && !node
-            .containers
-            .iter()
-            .any(|c| pane.container.as_deref() == Some(c.name.as_str()))
+}
+
+pub(super) fn shell(node: &NodeEntry, pane: &PaneEntry) -> bool {
+    node.containers
+        .iter()
+        .any(|c| pane.container.as_deref() == Some(c.name.as_str()))
 }
 
 fn shells<'a>(branch: &Branch<'a>, container: &ContainerEntry) -> Vec<&'a PaneEntry> {
@@ -115,7 +117,7 @@ pub(super) fn tabs(branch: &Branch<'_>) -> Vec<Tab> {
     let panes = &branch.group.panes;
     let mut tabs = vec![Tab {
         area: Area::Terminals,
-        count: panes.iter().filter(|p| terminal(node, p)).count(),
+        count: panes.iter().filter(|p| terminal(p)).count(),
     }];
     if !node.containers.is_empty() || node.docker == Some(false) {
         tabs.push(Tab {
@@ -142,7 +144,7 @@ pub(super) fn background<Q: Fn(&str) -> Option<String>>(
     look: &Look<'_, Q>,
 ) {
     for pane in branch.group.panes.iter().copied().filter(|p| muffit(p)) {
-        push_pane(rows, pane, None, false, look.questions);
+        push_pane(rows, pane, None, false, false, look.questions);
     }
 }
 
@@ -176,7 +178,7 @@ pub(super) fn containers<Q: Fn(&str) -> Option<String>>(
             rows.push(Row::Note(phrase(container, look.now)));
             let mut under = Vec::new();
             for pane in shells(branch, container) {
-                push_pane(&mut under, pane, None, false, look.questions);
+                push_pane(&mut under, pane, None, false, false, look.questions);
             }
             if let Some(child) = child(branch, container) {
                 host(&mut under, child, look);
@@ -193,8 +195,9 @@ pub(super) fn containers<Q: Fn(&str) -> Option<String>>(
     }
 }
 
-/// An adopted node whose container has no row to sit under: the container went, or the host is too
-/// old to say which one it is. A host that is not serving draws no containers, so all of them.
+/// An adopted node's row: every one of them in the terminals list, which lists every terminal
+/// the host can open, and in the other lists only the strays — the container went, or the host is
+/// too old to say which one it is. A host that is not serving draws no containers, so all of them.
 pub(super) fn strays<Q: Fn(&str) -> Option<String>>(
     rows: &mut Vec<Row>,
     branch: &Branch<'_>,

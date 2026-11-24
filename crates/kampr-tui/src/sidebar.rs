@@ -93,6 +93,8 @@ pub enum Row {
         pane: String,
         /// The node, where the order has stopped saying it.
         place: Option<String>,
+        /// A shell into the host's containers, in the terminals list: it carries the ▣.
+        docker: bool,
     },
     Question(String),
     Stopped {
@@ -381,7 +383,7 @@ fn host<Q: Fn(&str) -> Option<String>>(
         Area::Containers => docker::containers(rows, branch, look),
         Area::Muffit => docker::background(rows, branch, look),
     }
-    docker::strays(rows, branch, look, false);
+    docker::strays(rows, branch, look, area == Area::Terminals);
 }
 
 fn terminals<Q: Fn(&str) -> Option<String>>(
@@ -396,7 +398,7 @@ fn terminals<Q: Fn(&str) -> Option<String>>(
         .panes
         .iter()
         .copied()
-        .filter(|p| docker::terminal(node, p))
+        .filter(|p| docker::terminal(p))
         .collect();
     let (mut live, remembered): (Vec<&PaneEntry>, Vec<&PaneEntry>) = terminals
         .into_iter()
@@ -450,7 +452,7 @@ fn terminals<Q: Fn(&str) -> Option<String>>(
                 pane: pane.id.clone(),
             });
         }
-        push_pane(rows, pane, None, true, look.questions);
+        push_pane(rows, pane, None, docker::shell(node, pane), true, look.questions);
     }
     if switched && live.is_empty() && (node.online || !crate::manage::herdr_on(node)) {
         rows.push(Row::Note("no terminals here".into()));
@@ -481,7 +483,7 @@ fn priority(herd: &Herd, questions: &impl Fn(&str) -> Option<String>) -> Vec<Row
             .node(&pane.node_id)
             .filter(|_| several)
             .map(|n| n.name.clone());
-        push_pane(&mut rows, pane, place, false, questions);
+        push_pane(&mut rows, pane, place, false, false, questions);
     }
     rows
 }
@@ -490,6 +492,7 @@ fn push_pane(
     rows: &mut Vec<Row>,
     pane: &PaneEntry,
     place: Option<String>,
+    docker: bool,
     grouped: bool,
     questions: &impl Fn(&str) -> Option<String>,
 ) {
@@ -498,6 +501,7 @@ fn push_pane(
         status: pane.agent_status,
         pane: pane.id.clone(),
         place,
+        docker,
     });
     if let Some(question) = questions(&pane.id) {
         rows.push(Row::Question(question));
@@ -690,7 +694,11 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
         ))
         .style(base),
         Row::Pane {
-            name, status, place, ..
+            name,
+            status,
+            place,
+            docker,
+            ..
         } => {
             let body = match here {
                 true => base.fg(t.accent_hi).add_modifier(Modifier::BOLD),
@@ -710,7 +718,9 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
                 (name.clone(), body),
                 place
                     .as_deref()
-                    .map(|p| (format!("{} ", clip(p, 9)), base.fg(t.mute))),
+                    .map(|p| format!("{} ", clip(p, 9)))
+                    .or_else(|| docker.then(|| "▣ ".to_string()))
+                    .map(|mark| (mark, base.fg(t.mute))),
                 width.saturating_sub(len(lead) + 2),
                 base,
             ));
@@ -805,6 +815,7 @@ mod tests {
                     status: AgentStatus::Unknown,
                     pane: "n/n:01ja".into(),
                     place: None,
+                    docker: false,
                 },
             ]
         );
