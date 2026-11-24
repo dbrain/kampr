@@ -330,17 +330,17 @@ impl App {
 
     /// The text, then the carriage return, as **two** messages — so a harness that debounces sees
     /// the words settle before the newline that submits them. `pane.send_text` writes raw bytes
-    /// with no framing (#9), which is why a multi-line reply is bracketed on its way out.
+    /// with no framing (#9), which is why a multi-line reply goes as a paste.
     fn reply(&mut self, pane: &str, text: &str) {
         if !self.writes() {
             self.note("this device is read-only");
             return;
         }
-        let body = match text.contains('\n') {
-            true => crate::input::bracketed(text),
-            false => text.to_string(),
+        let sent = match text.contains('\n') {
+            true => self.client.pasted(pane, text, false),
+            false => self.client.input(pane, text),
         };
-        if !self.client.input(pane, &body) || !self.client.input(pane, "\r") {
+        if !sent || !self.client.input(pane, "\r") {
             self.note("not delivered — the socket is down");
             return;
         }
@@ -352,7 +352,14 @@ impl App {
             self.send_picture(&bytes, &name);
             return;
         }
-        self.send(&crate::input::bracketed(data));
+        let Some(pane) = self.focus.clone() else { return };
+        if !self.writes() {
+            self.note("this device is read-only");
+            return;
+        }
+        if !self.client.pasted(&pane, data, true) {
+            self.note("not delivered — the socket is down");
+        }
     }
 
     /// Whether the clipboard held a picture to send; a `ctrl+v` with none is the pane's own key.

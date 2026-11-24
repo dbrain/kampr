@@ -13,6 +13,7 @@ pub mod herdr_provider;
 pub mod keys;
 pub mod local_node;
 pub mod naming;
+pub mod paste;
 pub mod procfs;
 pub mod prompt;
 pub mod provider;

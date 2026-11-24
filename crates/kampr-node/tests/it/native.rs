@@ -1110,6 +1110,40 @@ async fn named_keys_are_encoded_for_the_kitty_flags_the_program_pushed() {
     );
 }
 
+/// **A paste is framed only for a program that asked for framing.** A password prompt that never
+/// turned on 2004 took `ESC[200~` as part of the secret; a line editor that did turn it on needs
+/// the frame, or a multi-line paste runs a line at a time.
+#[tokio::test]
+async fn a_paste_is_bracketed_only_where_the_program_turned_bracketed_paste_on() {
+    let h = Harness::start().await;
+    let mut client = h.client().await;
+    for (mode, count, want) in [
+        ("\\033[?2004h", 15, "1b5b3230307e610a621b5b3230317e"),
+        ("", 3, "610d62"),
+    ] {
+        let script = format!(
+            "stty -echo raw; printf '{mode}READY\\r\\n'; \
+             r=$(dd bs=1 count={count} 2>/dev/null | od -An -tx1 | tr -d ' \\n'); \
+             printf 'GOT[%s]\\r\\n' \"$r\"; exec cat"
+        );
+        let id = client.create(&["sh", "-c", &script], json!({})).await;
+        client.watch(&id, false).await;
+        client.shows(&id, "READY").await;
+        client
+            .send(json!({
+                "t": "input", "pane": id, "text": "\u{1b}[200~a\nb\u{1b}[201~", "paste": true,
+                "typed": true,
+            }))
+            .await;
+        let screen = client.shows(&id, "GOT[").await;
+        assert!(
+            screen.iter().any(|r| *r == format!("GOT[{want}]")),
+            "2004 {}: {screen:?}",
+            if mode.is_empty() { "off" } else { "on" }
+        );
+    }
+}
+
 /// **The same screen, cell for cell and style for style**, from a node that never saw it drawn.
 #[tokio::test]
 async fn a_node_restart_rebuilds_the_same_screen_from_the_log() {

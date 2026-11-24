@@ -6,9 +6,11 @@
 #[cfg(target_os = "macos")]
 mod darwin;
 mod procfs;
+mod termios;
 mod time;
 
 pub use procfs::Procfs;
+pub use termios::canonical;
 
 use std::path::PathBuf;
 use std::time::SystemTime;

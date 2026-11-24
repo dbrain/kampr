@@ -437,6 +437,14 @@ fn hand_over(
     hold
 }
 
+/// How an `input` arrived: `typed` at the grid rather than a reply, and `paste`, one bracketed
+/// paste for the pane's node to frame again (docs/04 `input`).
+#[derive(Default, Clone, Copy)]
+struct Typing {
+    typed: bool,
+    paste: bool,
+}
+
 impl PaneHandle {
     /// Aborting is not enough on its own. `JoinHandle::abort` lands at the task's next await, and
     /// a pump that has already taken an update off its watcher reaches the outbox without one — so
@@ -828,9 +836,11 @@ impl Session {
                 b64,
                 keys,
                 typed,
+                paste,
                 from,
             } => {
-                self.input(&pane, text, b64, keys, typed, from).await;
+                self.input(&pane, text, b64, keys, Typing { typed, paste }, from)
+                    .await;
             }
             ClientMsg::Paste {
                 pane,
@@ -1564,7 +1574,7 @@ impl Session {
         text: Option<String>,
         b64: Option<String>,
         keys: Option<Vec<String>>,
-        typed: bool,
+        Typing { typed, paste }: Typing,
         from: Option<String>,
     ) -> bool {
         if !self.may_write("input", Some(pane)) {
@@ -1577,7 +1587,7 @@ impl Session {
                 pane,
                 json!({
                     "t": "input", "pane": pane, "text": text, "b64": b64, "keys": keys,
-                    "typed": typed, "from": from,
+                    "typed": typed, "paste": paste, "from": from,
                 }),
             );
             return true;
@@ -1619,11 +1629,22 @@ impl Session {
             (_, _, Some(keys)) => Input::Keys(keys),
             _ => unreachable!("exactly one was supplied"),
         };
+        let input = match input {
+            Input::Bytes(bytes) if paste => match std::str::from_utf8(&bytes)
+                .ok()
+                .and_then(kampr_core::paste::unbracketed)
+            {
+                Some(text) => Input::Paste(text.to_string()),
+                None => Input::Bytes(bytes),
+            },
+            input => input,
+        };
         // How much was typed, never what. `keys` is herdr's key grammar and probe #7 says that
         // grammar includes single characters, so recording the names typed a password into the
         // one file an operator hands to somebody else during an investigation.
         let detail = match &input {
             Input::Bytes(bytes) => json!({ "bytes": bytes.len() }),
+            Input::Paste(text) => json!({ "bytes": text.len(), "paste": true }),
             Input::Keys(keys) => json!({ "keys": keys.len() }),
         };
         self.audit("input", Some(pane), Some(detail));
@@ -1685,6 +1706,7 @@ impl Session {
         let line = self.lines.entry((pane.to_string(), typist)).or_default();
         let steps = match input {
             Input::Bytes(bytes) => line.feed(&String::from_utf8_lossy(&bytes)),
+            Input::Paste(text) => line.feed(&kampr_core::paste::bracketed(&text)),
             Input::Keys(keys) => line.keys(&keys),
         };
         let session = kampr_muffit::session_of(local).unwrap_or_default();
@@ -1935,7 +1957,7 @@ impl Session {
         };
         if typed
             && !self
-                .input(pane, Some(text.clone()), None, None, false, None)
+                .input(pane, Some(text.clone()), None, None, Typing::default(), None)
                 .await
         {
             if answered {

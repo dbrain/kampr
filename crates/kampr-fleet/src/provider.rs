@@ -339,6 +339,7 @@ impl Provider for FleetProvider {
         let (native, pane) = self.native_of(pane_id)?;
         let bytes = match input {
             Input::Bytes(bytes) => bytes,
+            Input::Paste(text) => return native.write_pane(&pane, Input::Paste(text)).await,
             Input::Keys(keys) => keys
                 .iter()
                 .filter_map(|k| kampr_core::keys::encode(k))

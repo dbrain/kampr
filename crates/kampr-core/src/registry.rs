@@ -294,12 +294,15 @@ impl Turn {
         let now = tokio::time::Instant::now();
         self.wrote = Some(now);
         self.free = match (source, input) {
-            (Source::Reply, Input::Bytes(bytes)) => {
-                Some(now + Duration::from_micros(bytes.len() as u64 * 1_000_000 / REPLY_BYTES_PER_SEC))
-            }
+            (Source::Reply, Input::Bytes(bytes)) => Some(now + paced(bytes.len())),
+            (Source::Reply, Input::Paste(text)) => Some(now + paced(text.len())),
             _ => None,
         };
     }
+}
+
+fn paced(bytes: usize) -> Duration {
+    Duration::from_micros(bytes as u64 * 1_000_000 / REPLY_BYTES_PER_SEC)
 }
 
 /// How a write left [`PaneRegistry::send`]: written, or waiting on its own while it keeps the
@@ -371,6 +374,7 @@ impl PaneRegistry {
         let submit = match &input {
             Input::Bytes(bytes) => bytes == b"\r",
             Input::Keys(keys) => keys.len() == 1 && keys[0] == "Enter",
+            Input::Paste(_) => false,
         };
         let Some(due) = turn.due(submit) else {
             turn.took(&input, submit, source);

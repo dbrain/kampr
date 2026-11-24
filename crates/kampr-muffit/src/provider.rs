@@ -157,6 +157,7 @@ impl Provider for MuffitProvider {
         let mut line = crate::input::Line::default();
         let steps = match input {
             Input::Bytes(bytes) => line.feed(&String::from_utf8_lossy(&bytes)),
+            Input::Paste(text) => line.feed(&kampr_core::paste::bracketed(&text)),
             Input::Keys(keys) => line.keys(&keys),
         };
         for step in steps {

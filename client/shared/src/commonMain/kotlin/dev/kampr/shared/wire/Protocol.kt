@@ -714,7 +714,14 @@ sealed interface ClientMsg {
 
     // `typed` is input from the grid, typed by someone looking at where it lands, and the node
     // never holds it for a harness still booting; a reply leaves it off and is held (#535).
-    data class InputText(val pane: String, val text: String, val typed: Boolean = false) : ClientMsg
+    // `paste` marks a text that is one bracketed paste: the pane's node frames it again for the
+    // program there, and a node that predates the mark writes it framed as sent.
+    data class InputText(
+        val pane: String,
+        val text: String,
+        val typed: Boolean = false,
+        val paste: Boolean = false,
+    ) : ClientMsg
 
     data class InputB64(val pane: String, val b64: String) : ClientMsg
 

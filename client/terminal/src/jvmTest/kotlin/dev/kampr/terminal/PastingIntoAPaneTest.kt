@@ -83,7 +83,7 @@ class PastingIntoAPaneTest {
     }
 
     @Test
-    fun aLongPressOffersPasteAndTheClipboardArrivesBracketed() = runComposeUiTest {
+    fun aLongPressOffersPasteAndTheClipboardArrivesAsAPaste() = runComposeUiTest {
         val io = Recording()
         val session = terminal(io) { "cargo test -p kampr-term" }
         longPressTheGrid()
@@ -93,10 +93,17 @@ class PastingIntoAPaneTest {
         waitForIdle()
 
         assertEquals(
-            listOf(ClientMsg.InputText(Phone.PANE, PASTE_START + "cargo test -p kampr-term" + PASTE_END, typed = true)),
+            listOf(
+                ClientMsg.InputText(
+                    Phone.PANE,
+                    PASTE_START + "cargo test -p kampr-term" + PASTE_END,
+                    typed = true,
+                    paste = true,
+                ),
+            ),
             io.sent.filterIsInstance<ClientMsg.InputText>(),
-            "probe #9: pane.send_text frames nothing itself, so an unbracketed multi-line paste " +
-                "runs line by line in a shell",
+            "framed for a node too old to read the mark, and marked so the pane's node frames it " +
+                "only for a program that turned bracketed paste on",
         )
     }
 

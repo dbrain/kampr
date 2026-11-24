@@ -268,6 +268,15 @@ impl Client {
         self.send(json!({ "t": "input", "pane": pane, "text": text, "typed": true }))
     }
 
+    /// Pasted text, sent framed and marked so the pane's own node frames it as the program there
+    /// asked, and so a node that predates the mark still gets the framing every node used to.
+    pub fn pasted(&self, pane: &str, text: &str, typed: bool) -> bool {
+        self.send(json!({
+            "t": "input", "pane": pane, "text": kampr_core::paste::bracketed(text),
+            "paste": true, "typed": typed,
+        }))
+    }
+
     /// Bytes for the pane's agent: the node writes them to a file on the pane's own machine and
     /// types the path in.
     pub fn paste(&self, pane: &str, bytes: &[u8], name: &str) -> bool {

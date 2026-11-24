@@ -36,6 +36,7 @@ client input .from: string
 client input .keys: array
 client input .keys[]: string
 client input .pane: string
+client input .paste: bool
 client input .t: string
 client input .text: string
 client input .typed: bool

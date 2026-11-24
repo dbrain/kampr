@@ -687,6 +687,7 @@ impl Provider for NativeProvider {
         }
         let bytes = match input {
             Input::Bytes(bytes) => bytes,
+            Input::Paste(text) => kampr_core::paste::framed(&text, live.with_screen(Screen::bracketed_paste)),
             Input::Keys(keys) => {
                 let kitty = live.with_screen(Screen::keyboard_flags);
                 keys.iter()

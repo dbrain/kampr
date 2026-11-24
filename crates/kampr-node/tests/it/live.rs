@@ -8827,6 +8827,87 @@ async fn a_quiet_paste_lands_on_the_node_answers_with_its_path_and_types_nothing
     assert_eq!(std::fs::read(&path).expect("the pasted file"), body);
 }
 
+/// **A herdr pane is framed by its line discipline** (#667): herdr says nothing of 2004, so a pane
+/// whose terminal is assembling lines itself — `read -s`, a password prompt — gets the text bare
+/// (shown in hex, since a terminal draws nothing for the frame it swallows),
+/// and one whose program reads raw, as every line editor that turns 2004 on does, gets the frame.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_paste_into_a_herdr_pane_is_bracketed_only_for_a_program_reading_raw() {
+    let h = harness!("paste-2004");
+    let token = h.token(Role::Full).await;
+    let mut socket = h.connect(&token).await;
+    until(&mut socket, "hello", 10).await;
+    let pane = h.pane_id();
+    let local = pane.split_once('/').unwrap().1.to_string();
+    send(&mut socket, json!({ "t": "watch", "pane": pane })).await;
+    for (stty, ready, paste, enter, want) in [
+        ("-echo", "RE\"\"ADY1", "s3cr3t", true, "GOT[733363723374]"),
+        (
+            "-echo raw",
+            "RE\"\"ADY2",
+            "a\nb",
+            false,
+            "GOT[1b5b3230307e610a621b5b3230317e]",
+        ),
+    ] {
+        let read = match enter {
+            true => "IFS= read -r r; r=$(printf %s \"$r\" | od -An -tx1 | tr -d ' \\n')",
+            false => "r=$(dd bs=1 count=15 2>/dev/null | od -An -tx1 | tr -d ' \\n')",
+        };
+        let mode = if enter { "" } else { "\\033[?2004h" };
+        h._session
+            .call(
+                "pane.send_text",
+                json!({ "pane_id": local, "text": format!(
+                    "clear; stty {stty}; printf '{mode}%s\\r\\n' {ready}; {read}; stty sane; printf 'GOT[%s]\\n' \"$r\"\n"
+                ) }),
+            )
+            .await;
+        let shown = ready.replace("\"\"", "");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let mut running = false;
+        while tokio::time::Instant::now() < deadline && !running {
+            if let Some(message) = recv(&mut socket, Duration::from_secs(3)).await {
+                running = matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset"))
+                    && message.to_string().contains(&shown);
+            }
+        }
+        assert!(running, "the program never started reading");
+        send(
+            &mut socket,
+            json!({
+                "t": "input", "pane": pane, "paste": true, "typed": true,
+                "text": format!("\u{1b}[200~{paste}\u{1b}[201~"),
+            }),
+        )
+        .await;
+        if enter {
+            send(
+                &mut socket,
+                json!({ "t": "input", "pane": pane, "text": "\r", "typed": true }),
+            )
+            .await;
+        }
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+        let mut got = None;
+        while tokio::time::Instant::now() < deadline && got.is_none() {
+            let Some(message) = recv(&mut socket, Duration::from_secs(3)).await else {
+                continue;
+            };
+            if !matches!(message["t"].as_str(), Some("grid.patch" | "grid.reset")) {
+                continue;
+            }
+            got = message
+                .to_string()
+                .split("GOT[")
+                .nth(1)
+                .and_then(|rest| rest.split(']').next())
+                .map(|got| format!("GOT[{got}]"));
+        }
+        assert_eq!(got.as_deref(), Some(want), "stty {stty}");
+    }
+}
+
 /// **Claude and Codex take a picture from a bracketed paste of its path** (#620): what they draw is
 /// one `[Image #n]` at the caret, and what they send is the picture. Typed bare, the path stays
 /// prose and the agent has to go and read the file. A paste the client numbered is still answered,

@@ -21,6 +21,11 @@ private fun pasteBody(text: String): String? {
     return body.takeIf { it.contains('\n') || it.contains('\r') }
 }
 
+// One whole paste and nothing else, which is what the node may frame again for the program in the
+// pane. A paste that left in one write with keystrokes beside it goes framed and unmarked, as
+// every paste did before the mark.
+private fun onePaste(text: String): Boolean = text.startsWith(PASTE_START) && text.indexOf(PASTE_END) == text.length - PASTE_END.length
+
 private const val SHIFTED_UNSHIFTED = "`1234567890-=[]\\;',./"
 private const val SHIFTED_SHIFTED = "~!@#\$%^&*()_+{}|:\"<>?"
 
@@ -59,7 +64,7 @@ class InputSink(
         sends++
         trace?.sent()
         typed(text)
-        io.send(ClientMsg.InputText(paneId, text, typed = true))
+        io.send(ClientMsg.InputText(paneId, text, typed = true, paste = onePaste(text)))
     }
 
     // The submit is the hook, not the keystroke: by the time a whole command has been typed it is
@@ -105,8 +110,9 @@ class InputSink(
         emit(payload)
     }
 
-    // Probe #9: pane.send_text writes raw bytes with no bracketed-paste framing of its own, so a
-    // multi-line paste would execute line by line in a shell unless Kampr brackets it here.
+    // Probe #9: pane.send_text writes raw bytes with no bracketed-paste framing of its own. The
+    // frame goes on here so a node too old to read `paste` still keeps a multi-line paste from
+    // running line by line; a newer one takes it off again for a program that never asked for it.
     fun paste(text: String) {
         if (text.isEmpty()) return
         elsewhere()

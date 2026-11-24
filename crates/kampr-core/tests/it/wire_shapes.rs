@@ -442,6 +442,7 @@ fn client() -> Vec<ClientMsg> {
             b64: Some("dA==".into()),
             keys: Some(vec!["Enter".into()]),
             typed: true,
+            paste: true,
             from: Some("01J".into()),
         },
         ClientMsg::Paste {

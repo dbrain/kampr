@@ -207,6 +207,8 @@ pub struct PaneInfo {
 pub enum Input {
     Bytes(Vec<u8>),
     Keys(Vec<String>),
+    /// Pasted text, unframed: the provider frames it as the pane's program asked (`paste::framed`).
+    Paste(String),
 }
 
 #[derive(Debug, Clone)]

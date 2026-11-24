@@ -997,6 +997,11 @@ pub enum ClientMsg {
         /// predates this, and both keep #535's hold.
         #[serde(default)]
         typed: bool,
+        /// `text` is one bracketed paste, which the pane's own node frames again as the program
+        /// asked: bare for one that never turned 2004 on. A node that predates this writes it as
+        /// sent, framed, as every node always did.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        paste: bool,
         /// Which of a hub's clients typed this, set by the hub that relays it: a muffit pane holds
         /// each one's composer text apart until its own carriage return (docs/18).
         #[serde(default, skip_serializing_if = "Option::is_none")]

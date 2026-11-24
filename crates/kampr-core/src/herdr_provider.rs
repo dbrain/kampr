@@ -12,6 +12,7 @@ use kampr_herdr::{
     Command, ForegroundProcess, Herdr, Observer, ProcessInfo, Snapshot, StreamEvent, Sub, rpc::Subscription,
 };
 use kampr_journal::{Harness, PaneProcess};
+use kampr_proc::Table as _;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -588,6 +589,19 @@ impl Inner {
             .collect()
     }
 
+    /// herdr says nothing of a pane's 2004 (#667), so a paste is framed unless the pane's terminal
+    /// is assembling lines itself, which no program that turns 2004 on does. Unknown is framed:
+    /// a multi-line paste left bare runs a line at a time at a shell prompt.
+    async fn reads_lines(&self, pane_id: &str) -> bool {
+        let Ok(info) = self.herdr.process_info(pane_id).await else {
+            return false;
+        };
+        info.shell_pid
+            .and_then(|pid| kampr_proc::here().tty(pid))
+            .and_then(|tty| kampr_proc::canonical(&tty))
+            .unwrap_or(false)
+    }
+
     fn refuse_hosted(&self, pane_id: &str) -> Result<()> {
         match self.hosted().remove(pane_id) {
             Some(native) => {
@@ -1133,6 +1147,12 @@ impl Provider for HerdrProvider {
                 self.inner.herdr.send_text(pane_id, &text).await
             }
             Input::Keys(keys) => self.inner.herdr.send_keys(pane_id, &keys).await,
+            Input::Paste(text) => {
+                let canonical = self.inner.reads_lines(pane_id).await;
+                let framed = crate::paste::framed(&text, !canonical);
+                let text = String::from_utf8(framed).expect("framed from a String");
+                self.inner.herdr.send_text(pane_id, &text).await
+            }
         }
     }
 

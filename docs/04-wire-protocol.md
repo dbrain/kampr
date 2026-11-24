@@ -1658,6 +1658,17 @@ the same path but is **not** an error and does not close anything — it arrives
 // input is never held — but it still queues behind a reply that is, so it cannot land inside it.
 // An installed client that predates the field sends none, and keeps the hold on everything.
 { "t": "input", "pane": "01J.../w3:p2", "text": "ls\r", "typed": true }
+// Optional `paste: true` says `text` is exactly one bracketed paste, `ESC[200~…ESC[201~`. The
+// pane's own node takes the frame off and writes the paste as the program there asked: framed for
+// one that turned on bracketed paste (2004), and otherwise bare with each line ending in `\r`, as
+// a terminal types it — so `read -s` or a password prompt gets the secret and not the escapes.
+// A native pane (fleet runs and docker shells included) is read from its emulator's 2004. herdr
+// says nothing of 2004 (#667), so a herdr pane is framed unless its terminal is in canonical mode
+// (ICANON), which no program that turns 2004 on reads in; unknown is framed. A muffit pane's line
+// editor reads the frame itself. Text that is not one whole paste is written as sent. The client
+// keeps the frame on so a node that predates the mark, or a peer behind a hub that does, writes
+// what every node always wrote; a hub relays the mark to the pane's node.
+{ "t": "input", "pane": "01J.../w3:p2", "text": "\u001b[200~one\ntwo\u001b[201~", "paste": true, "typed": true }
 
 { "t": "answer",      "pane": "01J.../w3:p2", "key": "1" }
 // The NODE decides whether a submit key follows, per harness — Claude selects on the digit alone,

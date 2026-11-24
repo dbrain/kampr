@@ -21,6 +21,12 @@ class WireTest {
     }
 
     @Test
+    fun aPasteIsMarkedAndTypingIsNot() {
+        assertTrue(""""paste":true""" in Wire.encode(ClientMsg.InputText("p", "x", paste = true)))
+        assertFalse("paste" in Wire.encode(ClientMsg.InputText("p", "x")))
+    }
+
+    @Test
     fun unknownMessageTypeIsIgnored() {
         assertNull(Wire.decode("""{"t":"teleport","pane":"x"}"""))
         assertNull(Wire.decode("""{"no_tag":1}"""))

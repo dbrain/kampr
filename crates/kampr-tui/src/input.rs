@@ -113,13 +113,6 @@ impl Router {
     }
 }
 
-/// A paste, with the bracketing it has to supply itself: `pane.send_text` writes raw bytes with
-/// no framing (#9), so a multi-line paste without `ESC[200~`/`ESC[201~` executes line by line in
-/// a shell instead of arriving as one block.
-pub fn bracketed(data: &str) -> String {
-    format!("\u{1b}[200~{data}\u{1b}[201~")
-}
-
 /// One key as the bytes a PTY would have seen.
 ///
 /// Home, End, PageUp, PageDown, Insert and Delete are **not** in herdr's key grammar (#8) and go

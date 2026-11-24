@@ -228,6 +228,7 @@ object Wire {
             put("pane", msg.pane)
             put("text", msg.text)
             if (msg.typed) put("typed", true)
+            if (msg.paste) put("paste", true)
         }
 
         is ClientMsg.InputB64 -> buildJsonObject {

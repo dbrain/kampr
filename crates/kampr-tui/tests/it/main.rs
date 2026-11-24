@@ -11,6 +11,7 @@ mod keys;
 mod links;
 mod manage;
 mod pairing;
+mod paste;
 mod pictures;
 mod pointer;
 mod remember;

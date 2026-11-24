@@ -178,14 +178,6 @@ fn the_keys_herdrs_grammar_rejects_are_escape_sequences() {
 }
 
 #[test]
-fn a_paste_supplies_its_own_bracketing() {
-    // `pane.send_text` writes raw bytes with no framing (#9), so an unbracketed multi-line paste
-    // executes line by line in a shell.
-    let framed = kampr_tui::input::bracketed("one\ntwo");
-    assert_eq!(framed, "\u{1b}[200~one\ntwo\u{1b}[201~");
-}
-
-#[test]
 fn the_escape_hatch_moves_the_prefix_so_the_pane_gets_ctrl_b_untouched() {
     // herdr uses the *local* keybindings for `--remote` and ships a flag to take the server's
     // instead. herdr's own config is not on the wire and #296 measured that a client cannot read

@@ -230,6 +230,10 @@ impl Screen {
         answer::keyboard_flags(*self.term.mode())
     }
 
+    pub fn bracketed_paste(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
     /// The input modes a terminal painted from [`Self::frame_full`] needs before live bytes pass
     /// through to it. Every mode is stated, the resets first, because the terminal may still hold
     /// ones an earlier paint set; xterm's mouse modes replace each other.
