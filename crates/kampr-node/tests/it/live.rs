@@ -8760,10 +8760,7 @@ async fn a_paste_lands_on_the_node_and_its_path_is_typed_into_the_pane() {
             grid.clear();
         }
         for row in message[kind].as_array().cloned().unwrap_or_default() {
-            grid.insert(
-                row["row"].as_u64().unwrap_or(0),
-                text_of(&columns(&row["runs"])),
-            );
+            grid.insert(row["row"].as_u64().unwrap_or(0), text_of(&columns(&row["runs"])));
         }
         let screen = grid.values().cloned().collect::<Vec<_>>().join("\n");
         if let Some(at) = screen.find("shot-") {
