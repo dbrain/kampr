@@ -88,8 +88,9 @@ to the audit log. The hello caps gain `docker: true`.
   `health_status`, `destroy`, each `{at, id, name, action, exit_code?, signal?, health?}`, trimmed to
   the last 14 days or 2 MB. On start the follower asks for `since=<last journalled>` so the ring's
   39 s covers a node restart.
-- **`[docker]`** in config: `enabled`, `socket`, `binary`, `fetch`, `debug_image`. Unset `enabled` means on when the socket
-  file exists, and `docker` appears on the node once the daemon has answered; `enabled = true` shows
+- **`[docker]`** in config: `enabled`, `socket`, `binary`, `fetch`, `debug_image`. Unset `enabled` means the socket is
+  followed whether or not it exists yet (Docker Desktop and OrbStack make theirs at login, after a
+  LaunchAgent started the node), and `docker` appears on the node once the daemon has answered; `enabled = true` shows
   `docker: false` while it does not. Only the primary session carries it, as with muffit.
 - **Shell.** `docker.shell` runs `docker` with `DOCKER_HOST=unix://<resolved socket>`, so the CLI
   reaches the daemon the node follows. A die within 2 s of a `kill` or `stop` is not a crash: that is

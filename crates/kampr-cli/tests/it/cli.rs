@@ -78,6 +78,38 @@ impl Cli {
     }
 
     fn spawn(&self, args: &[&str], stdin: &str, state_dir: bool) -> Output {
+        let mut child = self.command(args, state_dir).spawn().expect("kampr");
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(stdin.as_bytes())
+            .expect("write stdin");
+        child.wait_with_output().expect("kampr output")
+    }
+
+    /// `kampr serve` on this config, running until the returned node is dropped.
+    pub(crate) fn serve(&self) -> Served {
+        let child = self
+            .command(&["serve"], true)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("kampr serve");
+        let served = Served(child);
+        let bind = field(&self.config_text(), "bind");
+        for _ in 0..200 {
+            if std::net::TcpStream::connect(&bind).is_ok() {
+                return served;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("kampr serve never listened on {bind}");
+    }
+
+    fn command(&self, args: &[&str], state_dir: bool) -> Command {
         let mut command = Command::new(&self.binary);
         command.args(args).arg("--config-dir").arg(&self.config);
         if state_dir {
@@ -90,7 +122,7 @@ impl Cli {
         for (key, value) in &self.env {
             command.env(key, value);
         }
-        let mut child = command
+        command
             // Herdr sets this in every process it spawns, so a suite run from inside a pane would
             // otherwise resolve the herdr binary differently from one run in a plain terminal.
             .env_remove("HERDR_BIN_PATH")
@@ -110,17 +142,8 @@ impl Cli {
             .env("KAMPR_KEEP_LAUNCH", "detached")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("kampr");
-        use std::io::Write;
-        child
-            .stdin
-            .as_mut()
-            .expect("stdin")
-            .write_all(stdin.as_bytes())
-            .expect("write stdin");
-        child.wait_with_output().expect("kampr output")
+            .stderr(Stdio::piped());
+        command
     }
 
     pub(crate) fn init(&self) -> String {
@@ -158,6 +181,15 @@ impl Cli {
 
     fn json(&self, args: &[&str]) -> serde_json::Value {
         serde_json::from_str(&stdout(&self.run(args))).expect("json")
+    }
+}
+
+pub(crate) struct Served(std::process::Child);
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -409,7 +441,7 @@ fn loosen(path: &Path) {
 #[cfg(not(unix))]
 fn loosen(_path: &Path) {}
 
-fn set_config(cli: &Cli, from: &str, to: &str) {
+pub(crate) fn set_config(cli: &Cli, from: &str, to: &str) {
     let path = cli.config.join("config.toml");
     let text = std::fs::read_to_string(&path).expect("config");
     assert!(text.contains(from), "{text}");

@@ -66,6 +66,27 @@ async fn the_herd_lists_the_machines_containers_and_why_one_keeps_stopping() {
     assert_eq!(hello["caps"]["docker"], true, "{hello}");
 }
 
+/// OrbStack and Docker Desktop make their socket at login, after a LaunchAgent has started the
+/// node: a socket checked for once at start was a node that never listed a container.
+#[tokio::test]
+async fn a_daemon_whose_socket_appears_after_the_node_started_is_followed() {
+    if !available() {
+        return;
+    }
+    fn late(config: &mut Config) {
+        with_docker(config);
+        config.docker.socket = format!("{}/late-docker.sock", config.journals.home);
+    }
+    let h = Harness::start_with(Harness::home(), late).await;
+    let mut client = h.client().await;
+    let running = Container::run(&["--", "sleep 600"]);
+    let daemon = kampr_docker::socket::resolve("", std::env::var("DOCKER_HOST").ok().as_deref());
+    std::os::unix::fs::symlink(&daemon, h.home.as_ref().unwrap().path().join("late-docker.sock")).unwrap();
+
+    client.container(&running.0, |e| e["state"] == "running").await;
+    assert_eq!(client.nodes[NODE]["docker"], true);
+}
+
 #[tokio::test]
 async fn a_shell_into_a_container_is_a_native_pane_that_names_it() {
     let Some((h, mut client)) = docker_node().await else {

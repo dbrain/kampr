@@ -61,7 +61,7 @@ pub struct Hooks {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Docker {
-    /// Absent is on exactly when the socket answers.
+    /// Absent is on whenever the socket answers, including one that appears after the node started.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -114,7 +114,10 @@ impl Docker {
                 socket,
                 required: true,
             }),
-            None => socket.exists().then_some(DockerSource {
+            // Followed whether or not the socket is there yet: Docker Desktop and OrbStack make
+            // theirs at login, after a LaunchAgent started the node, and a source that has never
+            // answered is not shown.
+            None => Some(DockerSource {
                 socket,
                 required: false,
             }),
@@ -727,7 +730,7 @@ mod tests {
     use kampr_core::local_node::{DEFAULT_PORT, LocalNode, default_state_dir};
 
     #[test]
-    fn docker_is_on_where_its_socket_is_unless_somebody_said_otherwise() {
+    fn docker_is_followed_wherever_nobody_turned_it_off() {
         let dir = tempfile::tempdir().unwrap();
         let there = dir.path().join("docker.sock");
         std::fs::write(&there, "").unwrap();
@@ -744,7 +747,7 @@ mod tests {
             })
         };
         assert_eq!(docker(&there, None).resolve(None), source(&there, false));
-        assert_eq!(docker(&missing, None).resolve(None), None);
+        assert_eq!(docker(&missing, None).resolve(None), source(&missing, false));
         assert_eq!(docker(&missing, Some(true)).resolve(None), source(&missing, true));
         assert_eq!(docker(&there, Some(false)).resolve(None), None);
         let host = format!("unix://{}", there.display());

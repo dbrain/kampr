@@ -242,7 +242,12 @@ if [ -f "$unit" ] && grep -q "^ExecStart=$PREFIX/kampr " "$unit"; then
     echo "kampr: run 'systemctl --user restart kampr.service' to move the running node onto it"
   fi
 elif [ -f "$plist" ] && grep -q "<string>$PREFIX/kampr</string>" "$plist"; then
-  if launchctl kickstart -k "gui/$(id -u)/dev.kampr.node" >/dev/null 2>&1; then
+  # `kickstart -k` restarts the job on the plist launchd already loaded, so a change to the
+  # template (the PATH the node finds docker on) reaches it only through `service refresh`, which
+  # rewrites the agent and bootstraps it again. A release from before it has no `refresh`.
+  if "$PREFIX/kampr" service refresh >/dev/null 2>&1; then
+    echo "kampr: refreshed dev.kampr.node and restarted it onto the new binary"
+  elif launchctl kickstart -k "gui/$(id -u)/dev.kampr.node" >/dev/null 2>&1; then
     echo "kampr: restarted dev.kampr.node onto the new binary"
   else
     echo "kampr: run 'launchctl kickstart -k gui/$(id -u)/dev.kampr.node' to move the node onto it"

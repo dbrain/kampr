@@ -1,4 +1,5 @@
 mod cli;
+mod doctor_docker;
 mod doctor_live;
 mod mesh_cli;
 mod native_cli;

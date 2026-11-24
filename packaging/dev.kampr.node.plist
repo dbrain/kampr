@@ -10,7 +10,10 @@
     <string>--state-dir</string><string>@STATE_DIR@</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>HERDR_SOCKET_PATH</key><string>@SOCKET@</string></dict>
+  <dict>
+    <key>HERDR_SOCKET_PATH</key><string>@SOCKET@</string>
+    <key>PATH</key><string>@PATH@</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <!-- 63 is 0o077. launchd takes this as a decimal integer, and sqlite creates the

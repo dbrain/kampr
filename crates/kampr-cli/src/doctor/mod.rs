@@ -132,7 +132,16 @@ async fn collect(dirs: &Dirs) -> Report {
     checks.push(host::linger(&service));
     checks.push(host::fleet_path(&config));
     checks.push(keep::check(&config));
-    checks.push(docker::check(&config, &state_dir).await);
+    let service_path = service.installed.then(crate::service::manager_path).flatten();
+    let running = match config.docker.enabled {
+        Some(false) => None,
+        _ => Some(docker::running(&config, dirs).await),
+    };
+    let restart = match service.installed {
+        true => service.restart_hint(crate::service::Supervisor::detect()),
+        false => "stop `kampr serve` and start it again".into(),
+    };
+    checks.push(docker::check(&config, &state_dir, service_path.as_deref(), running, &restart).await);
 
     // The device store is the one check that needs the database open, and a database that will
     // not open is itself the answer.

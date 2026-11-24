@@ -3,7 +3,6 @@ use crate::report::Local;
 use crate::service::{self, Supervisor};
 use kampr_fleet::PathOrigin;
 use kampr_node::Config;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -125,18 +124,18 @@ pub async fn service(config: &Config, state: &service::State) -> Check {
             "service",
             format!("{detail}; last result {} at {}", state.result, state.since),
         )
-        .fix("systemctl --user status kampr.service");
+        .fix(state.status_hint(Supervisor::detect()));
     }
     if !state.running {
         return Check::fail("service", format!("{detail}; stopped since {}", state.since))
-            .fix(service::start_hint());
+            .fix(state.start_hint(Supervisor::detect()));
     }
     if !listening {
         return Check::fail(
             "service",
             format!("{detail}; the unit is running but nothing answers on the port"),
         )
-        .fix("KAMPR_LOG=debug systemctl --user restart kampr.service");
+        .fix(state.restart_hint(Supervisor::detect()));
     }
     Check::ok("service", detail)
 }
@@ -152,13 +151,7 @@ pub fn linger(state: &service::State) -> Check {
         );
     }
     match Supervisor::detect() {
-        Supervisor::Launchd => Check::warn(
-            "linger",
-            "the agent is loaded into gui/$(id -u), a domain that only exists once someone logs \
-             in at the screen — a Mac that reboots to the login window does not start the node \
-             until you do",
-        )
-        .fix("for a headless Mac, run it as a LaunchDaemon in /Library/LaunchDaemons instead"),
+        Supervisor::Launchd => launchd_linger(state, &service::username(), &service::MacLogin::read()),
         Supervisor::Unsupported => Check::warn(
             "linger",
             "a unit file is here but this host has no systemd to read it",
@@ -188,6 +181,39 @@ pub fn linger(state: &service::State) -> Check {
             }
         }
     }
+}
+
+/// A Mac someone logs into is the usual case, and Docker Desktop and OrbStack only run after a
+/// login too, so a LaunchDaemon would not help those nodes; only a Mac nobody logs into is warned.
+fn launchd_linger(state: &service::State, user: &str, login: &service::MacLogin) -> Check {
+    if state.daemon {
+        return Check::ok(
+            "linger",
+            "a LaunchDaemon in the system domain, which launchd starts at boot",
+        );
+    }
+    if login.auto_login.as_deref() == Some(user) {
+        return Check::ok(
+            "linger",
+            format!("{user} logs in automatically at boot, and the agent starts with that login"),
+        );
+    }
+    if login.console.as_deref() == Some(user) {
+        return Check::ok(
+            "linger",
+            format!(
+                "starts when {user} logs in at the screen; for a Mac that reboots to the login \
+                 window, use a LaunchDaemon"
+            ),
+        );
+    }
+    Check::warn(
+        "linger",
+        "the agent is loaded into gui/$(id -u), a domain that only exists once someone logs \
+         in at the screen — a Mac that reboots to the login window does not start the node \
+         until you do",
+    )
+    .fix("for a headless Mac, run it as a LaunchDaemon in /Library/LaunchDaemons instead")
 }
 
 pub async fn access(local: &Local) -> Vec<Check> {
@@ -252,17 +278,8 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
-/// Whether a bare `name` runs on `path`, asked the way `exec` asks it: the first entry holding a
-/// file this user may execute.
-fn resolves(path: &str, name: &str) -> bool {
-    path.split(':')
-        .filter(|entry| !entry.is_empty())
-        .map(|entry| std::path::Path::new(entry).join(name))
-        .any(|candidate| {
-            std::fs::metadata(&candidate)
-                .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-                .unwrap_or(false)
-        })
+pub fn resolves(path: &str, name: &str) -> bool {
+    service::which(path, name).is_some()
 }
 
 /// What a fleet run on this host will find, and where that came from.
@@ -373,6 +390,53 @@ mod tests {
         let check = &files(&config, &state)[0];
         assert_eq!(check.status, Status::Fail);
         assert!(check.detail.contains("vapid.pem"), "{}", check.detail);
+    }
+
+    #[test]
+    fn a_mac_someone_logs_into_is_not_warned_about_reboots() {
+        let agent = service::State {
+            installed: true,
+            enabled: "loaded".into(),
+            active: "running".into(),
+            running: true,
+            failed: false,
+            result: "never exited".into(),
+            since: "unknown".into(),
+            daemon: false,
+        };
+        let login = |auto: Option<&str>, console: Option<&str>| service::MacLogin {
+            auto_login: auto.map(Into::into),
+            console: console.map(Into::into),
+        };
+        for (name, state, login, status) in [
+            (
+                "at the screen",
+                agent.clone(),
+                login(None, Some("me")),
+                Status::Ok,
+            ),
+            ("auto-login", agent.clone(), login(Some("me"), None), Status::Ok),
+            (
+                "someone else",
+                agent.clone(),
+                login(Some("you"), Some("you")),
+                Status::Warn,
+            ),
+            ("nobody", agent.clone(), login(None, None), Status::Warn),
+            (
+                "daemon",
+                service::State {
+                    daemon: true,
+                    ..agent.clone()
+                },
+                login(None, None),
+                Status::Ok,
+            ),
+        ] {
+            let check = launchd_linger(&state, "me", &login);
+            assert_eq!(check.status, status, "{name}: {check:?}");
+            assert_eq!(check.fix.is_some(), status == Status::Warn, "{name}: {check:?}");
+        }
     }
 
     /// A PATH read from the right shell, that a fleet run cannot run `kampr` on, is the report the

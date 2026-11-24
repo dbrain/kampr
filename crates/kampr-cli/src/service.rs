@@ -193,22 +193,127 @@ fn install_launchd(
     // launchd expands nothing, and an empty HERDR_SOCKET_PATH is worse than an absent one:
     // `Herdr::discover` takes the variable at face value and dials a socket named "".
     let default_socket = default_socket_path()?;
-    let plist = LAUNCHD_PLIST
-        .replace("@BIN@", &binary.display().to_string())
-        .replace("@CONFIG_DIR@", &config_dir.display().to_string())
-        .replace("@STATE_DIR@", &state_dir.display().to_string())
-        .replace("@SOCKET@", socket.unwrap_or(&default_socket));
-    std::fs::write(&path, plist).with_context(|| format!("writing {}", path.display()))?;
-    quiet("launchctl", &["bootout", &format!("gui/{}/{LABEL}", uid())]);
-    let domain = format!("gui/{}", uid());
-    let plist_path = path.display().to_string();
-    if !try_run("launchctl", &["bootstrap", &domain, &plist_path]) {
-        eprintln!("kampr: could not load {LABEL}; run `launchctl bootstrap {domain} {plist_path}` by hand");
-    }
+    let agent = Agent {
+        binary: binary.to_path_buf(),
+        config_dir: config_dir.to_path_buf(),
+        state_dir: state_dir.to_path_buf(),
+        socket: socket.unwrap_or(&default_socket).to_string(),
+    };
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    std::fs::write(&path, agent.render(&home, installer_docker().as_deref()))
+        .with_context(|| format!("writing {}", path.display()))?;
+    load_launchd(&path);
     Ok(Installed {
         path,
         reboot: Reboot::NeedsGuiLogin,
     })
+}
+
+/// `launchctl kickstart -k` restarts a job on the plist launchd loaded at bootstrap, so a changed
+/// plist reaches the node only through a bootout and a bootstrap.
+///
+/// Both run in a process group of their own: `kampr update` is often a child of the node it
+/// updates (a fleet run, the phone), and a bootout kills the job's process group, which would end
+/// this command between the two and leave the node unloaded until the next login.
+fn load_launchd(path: &Path) -> bool {
+    use std::os::unix::process::CommandExt;
+    let domain = format!("gui/{}", uid());
+    let plist_path = path.display().to_string();
+    let loaded = Command::new("/bin/sh")
+        .args([
+            "-c",
+            r#"launchctl bootout "$1/$2" >/dev/null 2>&1; launchctl bootstrap "$1" "$3""#,
+            "sh",
+            &domain,
+            LABEL,
+            &plist_path,
+        ])
+        .process_group(0)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !loaded {
+        eprintln!("kampr: could not load {LABEL}; run `launchctl bootstrap {domain} {plist_path}` by hand");
+    }
+    loaded
+}
+
+fn installer_docker() -> Option<PathBuf> {
+    std::env::var("PATH").ok().and_then(|path| which(&path, "docker"))
+}
+
+/// What an installed agent runs, read back out of its plist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Agent {
+    binary: PathBuf,
+    config_dir: PathBuf,
+    state_dir: PathBuf,
+    socket: String,
+}
+
+impl Agent {
+    fn read(plist: &str) -> Option<Self> {
+        let strings: Vec<&str> = plist
+            .split_once("<key>ProgramArguments</key>")?
+            .1
+            .split_once("</array>")?
+            .0
+            .split("<string>")
+            .filter_map(|s| s.split_once("</string>").map(|(v, _)| v))
+            .collect();
+        let after = |flag: &str| {
+            let at = strings.iter().position(|s| *s == flag)?;
+            strings.get(at + 1).map(PathBuf::from)
+        };
+        let socket = plist
+            .split_once("<key>HERDR_SOCKET_PATH</key>")?
+            .1
+            .trim_start()
+            .strip_prefix("<string>")?
+            .split_once("</string>")?
+            .0;
+        Some(Self {
+            binary: PathBuf::from(strings.first()?),
+            config_dir: after("--config-dir")?,
+            state_dir: after("--state-dir")?,
+            socket: socket.to_string(),
+        })
+    }
+
+    fn render(&self, home: &str, docker: Option<&Path>) -> String {
+        LAUNCHD_PLIST
+            .replace("@BIN@", &self.binary.display().to_string())
+            .replace("@CONFIG_DIR@", &self.config_dir.display().to_string())
+            .replace("@STATE_DIR@", &self.state_dir.display().to_string())
+            .replace("@SOCKET@", &self.socket)
+            .replace("@PATH@", &launchd_path(home, docker))
+    }
+}
+
+fn refreshed(plist: &str, home: &str, docker: Option<&Path>) -> Option<String> {
+    Some(Agent::read(plist)?.render(home, docker))
+}
+
+/// Rewrites the installed agent from this build's template, keeping the binary, directories and
+/// socket it names, and reloads it. `install.sh` runs it on update so a Mac gets a template change
+/// (the `PATH` the node finds `docker` on) without reinstalling. `false` is nothing to refresh.
+pub fn refresh() -> Result<bool> {
+    if Supervisor::detect() != Supervisor::Launchd {
+        return Ok(false);
+    }
+    let path = launchd_plist_path()?;
+    let Ok(plist) = std::fs::read_to_string(&path) else {
+        return Ok(false);
+    };
+    let home = std::env::var("HOME").context("HOME is not set")?;
+    let new = refreshed(&plist, &home, installer_docker().as_deref())
+        .with_context(|| format!("{} does not name a binary and its directories", path.display()))?;
+    std::fs::write(&path, new).with_context(|| format!("writing {}", path.display()))?;
+    if !load_launchd(&path) {
+        bail!("{} was rewritten but did not load", path.display());
+    }
+    Ok(true)
 }
 
 pub fn status() -> String {
@@ -217,9 +322,10 @@ pub fn status() -> String {
         Supervisor::Systemd => {
             run_output("systemctl", &["--user", "is-active", UNIT]).unwrap_or_else(|_| "unknown".into())
         }
-        Supervisor::Launchd => run_output("launchctl", &["print", &format!("gui/{}/{LABEL}", uid())])
-            .map(|_| "active".to_string())
-            .unwrap_or_else(|_| "inactive".into()),
+        Supervisor::Launchd => match launchd_state() {
+            state if state.running => "active".into(),
+            _ => "inactive".into(),
+        },
     }
 }
 
@@ -234,21 +340,70 @@ pub struct State {
     pub failed: bool,
     pub result: String,
     pub since: String,
+    /// A LaunchDaemon in launchd's `system` domain, which starts at boot without anyone logging in.
+    pub daemon: bool,
+}
+
+impl State {
+    fn not_installed(enabled: &str) -> Self {
+        Self {
+            installed: false,
+            enabled: enabled.into(),
+            active: "unknown".into(),
+            running: false,
+            failed: false,
+            result: "unknown".into(),
+            since: "unknown".into(),
+            daemon: false,
+        }
+    }
+
+    fn launchctl(&self, verb: &str) -> String {
+        match self.daemon {
+            true => format!("sudo launchctl {verb} system/{LABEL}"),
+            false => format!("launchctl {verb} gui/$(id -u)/{LABEL}"),
+        }
+    }
+
+    /// Where to read why the unit stopped.
+    pub fn status_hint(&self, supervisor: Supervisor) -> String {
+        match supervisor {
+            Supervisor::Systemd => format!("systemctl --user status {UNIT}"),
+            Supervisor::Launchd => self.launchctl("print"),
+            Supervisor::Unsupported => "kampr serve".into(),
+        }
+    }
+
+    pub fn restart_hint(&self, supervisor: Supervisor) -> String {
+        match supervisor {
+            Supervisor::Systemd => format!("KAMPR_LOG=debug systemctl --user restart {UNIT}"),
+            Supervisor::Launchd => self.launchctl("kickstart -k"),
+            Supervisor::Unsupported => "kampr serve".into(),
+        }
+    }
+
+    pub fn start_hint(&self, supervisor: Supervisor) -> String {
+        match supervisor {
+            Supervisor::Systemd => format!("systemctl --user start {UNIT}"),
+            Supervisor::Launchd => self.launchctl("kickstart"),
+            Supervisor::Unsupported => "kampr serve".into(),
+        }
+    }
+
+    pub fn stop_hint(&self, supervisor: Supervisor) -> String {
+        match supervisor {
+            Supervisor::Systemd => format!("systemctl --user stop {UNIT}"),
+            Supervisor::Launchd => self.launchctl("bootout"),
+            Supervisor::Unsupported => "stop whatever runs `kampr serve`".into(),
+        }
+    }
 }
 
 pub fn details() -> State {
     match Supervisor::detect() {
         Supervisor::Systemd => systemd_state(),
         Supervisor::Launchd => launchd_state(),
-        Supervisor::Unsupported => State {
-            installed: false,
-            enabled: "no service manager".into(),
-            active: "unknown".into(),
-            running: false,
-            failed: false,
-            result: "unknown".into(),
-            since: "unknown".into(),
-        },
+        Supervisor::Unsupported => State::not_installed("no service manager"),
     }
 }
 
@@ -304,37 +459,54 @@ fn systemd_state() -> State {
             let at = field("StateChangeTimestamp");
             if at.is_empty() { "unknown".into() } else { at }
         },
+        daemon: false,
     }
 }
 
+/// The agent `kampr service install` writes, then a LaunchDaemon, which is what a Mac that reboots
+/// to the login window needs instead.
 fn launchd_state() -> State {
-    let installed = launchd_plist_path().is_ok_and(|p| p.exists());
-    let print = run_output("launchctl", &["print", &format!("gui/{}/{LABEL}", uid())]).ok();
-    let running = print.as_ref().is_some_and(|p| p.contains("state = running"));
+    let print = |target: &str| run_output("launchctl", &["print", target]).unwrap_or_default();
+    let agent = print(&format!("gui/{}/{LABEL}", uid()));
+    let mut state = parse_launchd(&agent);
+    state.installed |= launchd_plist_path().is_ok_and(|p| p.exists());
+    if state.installed {
+        return state;
+    }
+    let mut daemon = parse_launchd(&print(&format!("system/{LABEL}")));
+    daemon.installed |= Path::new(LAUNCH_DAEMON).exists();
+    daemon.daemon = true;
+    match daemon.installed {
+        true => daemon,
+        false => state,
+    }
+}
+
+/// `launchctl print` names an agent that has run since it was loaded `(never exited)`, which is
+/// every healthy LaunchAgent after a login, and newer releases follow a code with its name
+/// (`78: EX_CONFIG`). Only a nonzero code is a failure.
+fn parse_launchd(print: &str) -> State {
+    let loaded = !print.trim().is_empty();
+    let running = print.lines().any(|l| l.trim() == "state = running");
     let last_exit = print
-        .as_ref()
-        .and_then(|p| {
-            p.lines()
-                .find_map(|l| l.trim().strip_prefix("last exit code = "))
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "unknown".into());
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("last exit code = "))
+        .map(str::trim);
+    let code = last_exit.and_then(|e| e.split(':').next()?.trim().parse::<i64>().ok());
+    let result = match (last_exit, code) {
+        (_, Some(_)) => last_exit.unwrap_or_default().to_string(),
+        (Some(other), None) => other.trim_matches(|c| c == '(' || c == ')').to_string(),
+        (None, None) => "unknown".into(),
+    };
     State {
-        installed,
-        enabled: if installed {
-            "loaded".into()
-        } else {
-            "not loaded".into()
-        },
-        active: if running {
-            "running".into()
-        } else {
-            "stopped".into()
-        },
+        installed: loaded,
+        enabled: if loaded { "loaded" } else { "not loaded" }.into(),
+        active: if running { "running" } else { "stopped" }.into(),
         running,
-        failed: !matches!(last_exit.as_str(), "0" | "unknown"),
-        result: last_exit,
+        failed: code.is_some_and(|c| c != 0),
+        result,
         since: "unknown".into(),
+        daemon: false,
     }
 }
 
@@ -342,22 +514,74 @@ fn launchd_state() -> State {
 /// it: a `systemd --user` manager's is `/usr/local/bin:/usr/bin:/bin` and friends, with no
 /// `~/.local/bin` — where `install.sh` puts both kampr and herdr.
 pub fn manager_path() -> Option<String> {
-    if Supervisor::detect() != Supervisor::Systemd {
-        return None;
+    match Supervisor::detect() {
+        Supervisor::Systemd => run_output("systemctl", &["--user", "show-environment"])
+            .ok()?
+            .lines()
+            .find_map(|line| line.strip_prefix("PATH="))
+            .map(str::to_string),
+        Supervisor::Launchd => Some(plist_path_env(
+            &std::fs::read_to_string(launchd_plist_path().ok()?).ok()?,
+        )),
+        Supervisor::Unsupported => None,
     }
-    run_output("systemctl", &["--user", "show-environment"])
-        .ok()?
-        .lines()
-        .find_map(|line| line.strip_prefix("PATH="))
-        .map(str::to_string)
+}
+
+/// launchd's own `PATH` for a job that sets none, which is what a plist written before it carried
+/// one gave the node.
+const LAUNCHD_DEFAULT_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+fn plist_path_env(plist: &str) -> String {
+    plist
+        .split_once("<key>PATH</key>")
+        .and_then(|(_, rest)| {
+            rest.trim_start()
+                .strip_prefix("<string>")?
+                .split_once("</string>")
+        })
+        .map_or_else(|| LAUNCHD_DEFAULT_PATH.to_string(), |(path, _)| path.to_string())
+}
+
+/// launchd hands a job its default `PATH` and nothing from the login shell, so the node could not
+/// run `kampr`, `herdr` or `docker` from where installers put them: `~/.local/bin`, Homebrew's
+/// two prefixes (Docker Desktop and OrbStack link `docker` into `/usr/local/bin`), and wherever
+/// the `docker` the installer can see lives.
+fn launchd_path(home: &str, docker: Option<&Path>) -> String {
+    let mut entries: Vec<String> = vec![
+        format!("{home}/.local/bin"),
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+    ];
+    entries.extend(docker.and_then(Path::parent).map(|dir| dir.display().to_string()));
+    entries.extend(LAUNCHD_DEFAULT_PATH.split(':').map(str::to_string));
+    let mut seen = std::collections::HashSet::new();
+    entries.retain(|entry| seen.insert(entry.clone()));
+    entries.join(":")
+}
+
+/// The file a bare `name` runs on `path`, asked the way `exec` asks it: the first entry holding a
+/// file this user may execute.
+pub fn which(path: &str, name: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    path.split(':')
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| Path::new(entry).join(name))
+        .find(|candidate| {
+            std::fs::metadata(candidate).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
 }
 
 /// The kampr the unit runs, which need not be the one running this command.
 pub fn unit_binary() -> Option<PathBuf> {
-    if Supervisor::detect() != Supervisor::Systemd {
-        return None;
+    match Supervisor::detect() {
+        Supervisor::Systemd => {
+            exec_start_path(&run_output("systemctl", &["--user", "show", UNIT, "--property=ExecStart"]).ok()?)
+        }
+        Supervisor::Launchd => {
+            Agent::read(&std::fs::read_to_string(launchd_plist_path().ok()?).ok()?).map(|a| a.binary)
+        }
+        Supervisor::Unsupported => None,
     }
-    exec_start_path(&run_output("systemctl", &["--user", "show", UNIT, "--property=ExecStart"]).ok()?)
 }
 
 fn exec_start_path(shown: &str) -> Option<PathBuf> {
@@ -370,12 +594,41 @@ fn exec_start_path(shown: &str) -> Option<PathBuf> {
     Some(PathBuf::from(path))
 }
 
-pub fn start_hint() -> &'static str {
-    match Supervisor::detect() {
-        Supervisor::Systemd => "systemctl --user start kampr.service",
-        Supervisor::Launchd => "launchctl kickstart gui/$(id -u)/dev.kampr.node",
-        Supervisor::Unsupported => "kampr serve",
+/// Who a Mac lets in at the screen: a LaunchAgent's `gui` domain exists only once that happens.
+#[derive(Debug, Clone, Default)]
+pub struct MacLogin {
+    pub auto_login: Option<String>,
+    pub console: Option<String>,
+}
+
+impl MacLogin {
+    pub fn read() -> Self {
+        let answer = |program: &str, args: &[&str]| {
+            run_output(program, args)
+                .ok()
+                .filter(|v| !v.is_empty() && v != "root")
+        };
+        Self {
+            auto_login: answer(
+                "defaults",
+                &[
+                    "read",
+                    "/Library/Preferences/com.apple.loginwindow",
+                    "autoLoginUser",
+                ],
+            ),
+            console: answer("stat", &["-f%Su", "/dev/console"]),
+        }
     }
+}
+
+/// For the unit `kampr service install` writes, before there is any state to read.
+pub fn start_hint() -> String {
+    State::not_installed("").start_hint(Supervisor::detect())
+}
+
+pub fn stop_hint() -> String {
+    State::not_installed("").stop_hint(Supervisor::detect())
 }
 
 fn default_socket_path() -> Result<String> {
@@ -390,6 +643,8 @@ fn systemd_unit_path() -> Result<PathBuf> {
         .context("neither XDG_CONFIG_HOME nor HOME is set")?;
     Ok(base.join("systemd/user").join(UNIT))
 }
+
+const LAUNCH_DAEMON: &str = "/Library/LaunchDaemons/dev.kampr.node.plist";
 
 fn launchd_plist_path() -> Result<PathBuf> {
     let home = std::env::var_os("HOME").context("HOME is not set")?;
@@ -438,7 +693,10 @@ const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <string>--state-dir</string><string>@STATE_DIR@</string>
   </array>
   <key>EnvironmentVariables</key>
-  <dict><key>HERDR_SOCKET_PATH</key><string>@SOCKET@</string></dict>
+  <dict>
+    <key>HERDR_SOCKET_PATH</key><string>@SOCKET@</string>
+    <key>PATH</key><string>@PATH@</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <!-- 63 is 0o077. launchd takes this as a decimal integer, and sqlite creates the
@@ -533,7 +791,8 @@ mod tests {
             .replace("@BIN@", "/usr/local/bin/kampr")
             .replace("@CONFIG_DIR@", "/c")
             .replace("@STATE_DIR@", "/s")
-            .replace("@SOCKET@", "/sock");
+            .replace("@SOCKET@", "/sock")
+            .replace("@PATH@", "/bin");
         assert!(!plist.contains('@'), "{plist}");
         assert!(plist.contains("<string>serve</string>"));
     }
@@ -597,6 +856,143 @@ mod tests {
         )
         .expect_err("no supervisor to install into");
         assert!(error.to_string().contains("systemd"), "{error}");
+    }
+
+    /// Every Mac reported FAIL after each login: a LaunchAgent that has run since then prints
+    /// `(never exited)`, and anything but "0" was read as a failed service.
+    #[test]
+    fn only_a_nonzero_exit_code_is_a_failed_agent() {
+        let print = |state: &str, exit: Option<&str>| {
+            let mut out = format!("gui/501/dev.kampr.node = {{\n\tactive count = 1\n\tstate = {state}\n");
+            if let Some(exit) = exit {
+                out += &format!("\tlast exit code = {exit}\n");
+            }
+            out + "}\n"
+        };
+        for (name, text, running, failed, result) in [
+            (
+                "never exited",
+                print("running", Some("(never exited)")),
+                true,
+                false,
+                "never exited",
+            ),
+            ("clean exit", print("not running", Some("0")), false, false, "0"),
+            ("exit 1", print("not running", Some("1")), false, true, "1"),
+            (
+                "named code",
+                print("not running", Some("78: EX_CONFIG")),
+                false,
+                true,
+                "78: EX_CONFIG",
+            ),
+            ("no line", print("running", None), true, false, "unknown"),
+        ] {
+            let state = parse_launchd(&text);
+            assert!(state.installed, "{name}");
+            assert_eq!(state.running, running, "{name}");
+            assert_eq!(state.failed, failed, "{name}");
+            assert_eq!(state.result, result, "{name}");
+        }
+        let absent = parse_launchd("");
+        assert!(!absent.installed && !absent.failed && !absent.running);
+    }
+
+    #[test]
+    fn a_launchd_unit_is_pointed_at_with_launchctl_in_its_own_domain() {
+        let agent = parse_launchd("state = running");
+        for hint in [
+            agent.status_hint(Supervisor::Launchd),
+            agent.restart_hint(Supervisor::Launchd),
+            agent.start_hint(Supervisor::Launchd),
+            agent.stop_hint(Supervisor::Launchd),
+        ] {
+            assert!(hint.starts_with("launchctl "), "{hint}");
+            assert!(hint.ends_with("gui/$(id -u)/dev.kampr.node"), "{hint}");
+        }
+        assert!(agent.restart_hint(Supervisor::Launchd).contains("kickstart -k"));
+        let daemon = State {
+            daemon: true,
+            ..agent.clone()
+        };
+        assert_eq!(
+            daemon.status_hint(Supervisor::Launchd),
+            "sudo launchctl print system/dev.kampr.node"
+        );
+        assert_eq!(
+            agent.status_hint(Supervisor::Systemd),
+            "systemctl --user status kampr.service"
+        );
+    }
+
+    /// launchd's default PATH has none of the places `docker` is installed, so adopt and shell-in
+    /// failed with "starting docker: No such file or directory".
+    #[test]
+    fn the_plist_gives_the_node_a_path_that_finds_docker_and_kampr() {
+        let path = launchd_path("/Users/x", Some(Path::new("/Users/x/.orbstack/bin/docker")));
+        let entries: Vec<&str> = path.split(':').collect();
+        for want in [
+            "/Users/x/.local/bin",
+            "/usr/local/bin",
+            "/opt/homebrew/bin",
+            "/Users/x/.orbstack/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ] {
+            assert!(entries.contains(&want), "{want} in {path}");
+        }
+        let linked = launchd_path("/Users/x", Some(Path::new("/usr/local/bin/docker")));
+        assert_eq!(linked.matches("/usr/local/bin").count(), 1, "{linked}");
+
+        let plist = LAUNCHD_PLIST
+            .replace("@BIN@", "/k")
+            .replace("@CONFIG_DIR@", "/c")
+            .replace("@STATE_DIR@", "/s")
+            .replace("@SOCKET@", "/sock")
+            .replace("@PATH@", &path);
+        assert_eq!(
+            plist_path_env(&plist),
+            path,
+            "what doctor reads back is what was written"
+        );
+        assert_eq!(
+            plist_path_env(&LAUNCHD_PLIST.replace("<key>PATH</key><string>@PATH@</string>", "")),
+            LAUNCHD_DEFAULT_PATH,
+            "a plist from before the PATH runs on launchd's"
+        );
+    }
+
+    /// Every plist written before it carried a PATH, as launchd still holds it on a Mac that
+    /// updated: a refresh keeps what it names and gains what the template now has.
+    #[test]
+    fn a_refresh_keeps_what_the_installed_plist_names_and_gains_the_path() {
+        let old = LAUNCHD_PLIST
+            .replace("\n    <key>PATH</key><string>@PATH@</string>", "")
+            .replace("@BIN@", "/Users/x/.local/bin/kampr")
+            .replace("@CONFIG_DIR@", "/Users/x/kc")
+            .replace("@STATE_DIR@", "/Users/x/ks")
+            .replace("@SOCKET@", "/Users/x/h.sock");
+        assert!(!old.contains("<key>PATH</key>"), "{old}");
+        let installed = Agent::read(&old).expect("the values an old plist carries");
+        assert_eq!(installed.binary, Path::new("/Users/x/.local/bin/kampr"));
+
+        let new = refreshed(&old, "/Users/x", Some(Path::new("/opt/homebrew/bin/docker")))
+            .expect("a refreshed plist");
+        for kept in [
+            "/Users/x/.local/bin/kampr",
+            "/Users/x/kc",
+            "/Users/x/ks",
+            "/Users/x/h.sock",
+        ] {
+            assert!(new.contains(&format!("<string>{kept}</string>")), "{kept}: {new}");
+        }
+        assert_eq!(
+            plist_path_env(&new),
+            launchd_path("/Users/x", Some(Path::new("/opt/homebrew/bin/docker")))
+        );
+        assert_eq!(refreshed("not a plist", "/Users/x", None), None);
     }
 
     fn packaged(name: &str) -> Option<String> {

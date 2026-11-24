@@ -242,6 +242,8 @@ enum ServiceAction {
     Install,
     Uninstall,
     Status,
+    /// Rewrite an installed launchd agent from this build's template and reload it
+    Refresh,
 }
 
 fn main() -> Result<()> {
@@ -444,6 +446,13 @@ async fn run(cli: Cli) -> Result<()> {
             }
             ServiceAction::Status => {
                 println!("{}", service::status());
+                Ok(())
+            }
+            ServiceAction::Refresh => {
+                match service::refresh()? {
+                    true => println!("refreshed dev.kampr.node from this build's template"),
+                    false => println!("no launchd agent to refresh"),
+                }
                 Ok(())
             }
         },

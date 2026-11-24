@@ -173,6 +173,24 @@ else
   echo "skip ExecStart location (no systemd on this host)"
 fi
 
+# 7 — launchd starts a job with /usr/bin:/bin:/usr/sbin:/sbin, where the node found no docker and
+#     every adopt and shell-in failed. The plist has to carry a PATH, and every placeholder filled.
+if [ "$supervisor" = launchd ]; then
+  reset
+  ctl setup || true
+  if [ ! -f "$plist_path" ]; then
+    fail "setup installs a plist"
+  elif grep -q '@' "$plist_path"; then
+    fail "the plist is fully rendered" "$(grep '@' "$plist_path")"
+  elif ! grep -q "<key>PATH</key><string>$work/home/.local/bin:" "$plist_path"; then
+    fail "the plist gives the node a PATH" "$(grep -A1 EnvironmentVariables "$plist_path")"
+  else
+    echo "ok   the plist gives the node a PATH"
+  fi
+else
+  echo "skip plist PATH (not a launchd host)"
+fi
+
 if [ "$fails" -gt 0 ]; then
   echo
   echo "$fails check(s) failed"

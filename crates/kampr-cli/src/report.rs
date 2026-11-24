@@ -93,7 +93,10 @@ impl StoreProblem {
         if text.contains("database is locked") || text.contains("SQLITE_BUSY") {
             return Self {
                 detail: format!("{db} is locked by another process"),
-                fix: "stop the running node — `systemctl --user stop kampr.service` — and try again".into(),
+                fix: format!(
+                    "stop the running node — `{}` — and try again",
+                    crate::service::stop_hint()
+                ),
             };
         }
         if text.contains("os error 13") || text.contains("Permission denied") {

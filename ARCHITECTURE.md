@@ -123,7 +123,10 @@ session ends and it is not started at boot unless that user lingers. So `kampr s
 runs `loginctl enable-linger` and, when it cannot, prints the command as a required next step
 rather than a suggestion — and `kampr doctor` fails on a unit installed without it. The launchd
 half has the same shape for a different reason: a `gui/$UID` agent needs someone to log in at the
-screen, so a headless Mac needs a LaunchDaemon instead, which `doctor` says rather than implying.
+screen, so a headless Mac needs a LaunchDaemon instead. `doctor` warns only where nobody logs in:
+it is quiet when this user auto-logs in or is at the console, and it recognises a LaunchDaemon in
+the `system` domain. A Mac someone logs into is the usual case, and Docker Desktop and OrbStack
+only run after a login anyway.
 
 Herdr's plugin host makes three of these choices for us and they are worth knowing:
 

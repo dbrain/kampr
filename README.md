@@ -416,6 +416,7 @@ installed the app.
 | `kampr recover` | Get back in when no paired device is left |
 | `kampr mesh invite / join / list / revoke / forget` | Join hosts into one herd |
 | `kampr service install / uninstall / status` | The user service that keeps the node running |
+| `kampr service refresh` | Rewrite an installed launchd agent from this build's template and reload it; `kampr update` runs it |
 | `kampr` | **No subcommand: open this machine's herd in the terminal.** Exactly as bare `herdr` opens a session |
 | `kampr connect <url> --code <code>` | Save a herd on another machine, so a bare `kampr` opens that one. On a mesh peer the URL defaults to its hub |
 | `kampr --local` | Open this machine's own herd even when it is paired with its hub |

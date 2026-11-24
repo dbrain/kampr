@@ -56,9 +56,22 @@ svc() {
   esac
 }
 
+# launchd hands a job /usr/bin:/bin:/usr/sbin:/sbin and nothing from the login shell, where the
+# node could not find kampr, herdr or docker. Mirrors `launchd_path` in the CLI's service.rs.
+launchd_path() {
+  path="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin"
+  system="/usr/bin:/bin:/usr/sbin:/sbin"
+  docker="$(command -v docker 2>/dev/null || true)"
+  case "$docker" in
+    /*) dir="$(dirname -- "$docker")"
+        case ":$path:$system:" in *":$dir:"*) ;; *) path="$path:$dir" ;; esac ;;
+  esac
+  echo "$path:$system"
+}
+
 render() {
   sed -e "s|@BIN@|$BIN|g" -e "s|@CONFIG_DIR@|$CONFIG_DIR|g" -e "s|@STATE_DIR@|$STATE_DIR|g" \
-      -e "s|@SOCKET@|${HERDR_SOCKET_PATH:-$2}|g" "$1"
+      -e "s|@SOCKET@|${HERDR_SOCKET_PATH:-$2}|g" -e "s|@PATH@|$(launchd_path)|g" "$1"
 }
 
 # Rendering is idempotent, but reloading is not: a bootout/bootstrap cycle kills a healthy node.
