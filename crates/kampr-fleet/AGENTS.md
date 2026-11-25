@@ -21,5 +21,7 @@ One command across the herd: a native session with a cohort, the waiting ladder,
 - **A login shell's `PATH` is not where `kampr` is installed**, on two of the four machines here.
   A fleet run gets the operator's login `PATH` rather than the service manager's (#392) and that
   is still not enough: the profile that adds `~/.local/bin` is `.bashrc`, which `-l` does not read
-  (#419). The directory `current_exe()` is in is appended for exactly this, and `kampr doctor`
+  (#419). The directory `current_exe()` is in is **prepended** for exactly this — and because an
+  adopted container's login `PATH` names the host's `kampr` through a mounted `/home`, first is
+  the only place a shell is certain to look — and `kampr doctor`
   refuses to say `ok` about a fleet `PATH` it cannot resolve `kampr` and `herdr` on.

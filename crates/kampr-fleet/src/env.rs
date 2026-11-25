@@ -86,8 +86,11 @@ pub struct PathSearch {
     /// `kampr update` across the herd fails on those hosts with a bare `kampr` exactly as it did
     /// before any of this existed.
     ///
-    /// Appended rather than preferred: a name the chosen `PATH` already resolves goes on resolving
-    /// to the same file, so this can only add answers and never change one.
+    /// Prepending it also fixes the case where the `PATH` *does* name a `kampr` that is not this
+    /// one: an adopted container mounts the host's `/home`, so the login `PATH` answers the
+    /// host's `kampr` — the wrong architecture for the container — and a shell that stops at the
+    /// first match execs it and dies. The node runs from `own_bin`, so that is the copy that is
+    /// right for this host, and first is the only place a shell is certain to look.
     pub own_bin: Option<String>,
 }
 
@@ -124,7 +127,12 @@ pub fn choose(search: &PathSearch) -> Option<FleetPath> {
     let (origin, value) = chosen;
     Some(FleetPath {
         value: once_each(&match own {
-            Some(own) => format!("{value}:{own}"),
+            // First, not last: a shell stops at the first `PATH` entry that names a command, and
+            // the chosen `PATH` may answer `kampr` with a file that is not the one this node runs
+            // from — an adopted container mounts the host's `/home`, and its `kampr` is the wrong
+            // architecture for the container. The node runs from `own_bin`, so that copy is the
+            // one that is right for this host, and it has to outrank the mounted one.
+            Some(own) => format!("{own}:{value}"),
             None => value,
         }),
         origin,
@@ -379,15 +387,16 @@ mod tests {
         assert_eq!(chosen.origin, PathOrigin::Login);
         assert_eq!(
             chosen.value,
-            "/home/u/.atuin/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/home/u/.local/bin",
+            "/home/u/.local/bin:/home/u/.atuin/bin:/usr/local/sbin:/usr/local/bin:/usr/bin",
         );
     }
 
-    /// Last, never first. A `kampr` the operator's own `PATH` already resolves goes on resolving to
-    /// the same file — this rung may add an answer and may never change one — and that holds for
-    /// the rung whose whole contract is that nothing overrides it.
+    /// First, because a shell stops at the first `PATH` entry that names `kampr`. The chosen
+    /// `PATH` may resolve it to a file that is not the one the node runs from, and the node is
+    /// running from `own_bin` — so `own_bin` is the `kampr` that is right for this host, and it
+    /// has to outrank whatever the `PATH` already answers.
     #[test]
-    fn the_nodes_own_directory_never_displaces_a_command_the_chosen_path_already_finds() {
+    fn the_nodes_own_directory_outranks_what_the_chosen_path_already_resolves() {
         let chosen = choose(&PathSearch {
             configured: Some("/opt/kampr/bin:/usr/bin".into()),
             login: None,
@@ -396,8 +405,9 @@ mod tests {
         })
         .expect("something to run with");
         assert_eq!(chosen.origin, PathOrigin::Configured);
-        assert_eq!(chosen.value, "/opt/kampr/bin:/usr/bin:/home/u/.local/bin");
+        assert_eq!(chosen.value, "/home/u/.local/bin:/opt/kampr/bin:/usr/bin");
 
+        // And when the two are the same directory, putting it first changes nothing.
         let already = choose(&PathSearch {
             configured: None,
             login: Some("/home/u/.local/bin:/usr/bin".into()),
@@ -406,6 +416,26 @@ mod tests {
         })
         .expect("something to run with");
         assert_eq!(already.value, "/home/u/.local/bin:/usr/bin");
+    }
+
+    /// The case that broke `kampr update` across the herd. An adopted container mounts the host's
+    /// `/home`, so the login `PATH` names the host's `kampr` — first — and a shell execs it and
+    /// dies with `no such file or directory` (the host's binary is the wrong architecture for the
+    /// container) without ever reaching the copy the container's node runs from. That copy is
+    /// `own_bin`, and it has to come first.
+    #[test]
+    fn a_mounted_copy_of_the_operators_home_cannot_shadow_the_nodes_own_kampr() {
+        let chosen = choose(&PathSearch {
+            configured: None,
+            login: Some("/home/dbrain/.local/bin:/usr/bin".into()),
+            inherited: None,
+            own_bin: Some("/.kampr".into()),
+        })
+        .expect("something to run with");
+        assert_eq!(
+            chosen.value, "/.kampr:/home/dbrain/.local/bin:/usr/bin",
+            "the directory the node runs from must come before a mounted /home"
+        );
     }
 
     /// A binary run out of a build directory, or one whose parent cannot be read, leaves the rung

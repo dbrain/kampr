@@ -343,10 +343,13 @@ async fn a_command_is_found_on_the_path_the_run_was_given_and_not_on_this_proces
         .start("c", &job, None, Geometry::default())
         .await
         .expect_err("a PATH without the directory must not resolve it");
+    // The node's own directory is prepended to whatever is configured, so the sentence names the
+    // configured part rather than starting with it; what has to hold is that the configured path
+    // is the one checked, and that it is named in the refusal.
+    let refused = refused.to_string();
     assert!(
-        refused
-            .to_string()
-            .contains("is not on this node's fleet PATH (/nonexistent-for-this-test"),
+        refused.contains("is not on this node's fleet PATH")
+            && refused.contains("/nonexistent-for-this-test"),
         "{refused}"
     );
 
