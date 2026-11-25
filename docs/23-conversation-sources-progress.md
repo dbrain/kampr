@@ -22,6 +22,9 @@ DONE (no turn spent, rows 668–670):
   `list_permission_rules`, `get_context_usage`, `get_session_cost`.
 - No-turn state-change control requests (#669): `set_permission_mode` to/from `bypassPermissions`,
   `rename_session`, `stop_task`, `register_repo_root`, `rewind_files`, `mcp_reconnect`.
+- Fast-mode billing (#671, from Anthropic's docs): on a subscription plan fast mode is paid from
+  usage credits, not the plan's included usage — a money-costing control, a refusal under
+  `overage = "refuse"`.
 
 BLOCKED on the plan (turn-based headless):
 plan approval; images/files on stdin; `priority`/`cancel_async_message`; slash commands as input;
@@ -37,7 +40,6 @@ a made-to-fail session; two foreground shells and their task files; a forked tra
 `ClaudeParser`; the exit dialog's "Move to background and exit".
 
 STILL DOABLE WITHOUT A TURN:
-- Fast-mode billing from Anthropic's documentation (doc lookup).
 - `docs/22-parity.md` (the TUI surface list).
 - Phases 1, 2, 4, 5, 7 (pure code, mock endpoint).
 
