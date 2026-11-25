@@ -2,7 +2,7 @@ use crate::follow::{self, Follow};
 use crate::provider::AGENT;
 use crate::wire::{Image, PermissionPrompt, SessionState};
 use kampr_core::conversation::abilities::{
-    AskAbility, InputAbility, Lifecycle, Stream, Steer,
+    AskAbility, Fact, InputAbility, Lifecycle, Stream, Steer,
 };
 use kampr_core::conversation::{
     Abilities, Ask, AskOption, Command, Conversation, Ending, Emit, NewSession, Refusal, Source,
@@ -106,7 +106,12 @@ impl MuffitConversation {
         }
         if has("interrupt") {
             abilities.steer.insert(Steer::Interrupt);
+            abilities.steer.insert(Steer::Continue);
         }
+        abilities.steer.insert(Steer::Pause);
+        abilities.steer.insert(Steer::Resume);
+        abilities.steer.insert(Steer::Stop);
+        abilities.steer.insert(Steer::Compact);
         if has("permissions") {
             abilities.asks.insert(AskAbility::Permission);
             abilities.asks.insert(AskAbility::Always);
@@ -114,6 +119,9 @@ impl MuffitConversation {
         if has("status") {
             abilities.streams.insert(Stream::Text);
             abilities.streams.insert(Stream::TaskOutput);
+            abilities.facts.insert(Fact::Context);
+            abilities.facts.insert(Fact::Cost);
+            abilities.facts.insert(Fact::Trouble);
         }
         abilities.lifecycle.insert(Lifecycle::Create);
         abilities.lifecycle.insert(Lifecycle::Resume);
@@ -127,6 +135,7 @@ impl Conversation for MuffitConversation {
     async fn run(self: Box<Self>, commands: mpsc::Receiver<Command>, mut emit: Emit) {
         let MuffitConversation { provider, session } = *self;
         (emit)(Update::Abilities(Self::abilities()));
+        (emit)(Update::Actions(follow::actions()));
         let (outgoing, incoming) = mpsc::channel(COMMANDS);
         let mapper = tokio::spawn(commands_to_follow(commands, outgoing));
         let client = provider.client().clone();
@@ -171,6 +180,11 @@ async fn commands_to_follow(
             Command::Older { before } => Some(follow::Command::Older { before }),
             Command::Find { query, cap } => Some(follow::Command::Find { query, cap }),
             Command::Sub { id, before } => Some(follow::Command::Sub { id, before }),
+            Command::Steer(kind, text) => Some(follow::Command::Steer { kind, text }),
+            Command::Set { control, value } => Some(follow::Command::Set { control, value }),
+            Command::Act { action, args } => Some(follow::Command::Act { action, args }),
+            Command::Task { id, from } => Some(follow::Command::FollowTask { id, from }),
+            Command::Unfollow { id } => Some(follow::Command::Unfollow { id }),
             _ => None,
         };
         let Some(mapped) = mapped else {
@@ -195,6 +209,22 @@ fn update_of(update: follow::Update) -> Update {
         follow::Update::Found { query, found } => Update::Found { query, found },
         follow::Update::SubPage { id, page } => Update::SubPage { id, page },
         follow::Update::SubTurns { id, turns } => Update::SubTurns { id, turns },
+        follow::Update::State(state) => Update::State(state),
+        follow::Update::Tasks(tasks) => Update::Tasks(tasks),
+        follow::Update::TaskOutput {
+            id,
+            at,
+            text,
+            ended,
+        } => Update::TaskOutput { id, at, text, ended },
+        follow::Update::Trouble(trouble) => Update::Trouble(trouble),
+        follow::Update::Session(facts) => Update::Session(facts),
+        follow::Update::Controls(controls) => Update::Controls(controls),
+        follow::Update::Actions(actions) => Update::Actions(actions),
+        follow::Update::Context(context) => Update::Context(context),
+        follow::Update::Cost(cost) => Update::Cost(cost),
+        follow::Update::Live(live) => Update::Live(live),
+        follow::Update::Acted { action, ok, text } => Update::Acted { action, ok, text },
         follow::Update::Missing(message) => Update::Missing(message),
         follow::Update::Failed(message) => Update::Failed(message),
     }
@@ -202,7 +232,7 @@ fn update_of(update: follow::Update) -> Update {
 
 fn ask_of(prompt: &PermissionPrompt) -> Ask {
     Ask {
-        id: None,
+        id: Some(prompt.id.to_string()),
         kind: AskAbility::Permission,
         by: None,
         header: Some(prompt.tool.clone()),
@@ -229,7 +259,10 @@ fn ask_of(prompt: &PermissionPrompt) -> Ask {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kampr_core::conversation::{FileRef, Image as SeamImage, Reply, When};
+    use kampr_core::conversation::{
+        ContextUse, Cost, FileRef, Image as SeamImage, Live as SeamLive, Reply, RunState,
+        SessionFacts, Steer, When,
+    };
     use kampr_journal::{ConvoFound, Facets, Page, Turn};
 
     fn prompt() -> PermissionPrompt {
@@ -243,6 +276,7 @@ mod tests {
     #[test]
     fn a_prompt_is_an_ask_with_its_three_answers() {
         let ask = ask_of(&prompt());
+        assert_eq!(ask.id.as_deref(), Some("1"));
         assert_eq!(ask.kind, AskAbility::Permission);
         assert_eq!(ask.header.as_deref(), Some("bash"));
         assert_eq!(ask.question, "run the tests");
@@ -263,7 +297,7 @@ mod tests {
             cursor: None,
             more: false,
         };
-        let cases: [(follow::Update, Update); 10] = [
+        let cases: [(follow::Update, Update); 21] = [
             (
                 follow::Update::Page(page.clone()),
                 Update::Page(page.clone()),
@@ -327,6 +361,84 @@ mod tests {
                 follow::Update::Missing("no such conversation".into()),
                 Update::Missing("no such conversation".into()),
             ),
+            (
+                follow::Update::State(RunState::Running),
+                Update::State(RunState::Running),
+            ),
+            (follow::Update::Tasks(Vec::new()), Update::Tasks(Vec::new())),
+            (
+                follow::Update::TaskOutput {
+                    id: "call_7".into(),
+                    at: 3,
+                    text: "a line".into(),
+                    ended: None,
+                },
+                Update::TaskOutput {
+                    id: "call_7".into(),
+                    at: 3,
+                    text: "a line".into(),
+                    ended: None,
+                },
+            ),
+            (follow::Update::Trouble(None), Update::Trouble(None)),
+            (
+                follow::Update::Session(SessionFacts {
+                    id: "s1".into(),
+                    cwd: None,
+                    title: None,
+                    model: None,
+                    mode: None,
+                    version: None,
+                    account: None,
+                    billing: Default::default(),
+                    started: None,
+                }),
+                Update::Session(SessionFacts {
+                    id: "s1".into(),
+                    cwd: None,
+                    title: None,
+                    model: None,
+                    mode: None,
+                    version: None,
+                    account: None,
+                    billing: Default::default(),
+                    started: None,
+                }),
+            ),
+            (follow::Update::Controls(Vec::new()), Update::Controls(Vec::new())),
+            (follow::Update::Actions(Vec::new()), Update::Actions(Vec::new())),
+            (
+                follow::Update::Context(ContextUse { used: 1, total: 0 }),
+                Update::Context(ContextUse { used: 1, total: 0 }),
+            ),
+            (
+                follow::Update::Cost(Cost {
+                    usd: 0.0,
+                    input_tokens: 1,
+                    output_tokens: 2,
+                }),
+                Update::Cost(Cost {
+                    usd: 0.0,
+                    input_tokens: 1,
+                    output_tokens: 2,
+                }),
+            ),
+            (
+                follow::Update::Live(SeamLive::default()),
+                Update::Live(SeamLive::default()),
+            ),
+            (
+                follow::Update::Acted {
+                    action: "context.compact".into(),
+                    ok: true,
+                    text: None,
+                },
+                Update::Acted {
+                    action: "context.compact".into(),
+                    ok: true,
+                    text: None,
+                },
+            ),
         ];
         for (follower, seam) in cases {
             assert_eq!(update_of(follower), seam);
@@ -340,7 +452,7 @@ mod tests {
     #[tokio::test]
     async fn the_commands_the_pane_sends_are_the_follower_s() {
         let (incoming, received) = mpsc::channel::<Command>(4);
-        let (follow_tx, mut follow_rx) = mpsc::channel::<follow::Command>(4);
+        let (follow_tx, mut follow_rx) = mpsc::channel::<follow::Command>(16);
         let mapper = tokio::spawn(commands_to_follow(received, follow_tx));
         incoming
             .send(Command::Input {
@@ -384,6 +496,37 @@ mod tests {
             })
             .await
             .unwrap();
+        incoming
+            .send(Command::Steer(Steer::Interrupt, None))
+            .await
+            .unwrap();
+        incoming
+            .send(Command::Set {
+                control: "model".into(),
+                value: serde_json::json!("mock"),
+            })
+            .await
+            .unwrap();
+        incoming
+            .send(Command::Act {
+                action: "compact".into(),
+                args: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        incoming
+            .send(Command::Task {
+                id: "call_7".into(),
+                from: 0,
+            })
+            .await
+            .unwrap();
+        incoming
+            .send(Command::Unfollow {
+                id: "call_7".into(),
+            })
+            .await
+            .unwrap();
         drop(incoming);
         mapper.await.unwrap();
         let mut got = Vec::new();
@@ -412,6 +555,25 @@ mod tests {
                     id: "s1.s1".into(),
                     before: None,
                 },
+                follow::Command::Steer {
+                    kind: Steer::Interrupt,
+                    text: None,
+                },
+                follow::Command::Set {
+                    control: "model".into(),
+                    value: serde_json::json!("mock"),
+                },
+                follow::Command::Act {
+                    action: "compact".into(),
+                    args: serde_json::json!({}),
+                },
+                follow::Command::FollowTask {
+                    id: "call_7".into(),
+                    from: 0,
+                },
+                follow::Command::Unfollow {
+                    id: "call_7".into(),
+                },
             ]
         );
     }
@@ -421,13 +583,20 @@ mod tests {
         let abilities = MuffitConversation::abilities();
         assert!(abilities.input.contains(&InputAbility::Images));
         assert!(abilities.steer.contains(&Steer::Interrupt));
+        assert!(abilities.steer.contains(&Steer::Continue));
+        assert!(abilities.steer.contains(&Steer::Pause));
+        assert!(abilities.steer.contains(&Steer::Resume));
+        assert!(abilities.steer.contains(&Steer::Stop));
+        assert!(abilities.steer.contains(&Steer::Compact));
         assert!(abilities.asks.contains(&AskAbility::Permission));
         assert!(abilities.asks.contains(&AskAbility::Always));
         assert!(abilities.streams.contains(&Stream::Text));
         assert!(abilities.streams.contains(&Stream::TaskOutput));
+        assert!(abilities.facts.contains(&Fact::Context));
+        assert!(abilities.facts.contains(&Fact::Cost));
+        assert!(abilities.facts.contains(&Fact::Trouble));
         assert!(abilities.lifecycle.contains(&Lifecycle::Create));
         assert!(abilities.lifecycle.contains(&Lifecycle::Resume));
         assert!(abilities.lifecycle.contains(&Lifecycle::End));
-        assert!(abilities.facts.is_empty());
     }
 }

@@ -8,6 +8,7 @@ use crate::state::{BUILD, Node};
 use crate::wire::Wire;
 use base64::Engine;
 use kampr_auth::{Device, Entry, Role};
+use kampr_core::conversation::{Reply, Steer, SuggestKind};
 use kampr_core::PaneRegistry;
 use kampr_core::provider::Input;
 use kampr_core::registry::{PaneHold, Source, Written};
@@ -120,7 +121,7 @@ const SUB_PAGE: usize = 200;
 /// reached by a narrower query rather than by a longer frame.
 const CONVO_MATCHES: usize = 50;
 
-const CLIENT_VERBS: [&str; 13] = [
+const CLIENT_VERBS: [&str; 18] = [
     "watch",
     "unwatch",
     "answer.submit",
@@ -130,6 +131,11 @@ const CLIENT_VERBS: [&str; 13] = [
     "convo.load",
     "convo.sub",
     "convo.find",
+    "convo.steer",
+    "convo.set",
+    "convo.act",
+    "convo.follow",
+    "convo.suggest",
     "find",
     "done.read",
     "resync",
@@ -853,8 +859,9 @@ impl Session {
                 typed,
                 id,
             } => self.paste(&pane, &b64, name.as_deref(), typed, id).await,
-            ClientMsg::Answer { pane, key, id, text } => {
-                self.answer(&pane, &key, id.as_deref(), text.as_deref()).await
+            ClientMsg::Answer { pane, key, id, text, reply } => {
+                self.answer(&pane, &key, id.as_deref(), text.as_deref(), reply.as_ref())
+                    .await
             }
             ClientMsg::AnswerSubmit { pane, id } => self.answer_submit(&pane, id.as_deref()).await,
             ClientMsg::ConvoLoad { pane, before } => self.convo_load(&pane, before.as_deref()),
@@ -866,6 +873,27 @@ impl Session {
             } => self.find(&pane, &query, backward, from).await,
             ClientMsg::ConvoFind { pane, query } => self.convo_find(&pane, &query),
             ClientMsg::ConvoSub { pane, id, before } => self.convo_sub(&pane, &id, before.as_deref()),
+            ClientMsg::ConvoSteer {
+                pane,
+                steer,
+                text,
+            } => self.convo_steer(&pane, steer, text),
+            ClientMsg::ConvoSet {
+                pane,
+                control,
+                value,
+            } => self.convo_set(&pane, control, value),
+            ClientMsg::ConvoAct {
+                pane,
+                action,
+                args,
+            } => self.convo_act(&pane, action, args),
+            ClientMsg::ConvoFollow { pane, id, from } => self.convo_follow(&pane, &id, from),
+            ClientMsg::ConvoSuggest {
+                pane,
+                kind,
+                query,
+            } => self.convo_suggest(&pane, kind, &query),
             ClientMsg::DoneRead { pane, at } => self.done_read(&pane, at),
             ClientMsg::Resync => self.resync().await,
             ClientMsg::Ping { n } => {
@@ -1323,6 +1351,84 @@ impl Session {
                 );
             }
         }
+    }
+
+    fn convo_steer(&self, pane: &str, steer: Steer, text: Option<String>) {
+        if self.node.resolve(pane).is_none() {
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "convo.steer", "pane": via, "steer": steer, "text": text }),
+            );
+            return;
+        }
+        self.convo_command(pane, kampr_core::conversation::Command::Steer(steer, text));
+    }
+
+    fn convo_set(&self, pane: &str, control: String, value: Value) {
+        if self.node.resolve(pane).is_none() {
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "convo.set", "pane": via, "control": control, "value": value }),
+            );
+            return;
+        }
+        self.convo_command(
+            pane,
+            kampr_core::conversation::Command::Set { control, value },
+        );
+    }
+
+    fn convo_act(&self, pane: &str, action: String, args: Value) {
+        if self.node.resolve(pane).is_none() {
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "convo.act", "pane": via, "action": action, "args": args }),
+            );
+            return;
+        }
+        self.convo_command(
+            pane,
+            kampr_core::conversation::Command::Act { action, args },
+        );
+    }
+
+    fn convo_follow(&self, pane: &str, id: &str, from: u64) {
+        if self.node.resolve(pane).is_none() {
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "convo.follow", "pane": via, "id": id, "from": from }),
+            );
+            return;
+        }
+        self.convo_command(
+            pane,
+            kampr_core::conversation::Command::Task {
+                id: id.to_string(),
+                from,
+            },
+        );
+    }
+
+    fn convo_suggest(&self, pane: &str, kind: SuggestKind, query: &str) {
+        if self.node.resolve(pane).is_none() {
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(
+                pane,
+                json!({ "t": "convo.suggest", "pane": via, "kind": kind, "query": query }),
+            );
+            return;
+        }
+        self.convo_command(
+            pane,
+            kampr_core::conversation::Command::Suggest {
+                kind,
+                query: query.to_string(),
+            },
+        );
     }
 
     fn convo_load(&self, pane: &str, before: Option<&str>) {
@@ -1948,7 +2054,14 @@ impl Session {
         }
     }
 
-    async fn answer(&mut self, pane: &str, key: &str, id: Option<&str>, text: Option<&str>) {
+    async fn answer(
+        &mut self,
+        pane: &str,
+        key: &str,
+        id: Option<&str>,
+        text: Option<&str>,
+        reply: Option<&Reply>,
+    ) {
         if !self.may_write("answer", Some(pane)) {
             return;
         }
@@ -1963,10 +2076,17 @@ impl Session {
             if let Some(text) = text {
                 relayed["text"] = json!(text);
             }
+            if let Some(reply) = reply {
+                relayed["reply"] = serde_json::to_value(reply).unwrap_or_default();
+            }
             self.relay_to_peer(pane, relayed);
             return;
         };
-        if let Some(answered) = self.node.hooks.answer(pane, key, id, text) {
+        // A pane with an open conversation answers through it, not through hooks: the id the
+        // conversation's pending frame carries would be read as a stale hook press.
+        if session.conversation(&local).is_none()
+            && let Some(answered) = self.node.hooks.answer(pane, key, id, text)
+        {
             self.audit(
                 "answer",
                 Some(pane),
@@ -1990,6 +2110,9 @@ impl Session {
             );
             return;
         }
+        let key = reply
+            .and_then(|reply| crate::muffit::key_of(reply))
+            .unwrap_or(key);
         if let Some(result) = session.answer(&local, key).await {
             self.audit("answer", Some(pane), Some(json!({ "key": key, "convo": true })));
             crate::muffit::answer_result(&self.wire, pane, result);

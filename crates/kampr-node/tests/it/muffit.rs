@@ -14,6 +14,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 mod fake;
 mod linked;
 mod live;
+mod convo;
 
 use fake::{Daemon, Fake, TOKEN, finished, session, text};
 

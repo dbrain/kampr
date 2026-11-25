@@ -131,6 +131,70 @@ fn emit(wire: &Wire, pane: &str, update: Update) -> bool {
             sub: Some(id),
             turns,
         }),
+        Update::Abilities(abilities) => wire.send(&ServerMsg::ConvoAbilities {
+            pane: pane.into(),
+            abilities,
+        }),
+        Update::Live(live) => wire.send(&ServerMsg::ConvoLive {
+            pane: pane.into(),
+            live,
+        }),
+        Update::Tasks(tasks) => wire.send(&ServerMsg::ConvoTasks {
+            pane: pane.into(),
+            tasks,
+        }),
+        Update::TaskOutput {
+            id,
+            at,
+            text,
+            ended,
+        } => wire.send(&ServerMsg::ConvoTask {
+            pane: pane.into(),
+            id,
+            at,
+            text,
+            ended,
+        }),
+        Update::State(state) => wire.send(&ServerMsg::ConvoState {
+            pane: pane.into(),
+            state,
+        }),
+        Update::Trouble(trouble) => wire.send(&ServerMsg::ConvoTrouble {
+            pane: pane.into(),
+            trouble,
+        }),
+        Update::Session(facts) => wire.send(&ServerMsg::ConvoSession {
+            pane: pane.into(),
+            facts,
+        }),
+        Update::Controls(controls) => wire.send(&ServerMsg::ConvoControls {
+            pane: pane.into(),
+            controls,
+        }),
+        Update::Actions(actions) => wire.send(&ServerMsg::ConvoActions {
+            pane: pane.into(),
+            actions,
+        }),
+        Update::Limits(limits) => wire.send(&ServerMsg::ConvoLimits {
+            pane: pane.into(),
+            limits,
+        }),
+        Update::Context(context) => wire.send(&ServerMsg::ConvoContext {
+            pane: pane.into(),
+            context,
+        }),
+        Update::Suggested { kind, query, items } => wire.send(&ServerMsg::ConvoSuggested {
+            pane: pane.into(),
+            kind,
+            query,
+            items,
+        }),
+        Update::Acted { action, ok, text } => wire.send(&ServerMsg::ConvoActed {
+            pane: pane.into(),
+            action,
+            ok,
+            text,
+        }),
         Update::Missing(message) => wire.error(ErrorCode::NotFound, &message, Some(pane)),
         Update::Failed(message) => {
             wire.error(ErrorCode::SessionUnavailable, &message, Some(pane))

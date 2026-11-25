@@ -6,6 +6,7 @@ use crate::conversation::facts::{
     ContextUse, Cost, Limits, RunState, SessionFacts, Suggestion, Task, TaskEnd, Trouble,
 };
 use kampr_journal::{ConvoFound, Facets, Page, Turn};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Update {
@@ -63,7 +64,7 @@ pub enum Update {
 }
 
 /// The message being written: its text so far, and its tool calls as their arguments arrive.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Live {
     pub text: String,
     /// A token estimate of what is being thought while its text is withheld (#644).
@@ -71,7 +72,7 @@ pub struct Live {
     pub tools: Vec<LiveTool>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveTool {
     pub id: String,
     pub tool: String,

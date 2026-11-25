@@ -1,15 +1,18 @@
 use crate::conversation::abilities::{Fact, Steer};
 use crate::conversation::facts::{FileRef, Image};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum When {
     Idle,
     Next,
     Now,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Reply {
     Allow {
         input: Option<Value>,
@@ -32,7 +35,8 @@ pub enum Reply {
     Dismiss,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SuggestKind {
     Files,
     Commands,

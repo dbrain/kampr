@@ -2,9 +2,13 @@ use crate::client::{self, Client, Socket};
 use crate::live::Live;
 use crate::mapper::{self, Workers};
 use crate::wire::{Image, PermissionPrompt, ServerFrame, StatusSnapshot, TranscriptEntry, TranscriptPage};
+use kampr_core::conversation::{
+    Action, ArgSpec, ContextUse, Cost, Control, ControlKind, ControlOption, Live as SeamLive,
+    LiveTool, RunState, SessionFacts, Steer, Task, TaskEnd, TaskState, Trouble,
+};
 use kampr_journal::facet::{Running, Title, TitleSource};
 use kampr_journal::{ConvoFound, Facets, Page, Turn};
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -45,6 +49,25 @@ pub enum Command {
         id: String,
         before: Option<String>,
     },
+    Steer {
+        kind: Steer,
+        text: Option<String>,
+    },
+    Set {
+        control: String,
+        value: Value,
+    },
+    Act {
+        action: String,
+        args: Value,
+    },
+    FollowTask {
+        id: String,
+        from: u64,
+    },
+    Unfollow {
+        id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +80,26 @@ pub enum Update {
     Found { query: String, found: ConvoFound },
     SubPage { id: String, page: Page },
     SubTurns { id: String, turns: Vec<Turn> },
+    State(RunState),
+    Tasks(Vec<Task>),
+    TaskOutput {
+        id: String,
+        at: u64,
+        text: String,
+        ended: Option<TaskEnd>,
+    },
+    Trouble(Option<Trouble>),
+    Session(SessionFacts),
+    Controls(Vec<Control>),
+    Actions(Vec<Action>),
+    Context(ContextUse),
+    Cost(Cost),
+    Live(SeamLive),
+    Acted {
+        action: String,
+        ok: bool,
+        text: Option<String>,
+    },
     Missing(String),
     Failed(String),
 }
@@ -166,10 +209,21 @@ struct State<E> {
     emit: E,
     transcript: Transcript,
     live: Live,
+    seam_live: SeamLive,
     workers: Workers,
     facets: Option<Facets>,
     pending: Option<Option<PermissionPrompt>>,
     worker: Option<Worker>,
+    run_state: Option<RunState>,
+    tasks: Option<Vec<Task>>,
+    facts: Option<SessionFacts>,
+    controls: Option<Vec<Control>>,
+    model_options: Vec<ControlOption>,
+    context: Option<ContextUse>,
+    cost: Option<Cost>,
+    followed: Option<(String, u64)>,
+    trouble: Option<Trouble>,
+    last: Option<StatusSnapshot>,
 }
 
 impl Follow {
@@ -189,10 +243,21 @@ impl Follow {
             emit,
             transcript: Transcript::default(),
             live: Live::default(),
+            seam_live: SeamLive::default(),
             workers: Workers::default(),
             facets: None,
             pending: None,
             worker: None,
+            run_state: None,
+            tasks: None,
+            facts: None,
+            controls: None,
+            model_options: Vec::new(),
+            context: None,
+            cost: None,
+            followed: None,
+            trouble: None,
+            last: None,
         };
         let mut retry = FIRST_RETRY;
         let mut paged = false;
@@ -326,30 +391,121 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
             &json!({ "type": "subscribe", "events_after": cursor }),
         )
         .await?;
+        client::send(&mut socket, &json!({ "type": "control", "verb": "models.list", "args": {} }))
+            .await?;
         Ok(Some(socket))
     }
 
     async fn frame(&mut self, frame: ServerFrame) -> bool {
         match frame {
-            ServerFrame::Content { blocks } => {
-                for block in &blocks {
-                    match block {
-                        crate::wire::ContentBlock::Recorded { .. } => {
-                            if !self.reread().await {
-                                return false;
-                            }
-                        }
-                        block => self.live.push(block),
-                    }
-                }
-                match self.live.turn(&self.workers) {
-                    Some(turn) => (self.emit)(Update::Turns(vec![turn])),
-                    None => true,
-                }
-            }
+            ServerFrame::Content { blocks } => self.content(&blocks).await,
             ServerFrame::Turn {} | ServerFrame::Lagged {} => self.reread().await,
             ServerFrame::Status { snapshot } => self.status(snapshot),
+            ServerFrame::Error { message } => {
+                self.trouble = Some(Trouble {
+                    kind: "error".into(),
+                    text: message,
+                    status: "open".into(),
+                    retry: None,
+                    fix: None,
+                });
+                (self.emit)(Update::Trouble(self.trouble.clone()))
+            }
+            ServerFrame::CommandResult { verb, ok, payload } => self.command_result(verb, ok, payload),
             _ => true,
+        }
+    }
+
+    async fn content(&mut self, blocks: &[crate::wire::ContentBlock]) -> bool {
+        for block in blocks {
+            match block {
+                crate::wire::ContentBlock::Recorded { .. } => {
+                    if !self.reread().await {
+                        return false;
+                    }
+                }
+                block => {
+                    self.live.push(block);
+                    self.seam_live(block);
+                }
+            }
+        }
+        let live = (self.emit)(Update::Live(self.seam_live.clone()));
+        match self.live.turn(&self.workers) {
+            Some(turn) => live && (self.emit)(Update::Turns(vec![turn])),
+            None => live,
+        }
+    }
+
+    fn seam_live(&mut self, block: &crate::wire::ContentBlock) {
+        match block {
+            crate::wire::ContentBlock::Text { text } => self.seam_live.text.push_str(text),
+            crate::wire::ContentBlock::ToolCall {
+                id,
+                tool,
+                args,
+                status,
+            } => {
+                let state = match status {
+                    crate::wire::ToolCallStatus::Started | crate::wire::ToolCallStatus::Running => {
+                        kampr_journal::ToolState::Running
+                    }
+                    crate::wire::ToolCallStatus::Finished => kampr_journal::ToolState::Done,
+                    crate::wire::ToolCallStatus::Failed => kampr_journal::ToolState::Error,
+                    crate::wire::ToolCallStatus::Unknown => kampr_journal::ToolState::Running,
+                };
+                match self.seam_live.tools.iter_mut().find(|tool| tool.id == *id) {
+                    Some(tool) => tool.state = state,
+                    None => self.seam_live.tools.push(LiveTool {
+                        id: id.clone(),
+                        tool: tool.clone(),
+                        args: args.clone(),
+                        state,
+                    }),
+                }
+            }
+            crate::wire::ContentBlock::ToolOutputChunk {
+                call_id,
+                text,
+                seq,
+            } => {
+                if let Some((id, last)) = &mut self.followed {
+                    if call_id == id && *seq >= *last {
+                        *last = *seq;
+                        (self.emit)(Update::TaskOutput {
+                            id: id.clone(),
+                            at: *seq,
+                            text: text.clone(),
+                            ended: None,
+                        });
+                    }
+                }
+            }
+            crate::wire::ContentBlock::ToolResult {
+                call_id,
+                summary,
+                exit_status,
+                ..
+            } => {
+                if let Some((id, at)) = self
+                    .followed
+                    .as_ref()
+                    .filter(|(id, _)| id == call_id)
+                    .cloned()
+                {
+                    self.followed = None;
+                    (self.emit)(Update::TaskOutput {
+                        id,
+                        at,
+                        text: String::new(),
+                        ended: Some(TaskEnd {
+                            ok: exit_status.map_or(true, |status| status == 0),
+                            summary: Some(summary.clone()),
+                        }),
+                    });
+                }
+            }
+            _ => {}
         }
     }
 
@@ -361,11 +517,149 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
             return false;
         }
         let workers = Workers::of(&snapshot.subagents);
-        if workers == self.workers {
+        let workers_changed = workers != self.workers;
+        self.workers = workers;
+        self.last = Some(snapshot.clone());
+        let state = run_state(snapshot.state);
+        if self.run_state != Some(state) {
+            self.run_state = Some(state);
+            if !(self.emit)(Update::State(state)) {
+                return false;
+            }
+        }
+        let tasks = tasks_of(&snapshot.subagents);
+        if self.tasks.as_ref() != Some(&tasks) {
+            self.tasks = Some(tasks.clone());
+            if !(self.emit)(Update::Tasks(tasks)) {
+                return false;
+            }
+        }
+        let facts = facts_of(&snapshot);
+        if self.facts.as_ref() != Some(&facts) {
+            self.facts = Some(facts.clone());
+            if !(self.emit)(Update::Session(facts)) {
+                return false;
+            }
+        }
+        let context = snapshot.context.as_ref().map(|c| ContextUse {
+            used: c.measured_prompt_tokens.unwrap_or(0) as u64,
+            total: 0,
+        });
+        if self.context != context {
+            self.context = context;
+            if let Some(context) = context {
+                if !(self.emit)(Update::Context(context)) {
+                    return false;
+                }
+            }
+        }
+        let cost = Cost {
+            usd: 0.0,
+            input_tokens: snapshot.prompt_tokens as u64,
+            output_tokens: snapshot.completion_tokens as u64,
+        };
+        if self.cost != Some(cost) {
+            self.cost = Some(cost);
+            if !(self.emit)(Update::Cost(cost)) {
+                return false;
+            }
+        }
+        self.controls(&snapshot);
+        !workers_changed || self.send_changes()
+    }
+
+    fn controls(&mut self, snapshot: &StatusSnapshot) {
+        let controls = vec![
+            Control {
+                id: "model".into(),
+                label: "Model".into(),
+                kind: ControlKind::Choice,
+                value: snapshot.model.clone().map(Value::from),
+                options: self.model_options.clone(),
+                group: None,
+                confirm: None,
+            },
+            Control {
+                id: "thinking".into(),
+                label: "Thinking".into(),
+                kind: ControlKind::Choice,
+                value: snapshot.thinking.clone().map(Value::from),
+                options: ["off", "low", "medium", "high"]
+                    .iter()
+                    .map(|level| ControlOption {
+                        value: (*level).into(),
+                        label: (*level).into(),
+                        detail: None,
+                    })
+                    .collect(),
+                group: None,
+                confirm: None,
+            },
+            Control {
+                id: "mode".into(),
+                label: "Plan".into(),
+                kind: ControlKind::Toggle,
+                value: Some(Value::from(snapshot.plan)),
+                options: Vec::new(),
+                group: None,
+                confirm: None,
+            },
+            Control {
+                id: "permissions".into(),
+                label: "Permissions".into(),
+                kind: ControlKind::Choice,
+                value: snapshot.permissions.clone().map(Value::from),
+                options: ["yolo", "auto", "ask-outside-project", "ask-all"]
+                    .iter()
+                    .map(|mode| ControlOption {
+                        value: (*mode).into(),
+                        label: (*mode).into(),
+                        detail: None,
+                    })
+                    .collect(),
+                group: None,
+                confirm: None,
+            },
+        ];
+        if self.controls.as_ref() != Some(&controls) {
+            self.controls = Some(controls.clone());
+            (self.emit)(Update::Controls(controls));
+        }
+    }
+
+    fn command_result(&mut self, verb: String, ok: bool, payload: Value) -> bool {
+        if verb == "models.list" {
+            if ok {
+                self.model_options = payload["providers"]
+                    .as_array()
+                    .map(|providers| {
+                        providers
+                            .iter()
+                            .filter_map(|provider| {
+                                provider["name"].as_str().map(|name| ControlOption {
+                                    value: name.into(),
+                                    label: name.into(),
+                                    detail: provider["model"].as_str().map(str::to_string),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(snapshot) = self.last.clone() {
+                    self.controls(&snapshot);
+                }
+            }
             return true;
         }
-        self.workers = workers;
-        self.send_changes()
+        let text = payload
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| payload.get("text").and_then(Value::as_str).map(str::to_string));
+        (self.emit)(Update::Acted {
+            action: verb,
+            ok,
+            text,
+        })
     }
 
     fn prompt(&mut self, prompt: Option<PermissionPrompt>) -> bool {
@@ -420,9 +714,12 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     }
 
     fn withdraw_live(&mut self) -> bool {
+        let had_live = !self.seam_live.text.is_empty() || !self.seam_live.tools.is_empty();
+        self.seam_live = SeamLive::default();
+        let cleared = had_live.then(|| (self.emit)(Update::Live(SeamLive::default()))).unwrap_or(true);
         match self.live.reset() {
-            Some(withdrawn) => (self.emit)(Update::Turns(vec![withdrawn])),
-            None => true,
+            Some(withdrawn) => cleared && (self.emit)(Update::Turns(vec![withdrawn])),
+            None => cleared,
         }
     }
 
@@ -469,7 +766,111 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 (self.emit)(Update::Found { query, found })
             }
             Command::Sub { id, before } => self.open_worker(id, before).await,
+            Command::Steer { kind, text } => self.steer(kind, text, socket).await,
+            Command::Set { control, value } => match set_verb(&control, &value) {
+                Some((verb, args)) => self.control_verb(&verb, args, socket).await,
+                None => (self.emit)(Update::Acted {
+                    action: control,
+                    ok: false,
+                    text: Some("no such control".into()),
+                }),
+            },
+            Command::Act { action, args } => match act_verb(&action, &args) {
+                Some((verb, verb_args)) => self.control_verb(&verb, verb_args, socket).await,
+                None => (self.emit)(Update::Acted {
+                    action,
+                    ok: false,
+                    text: Some("no such action".into()),
+                }),
+            },
+            Command::FollowTask { id, from } => {
+                self.followed = Some((id, from));
+                true
+            }
+            Command::Unfollow { id } => {
+                if self.followed.as_ref().is_some_and(|(followed, _)| followed == &id) {
+                    self.followed = None;
+                }
+                true
+            }
         }
+    }
+
+    async fn steer(&mut self, kind: Steer, _text: Option<String>, socket: &mut Option<Socket>) -> bool {
+        let frame = match kind {
+            Steer::Interrupt => Some(json!({ "type": "interrupt" })),
+            Steer::Continue => Some(json!({ "type": "continue" })),
+            _ => None,
+        };
+        if let Some(frame) = frame {
+            if socket.is_none() {
+                match self.attach().await {
+                    Ok(Some(opened)) => *socket = Some(opened),
+                    Ok(None) => return false,
+                    Err(e) => {
+                        debug!(session = %self.session, error = %format!("{e:#}"), "attaching to steer");
+                        return (self.emit)(Update::Failed(format!("muffit did not take the steer: {e:#}")));
+                    }
+                }
+            }
+            return match socket.as_mut() {
+                Some(socket) => match client::send(socket, &frame).await {
+                    Ok(()) => true,
+                    Err(e) => (self.emit)(Update::Failed(format!("muffit did not take the steer: {e:#}"))),
+                },
+                None => (self.emit)(Update::Failed("no socket to steer on".into())),
+            };
+        }
+        // pause, resume and stop have no socket form; the daemon takes them over REST only.
+        let verb = match kind {
+            Steer::Pause => "pause",
+            Steer::Resume => "resume",
+            Steer::Stop => "stop",
+            Steer::Compact => "context.compact",
+            _ => {
+                return (self.emit)(Update::Acted {
+                    action: format!("{kind:?}").to_lowercase(),
+                    ok: false,
+                    text: Some("muffit has no such steer".into()),
+                })
+            }
+        };
+        self.control_verb(verb, json!({}), socket).await
+    }
+
+    /// A control verb on the attached socket, where the daemon answers `command_result`, over
+    /// REST when there is no socket.
+    async fn control_verb(&mut self, verb: &str, args: Value, socket: &mut Option<Socket>) -> bool {
+        if let Some(socket) = socket.as_mut() {
+            match client::send(socket, &json!({ "type": "control", "verb": verb, "args": args })).await
+            {
+                Ok(()) => return true,
+                Err(e) => {
+                    debug!(session = %self.session, verb, error = %format!("{e:#}"), "control verb over the socket");
+                }
+            }
+        }
+        match self.client.control_verb(&self.session, verb, Some(args)).await {
+            Ok(body) => self.acted(verb, true, body),
+            Err(e) => (self.emit)(Update::Acted {
+                action: verb.into(),
+                ok: false,
+                text: Some(format!("{e:#}")),
+            }),
+        }
+    }
+
+    fn acted(&mut self, verb: &str, ok: bool, body: Value) -> bool {
+        let text = body
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| body.get("error").and_then(Value::as_str).map(str::to_string))
+            .or_else(|| body.get("text").and_then(Value::as_str).map(str::to_string));
+        (self.emit)(Update::Acted {
+            action: verb.into(),
+            ok,
+            text,
+        })
     }
 
     async fn older(&mut self, before: Option<String>) -> bool {
@@ -540,6 +941,175 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
         let id = worker.id.clone();
         turns.is_empty() || (self.emit)(Update::SubTurns { id, turns })
     }
+}
+
+fn run_state(state: crate::wire::SessionState) -> RunState {
+    match state {
+        crate::wire::SessionState::Running
+        | crate::wire::SessionState::WaitingTool
+        | crate::wire::SessionState::WaitingProvider => RunState::Running,
+        crate::wire::SessionState::WaitingUser => RunState::Waiting,
+        crate::wire::SessionState::Paused => RunState::Paused,
+        crate::wire::SessionState::Created => RunState::Idle,
+        crate::wire::SessionState::Completed
+        | crate::wire::SessionState::Failed
+        | crate::wire::SessionState::Stopped
+        | crate::wire::SessionState::Unknown => RunState::Ended,
+    }
+}
+
+fn tasks_of(subagents: &[crate::wire::Subagent]) -> Vec<Task> {
+    subagents
+        .iter()
+        .map(|subagent| {
+            let ended = subagent
+                .state
+                .as_deref()
+                .is_some_and(|state| state == "completed" || state == "failed");
+            Task {
+                id: subagent.id.clone(),
+                kind: "worker".into(),
+                call: subagent.call_id.clone(),
+                parent: None,
+                title: subagent.title.clone(),
+                since: None,
+                backgrounded: !ended,
+                state: if ended {
+                    TaskState::Ended
+                } else {
+                    TaskState::Running
+                },
+            }
+        })
+        .collect()
+}
+
+fn facts_of(snapshot: &StatusSnapshot) -> SessionFacts {
+    SessionFacts {
+        id: snapshot.session_id.clone(),
+        cwd: snapshot.cwd.clone(),
+        title: snapshot.title.clone(),
+        model: snapshot.model.clone(),
+        mode: Some(if snapshot.plan { "plan" } else { "normal" }.into()),
+        version: None,
+        account: None,
+        billing: Default::default(),
+        started: None,
+    }
+}
+
+fn set_verb(control: &str, value: &Value) -> Option<(String, Value)> {
+    match control {
+        "model" => Some(("model.swap".into(), json!({ "spec": value }))),
+        "thinking" => Some(("thinking.set".into(), json!({ "level": value }))),
+        "mode" => Some((
+            "mode.set".into(),
+            json!({ "mode": if value.as_bool() == Some(true) { "plan" } else { "normal" } }),
+        )),
+        "permissions" => Some(("permissions.set".into(), json!({ "mode": value }))),
+        _ => None,
+    }
+}
+
+fn act_verb(action: &str, args: &Value) -> Option<(String, Value)> {
+    match action {
+        "compact" => Some(("context.compact".into(), json!({}))),
+        "cost" => Some(("cost".into(), json!({}))),
+        "revert" => Some(("revert".into(), json!({}))),
+        "changesets" => Some(("changesets".into(), json!({}))),
+        "btw" => Some((
+            "btw".into(),
+            json!({ "question": args.get("question").cloned().unwrap_or(Value::Null) }),
+        )),
+        "rewind" => Some(("rewind".into(), args.clone())),
+        "context" => Some(("context".into(), args.clone())),
+        _ => None,
+    }
+}
+
+/// The verbs the daemon's control surface lists, as actions (kampr.md §7).
+pub fn actions() -> Vec<Action> {
+    vec![
+        Action {
+            id: "compact".into(),
+            label: "Compact the context".into(),
+            detail: None,
+            args: Vec::new(),
+            group: None,
+            confirm: None,
+        },
+        Action {
+            id: "cost".into(),
+            label: "Show the cost".into(),
+            detail: None,
+            args: Vec::new(),
+            group: None,
+            confirm: None,
+        },
+        Action {
+            id: "revert".into(),
+            label: "Revert the last change".into(),
+            detail: None,
+            args: Vec::new(),
+            group: None,
+            confirm: None,
+        },
+        Action {
+            id: "changesets".into(),
+            label: "List the changesets".into(),
+            detail: None,
+            args: Vec::new(),
+            group: None,
+            confirm: None,
+        },
+        Action {
+            id: "rewind".into(),
+            label: "Rewind".into(),
+            detail: Some("to a changeset or a message".to_string()),
+            args: vec![
+                ArgSpec {
+                    name: "changeset".into(),
+                    label: "Changeset".into(),
+                    required: false,
+                    options: Vec::new(),
+                },
+                ArgSpec {
+                    name: "to_seq".into(),
+                    label: "Message".into(),
+                    required: false,
+                    options: Vec::new(),
+                },
+            ],
+            group: None,
+            confirm: Some("The work after it is moved to a backup.".into()),
+        },
+        Action {
+            id: "btw".into(),
+            label: "Ask a side question".into(),
+            detail: None,
+            args: vec![ArgSpec {
+                name: "question".into(),
+                label: "Question".into(),
+                required: true,
+                options: Vec::new(),
+            }],
+            group: None,
+            confirm: None,
+        },
+        Action {
+            id: "context".into(),
+            label: "Explain the context".into(),
+            detail: None,
+            args: vec![ArgSpec {
+                name: "strategy".into(),
+                label: "Strategy".into(),
+                required: false,
+                options: Vec::new(),
+            }],
+            group: None,
+            confirm: None,
+        },
+    ]
 }
 
 pub fn facets(title: Option<&str>, subagents: &[crate::wire::Subagent]) -> Facets {

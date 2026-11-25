@@ -861,6 +861,88 @@ pub enum ServerMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         keys: Option<kampr_journal::EditKeys>,
     },
+    /// What a conversation can do, as the source says it: a control the client does not draw is an
+    /// ability the source does not declare.
+    #[serde(rename = "convo.abilities")]
+    ConvoAbilities {
+        pane: String,
+        abilities: crate::conversation::Abilities,
+    },
+    /// The turn as it is being written: the text so far and the tool calls as their arguments
+    /// arrive. Sent on the streaming edge while a turn runs and withdrawn by the recorded turn.
+    #[serde(rename = "convo.live")]
+    ConvoLive {
+        pane: String,
+        live: crate::conversation::Live,
+    },
+    #[serde(rename = "convo.tasks")]
+    ConvoTasks {
+        pane: String,
+        tasks: Vec<crate::conversation::Task>,
+    },
+    /// A watched task's output, as it arrives. `ended` is null while it runs and names the end
+    /// once, with the summary the task gave.
+    #[serde(rename = "convo.task")]
+    ConvoTask {
+        pane: String,
+        id: String,
+        at: u64,
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ended: Option<crate::conversation::TaskEnd>,
+    },
+    #[serde(rename = "convo.state")]
+    ConvoState {
+        pane: String,
+        state: crate::conversation::RunState,
+    },
+    /// `trouble: null` is how a trouble clears, so it is serialised as null rather than omitted.
+    #[serde(rename = "convo.trouble")]
+    ConvoTrouble {
+        pane: String,
+        trouble: Option<crate::conversation::Trouble>,
+    },
+    #[serde(rename = "convo.session")]
+    ConvoSession {
+        pane: String,
+        facts: crate::conversation::SessionFacts,
+    },
+    #[serde(rename = "convo.controls")]
+    ConvoControls {
+        pane: String,
+        controls: Vec<crate::conversation::Control>,
+    },
+    #[serde(rename = "convo.actions")]
+    ConvoActions {
+        pane: String,
+        actions: Vec<crate::conversation::Action>,
+    },
+    #[serde(rename = "convo.limits")]
+    ConvoLimits {
+        pane: String,
+        limits: crate::conversation::Limits,
+    },
+    #[serde(rename = "convo.context")]
+    ConvoContext {
+        pane: String,
+        context: crate::conversation::ContextUse,
+    },
+    #[serde(rename = "convo.suggested")]
+    ConvoSuggested {
+        pane: String,
+        kind: crate::conversation::SuggestKind,
+        query: String,
+        items: Vec<crate::conversation::Suggestion>,
+    },
+    /// What an action the client sent did, and what it said back.
+    #[serde(rename = "convo.acted")]
+    ConvoActed {
+        pane: String,
+        action: String,
+        ok: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
     #[serde(rename = "error")]
     Error {
         code: ErrorCode,
@@ -1038,6 +1120,12 @@ pub enum ClientMsg {
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text: Option<String>,
+        /// The seam's own answer, where the source takes more than a key and a line: a plan
+        /// approved, a form filled, a question chosen. Absent is what every answer carried
+        /// before this, and a node that has never heard of the field decodes exactly the frame
+        /// it decoded before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reply: Option<crate::conversation::Reply>,
     },
     #[serde(rename = "convo.load")]
     ConvoLoad { pane: String, before: Option<String> },
@@ -1064,6 +1152,44 @@ pub enum ClientMsg {
     /// client newer than its node is the ordinary case on phones that update on their own.
     #[serde(rename = "convo.find")]
     ConvoFind { pane: String, query: String },
+    /// Steer the running turn, with the words to steer it by. The words are the seam's
+    /// `Command::Steer` second arm, and a steer with none is the plain nudge.
+    #[serde(rename = "convo.steer")]
+    ConvoSteer {
+        pane: String,
+        steer: crate::conversation::Steer,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+    },
+    /// Set a control the source listed, by the id `convo.controls` gave it.
+    #[serde(rename = "convo.set")]
+    ConvoSet {
+        pane: String,
+        control: String,
+        value: serde_json::Value,
+    },
+    /// Run an action the source listed, by the id `convo.actions` gave it, with its arguments.
+    #[serde(rename = "convo.act")]
+    ConvoAct {
+        pane: String,
+        action: String,
+        args: serde_json::Value,
+    },
+    /// Watch a task's output live. `from` is the line to start at; absent is the first.
+    #[serde(rename = "convo.follow")]
+    ConvoFollow {
+        pane: String,
+        id: String,
+        #[serde(default)]
+        from: u64,
+    },
+    /// Ask the source for its suggestions of a kind, for a prefix.
+    #[serde(rename = "convo.suggest")]
+    ConvoSuggest {
+        pane: String,
+        kind: crate::conversation::SuggestKind,
+        query: String,
+    },
     /// Search this pane's **whole** scrollback, not the rows a client happens to hold.
     ///
     /// A verb of its own rather than a field on `watch`, because it is a question with an answer

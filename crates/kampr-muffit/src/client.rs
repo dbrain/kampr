@@ -144,13 +144,18 @@ impl Client {
     }
 
     async fn control(&self, id: &str, verb: &str, body: Option<Value>) -> Result<()> {
+        self.control_verb(id, verb, body).await.map(|_| ())
+    }
+
+    /// A control verb over REST, with the daemon's answer body.
+    pub async fn control_verb(&self, id: &str, verb: &str, body: Option<Value>) -> Result<Value> {
         let mut request = self
             .http
             .post(self.url(&format!("/sessions/{}/{verb}", segment(id))));
-        if let Some(body) = body {
-            request = request.json(&body);
+        if let Some(body) = &body {
+            request = request.json(body);
         }
-        self.ok_json(request, verb).await.map(|_| ())
+        self.ok_json(request, verb).await
     }
 
     pub async fn answer(&self, id: &str, prompt: u64, answer: Answer) -> Result<Answered> {

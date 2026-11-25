@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionFacts {
     pub id: String,
     pub cwd: Option<String>,
@@ -15,34 +16,34 @@ pub struct SessionFacts {
     pub started: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Billing {
     pub provider: Option<String>,
     pub key: Option<String>,
     pub rate_limited: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Limits {
     pub plan: Option<String>,
     pub usage: Option<Value>,
     pub resets_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ContextUse {
     pub used: u64,
     pub total: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Cost {
     pub usd: f64,
     pub input_tokens: u64,
     pub output_tokens: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Trouble {
     pub kind: String,
     pub text: String,
@@ -51,14 +52,15 @@ pub struct Trouble {
     pub fix: Option<Fix>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Retry {
     pub attempt: u32,
     pub of: u32,
     pub in_ms: u64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Fix {
     Login,
     Wait {
@@ -67,7 +69,8 @@ pub enum Fix {
     Billing,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum RunState {
     Idle,
     Running,
@@ -76,7 +79,7 @@ pub enum RunState {
     Ended,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
     /// Shell, subagent or monitor, as the source says it.
@@ -90,19 +93,20 @@ pub struct Task {
     pub state: TaskState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TaskState {
     Running,
     Ended,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskEnd {
     pub ok: bool,
     pub summary: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Suggestion {
     pub id: String,
     pub label: String,

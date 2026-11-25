@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A setting the source lists: the pane draws it from the description and never learns its name.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Control {
     pub id: String,
     pub label: String,
@@ -13,7 +14,8 @@ pub struct Control {
     pub confirm: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ControlKind {
     Choice,
     Toggle,
@@ -21,7 +23,7 @@ pub enum ControlKind {
     Text,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ControlOption {
     pub value: String,
     pub label: String,
@@ -29,7 +31,7 @@ pub struct ControlOption {
 }
 
 /// A verb the source lists, described: adding something is an action with described arguments.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Action {
     pub id: String,
     pub label: String,
@@ -39,7 +41,7 @@ pub struct Action {
     pub confirm: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ArgSpec {
     pub name: String,
     pub label: String,

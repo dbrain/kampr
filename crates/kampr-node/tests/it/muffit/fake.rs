@@ -218,9 +218,18 @@ impl Fake {
     }
 
     pub fn status(&self, permission: Value, subagents: Value) {
-        self.push(json!({ "type": "status", "cursor": 2, "snapshot": {
+        self.snapshot(json!({
             "session_id": "s1", "state": "running", "title": "install ripgrep",
-            "permission": permission, "subagents": subagents } }));
+            "permission": permission, "subagents": subagents,
+            "model": "mock", "thinking": "low", "plan": true, "permissions": "auto",
+            "cwd": "/srv/work", "branch": "main",
+            "context": { "measured_prompt_tokens": 1200 },
+            "prompt_tokens": 4321, "completion_tokens": 210
+        }));
+    }
+
+    pub fn snapshot(&self, snapshot: Value) {
+        self.push(json!({ "type": "status", "cursor": 2, "snapshot": snapshot }));
     }
 
     pub fn attached(&self) -> usize {
@@ -439,7 +448,22 @@ async fn attach_socket(
                     let Some(Ok(Message::Text(text))) = incoming else {
                         return;
                     };
-                    fake.inner.lock().unwrap().attach_frames.push(serde_json::from_str(&text).unwrap_or_default());
+                    let frame: Value = serde_json::from_str(&text).unwrap_or_default();
+                    fake.inner.lock().unwrap().attach_frames.push(frame.clone());
+                    if frame["type"] == "control" {
+                        let verb = frame["verb"].as_str().unwrap_or_default().to_string();
+                        let payload = if verb == "models.list" {
+                            json!({ "providers": [
+                                { "name": "mock", "kind": "anthropic", "model": "mock" },
+                                { "name": "mock2", "kind": "anthropic", "model": "mock-2" }
+                            ] })
+                        } else {
+                            json!({ "id": id })
+                        };
+                        if !send(&mut socket, json!({ "type": "command_result", "verb": verb, "ok": true, "payload": payload })).await {
+                            return;
+                        }
+                    }
                 }
                 frame = frames.recv() => {
                     let Ok(frame) = frame else {

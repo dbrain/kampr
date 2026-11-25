@@ -4,7 +4,7 @@
 use crate::conversations::Conversations;
 use crate::wire::Wire;
 use kampr_core::conversation::composer::Line;
-use kampr_core::conversation::{Command, Image, When};
+use kampr_core::conversation::{Command, Image, Reply, When};
 use kampr_core::provider::Input;
 use kampr_core::wire::{ErrorCode, PendingOption, PendingSource, ServerMsg};
 use kampr_muffit::wire::PermissionPrompt;
@@ -23,6 +23,18 @@ pub fn answer_for(key: &str) -> Option<Answer> {
     ANSWERS.iter().find(|(k, _, _)| *k == key).map(|(_, _, a)| *a)
 }
 
+/// The pane's answer key for a seam reply: muffit's prompt is allow, always, deny.
+pub fn key_of(reply: &Reply) -> Option<&'static str> {
+    match reply {
+        Reply::Allow {
+            remember: true, ..
+        } => Some("2"),
+        Reply::Allow { .. } => Some("1"),
+        Reply::Deny { .. } => Some("3"),
+        _ => None,
+    }
+}
+
 pub fn pending(pane: &str, prompt: Option<&PermissionPrompt>) -> ServerMsg {
     ServerMsg::Pending {
         pane: pane.to_string(),
@@ -30,7 +42,7 @@ pub fn pending(pane: &str, prompt: Option<&PermissionPrompt>) -> ServerMsg {
         header: prompt.map(|p| p.tool.clone()),
         multi: false,
         context: None,
-        id: None,
+        id: prompt.map(|p| p.id.to_string()),
         options: match prompt {
             Some(_) => ANSWERS
                 .iter()

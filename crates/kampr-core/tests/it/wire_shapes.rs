@@ -401,6 +401,151 @@ fn server() -> Vec<ServerMsg> {
                 paced: true,
             }),
         },
+        ServerMsg::ConvoAbilities {
+            pane: pane(),
+            abilities: kampr_core::conversation::Abilities {
+                input: BTreeSet::from([kampr_core::conversation::InputAbility::Images]),
+                steer: BTreeSet::from([kampr_core::conversation::Steer::Interrupt]),
+                asks: BTreeSet::from([kampr_core::conversation::AskAbility::Permission]),
+                streams: BTreeSet::from([kampr_core::conversation::Stream::TaskOutput]),
+                facts: BTreeSet::from([kampr_core::conversation::Fact::Billing]),
+                lifecycle: BTreeSet::from([kampr_core::conversation::Lifecycle::End]),
+            },
+        },
+        ServerMsg::ConvoLive {
+            pane: pane(),
+            live: kampr_core::conversation::Live {
+                text: "t".into(),
+                thinking: Some(1),
+                tools: vec![kampr_core::conversation::LiveTool {
+                    id: "c1".into(),
+                    tool: "bash".into(),
+                    args: "{}".into(),
+                    state: ToolState::Running,
+                }],
+            },
+        },
+        ServerMsg::ConvoTasks {
+            pane: pane(),
+            tasks: vec![kampr_core::conversation::Task {
+                id: "t1".into(),
+                kind: "worker".into(),
+                call: Some("c1".into()),
+                parent: None,
+                title: Some("Make the file".into()),
+                since: Some("2026-10-14T09:00:00Z".into()),
+                backgrounded: true,
+                state: kampr_core::conversation::TaskState::Running,
+            }],
+        },
+        ServerMsg::ConvoTask {
+            pane: pane(),
+            id: "t1".into(),
+            at: 1,
+            text: "out".into(),
+            ended: Some(kampr_core::conversation::TaskEnd {
+                ok: true,
+                summary: Some("s".into()),
+            }),
+        },
+        ServerMsg::ConvoState {
+            pane: pane(),
+            state: kampr_core::conversation::RunState::Running,
+        },
+        ServerMsg::ConvoTrouble {
+            pane: pane(),
+            trouble: Some(kampr_core::conversation::Trouble {
+                kind: "api".into(),
+                text: "rate limited".into(),
+                status: "retrying".into(),
+                retry: Some(kampr_core::conversation::Retry {
+                    attempt: 1,
+                    of: 3,
+                    in_ms: 1000,
+                }),
+                fix: Some(kampr_core::conversation::Fix::Wait {
+                    until: "2026-10-14T09:00:00Z".into(),
+                }),
+            }),
+        },
+        ServerMsg::ConvoSession {
+            pane: pane(),
+            facts: kampr_core::conversation::SessionFacts {
+                id: "s1".into(),
+                cwd: Some("/p".into()),
+                title: Some("t".into()),
+                model: Some("m".into()),
+                mode: Some("plan".into()),
+                version: Some("1".into()),
+                account: Some("a".into()),
+                billing: kampr_core::conversation::Billing {
+                    provider: Some("p".into()),
+                    key: Some("k".into()),
+                    rate_limited: true,
+                },
+                started: Some("2026-10-14T09:00:00Z".into()),
+            },
+        },
+        ServerMsg::ConvoControls {
+            pane: pane(),
+            controls: vec![kampr_core::conversation::Control {
+                id: "model".into(),
+                label: "Model".into(),
+                kind: kampr_core::conversation::ControlKind::Choice,
+                value: Some(json!("m")),
+                options: vec![kampr_core::conversation::ControlOption {
+                    value: "m".into(),
+                    label: "M".into(),
+                    detail: Some("d".into()),
+                }],
+                group: Some("g".into()),
+                confirm: Some("c".into()),
+            }],
+        },
+        ServerMsg::ConvoActions {
+            pane: pane(),
+            actions: vec![kampr_core::conversation::Action {
+                id: "compact".into(),
+                label: "Compact".into(),
+                detail: Some("d".into()),
+                args: vec![kampr_core::conversation::ArgSpec {
+                    name: "n".into(),
+                    label: "N".into(),
+                    required: true,
+                    options: vec!["o".into()],
+                }],
+                group: Some("g".into()),
+                confirm: Some("c".into()),
+            }],
+        },
+        ServerMsg::ConvoLimits {
+            pane: pane(),
+            limits: kampr_core::conversation::Limits {
+                plan: Some("pro".into()),
+                usage: Some(json!({})),
+                resets_at: Some("2026-10-14T09:00:00Z".into()),
+            },
+        },
+        ServerMsg::ConvoContext {
+            pane: pane(),
+            context: kampr_core::conversation::ContextUse { used: 1, total: 2 },
+        },
+        ServerMsg::ConvoSuggested {
+            pane: pane(),
+            kind: kampr_core::conversation::SuggestKind::Files,
+            query: "q".into(),
+            items: vec![kampr_core::conversation::Suggestion {
+                id: "i".into(),
+                label: "l".into(),
+                detail: Some("d".into()),
+            }],
+        },
+        ServerMsg::ConvoActed {
+            pane: pane(),
+            action: "a".into(),
+            ok: true,
+            text: Some("t".into()),
+        },
         ServerMsg::Error {
             code: ErrorCode::BadRequest,
             message: "m".into(),
@@ -457,6 +602,9 @@ fn client() -> Vec<ClientMsg> {
             key: "1".into(),
             id: Some("toolu_1".into()),
             text: Some("Mango".into()),
+            reply: Some(kampr_core::conversation::Reply::Choose {
+                answers: vec!["a".into()],
+            }),
         },
         ClientMsg::ConvoLoad {
             pane: pane(),
@@ -469,6 +617,31 @@ fn client() -> Vec<ClientMsg> {
         },
         ClientMsg::ConvoFind {
             pane: pane(),
+            query: "q".into(),
+        },
+        ClientMsg::ConvoSteer {
+            pane: pane(),
+            steer: kampr_core::conversation::Steer::Interrupt,
+            text: Some("t".into()),
+        },
+        ClientMsg::ConvoSet {
+            pane: pane(),
+            control: "model".into(),
+            value: json!("m"),
+        },
+        ClientMsg::ConvoAct {
+            pane: pane(),
+            action: "compact".into(),
+            args: json!({}),
+        },
+        ClientMsg::ConvoFollow {
+            pane: pane(),
+            id: "t1".into(),
+            from: 1,
+        },
+        ClientMsg::ConvoSuggest {
+            pane: pane(),
+            kind: kampr_core::conversation::SuggestKind::Files,
             query: "q".into(),
         },
         ClientMsg::Find {

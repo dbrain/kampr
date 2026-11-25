@@ -90,7 +90,11 @@ impl TurnBuilder {
                 args,
                 status,
             } => self.call(id, tool, args, *status),
-            ContentBlock::ToolOutputChunk { call_id, text } => {
+            ContentBlock::ToolOutputChunk {
+                call_id,
+                text,
+                seq: _,
+            } => {
                 if let Some(call) = self.calls.get_mut(call_id) {
                     call.output.get_or_insert_with(String::new).push_str(text);
                 }

@@ -1,8 +1,9 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 /// What a source can do, as the source says it: a control the client does not draw is an ability
 /// the source does not declare.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Abilities {
     pub input: BTreeSet<InputAbility>,
     pub steer: BTreeSet<Steer>,
@@ -12,7 +13,8 @@ pub struct Abilities {
     pub lifecycle: BTreeSet<Lifecycle>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum InputAbility {
     Images,
     Files,
@@ -23,7 +25,8 @@ pub enum InputAbility {
     Unqueue,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Steer {
     Interrupt,
     Continue,
@@ -40,7 +43,8 @@ pub enum Steer {
     Aside,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AskAbility {
     Permission,
     Always,
@@ -52,7 +56,8 @@ pub enum AskAbility {
     Url,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Stream {
     Text,
     ToolArgs,
@@ -62,7 +67,8 @@ pub enum Stream {
     Hooks,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Fact {
     Account,
     Billing,
@@ -73,7 +79,8 @@ pub enum Fact {
     Mcp,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Lifecycle {
     Create,
     Resume,

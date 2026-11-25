@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub const WIRE_VERSION: u32 = 303;
 
@@ -111,6 +112,9 @@ pub enum ContentBlock {
         call_id: String,
         #[serde(default)]
         text: String,
+        /// The chunk's own sequence, so a followed task can tell what it has already read.
+        #[serde(default)]
+        seq: u64,
     },
     ToolResult {
         call_id: String,
@@ -177,10 +181,27 @@ pub struct Subagent {
     #[serde(default)]
     pub title: Option<String>,
     pub liveness: Liveness,
+    /// `Orchestrator`, `TaskChimp`, `Review`, `Interactive`, `Debugging`, `Planner` or a key.
+    #[serde(default)]
+    pub role: Option<String>,
+    /// The worker's own state: `running`, `waiting_user`, `paused`, `completed` or `failed`.
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ContextStatus {
+    /// The window's prompt size, once a turn has measured one.
+    #[serde(default)]
+    pub measured_prompt_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct StatusSnapshot {
+    #[serde(default)]
+    pub session_id: String,
     #[serde(default)]
     pub title: Option<String>,
     pub state: SessionState,
@@ -188,6 +209,23 @@ pub struct StatusSnapshot {
     pub permission: Option<PermissionPrompt>,
     #[serde(default)]
     pub subagents: Vec<Subagent>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub thinking: Option<String>,
+    #[serde(default)]
+    pub plan: bool,
+    /// When tools ask first: `yolo`, `auto`, `ask-outside-project` or `ask-all`.
+    #[serde(default)]
+    pub permissions: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub context: Option<ContextStatus>,
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -214,6 +252,13 @@ pub enum ServerFrame {
     Lagged {},
     Error {
         message: String,
+    },
+    /// What a `control` verb did, answered on the socket that asked.
+    CommandResult {
+        verb: String,
+        ok: bool,
+        #[serde(default)]
+        payload: Value,
     },
     #[serde(other)]
     Other,
