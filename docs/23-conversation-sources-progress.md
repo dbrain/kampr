@@ -77,10 +77,11 @@ Built and committed so far: s1 (Phase 1), s2 (docs/22), s3 (Phase 4). Now in fli
   systemd 2-fd lifecycle. **MERGED** into `conv-sources` (b3b5411c, +507/−57, kampr-keep only);
   `make test-fast` 2072 passed; TDD restart-mid-turn test against a hermetic shell-script fake.
   Review (s5) found 3 defects on the durability path (seq-resume-to-0, `Truncated` never emitted,
-  overlong `write` falsely acked) — fix in flight (s7).
+  overlong `write` falsely acked) — fixes committed (278e74b5, kampr-keep 43/43); re-review in
+  flight (s9).
 
 Critical path: **Phase 2a** (wire, Rust — in flight, s6) → **Phase 2b** (client UI, Kotlin) →
-**Phase 5** (kampr-claude) → **Phase 7** (pane pump). Phase 4 (s3, s7 fixing) feeds Phase 5.
+**Phase 5** (kampr-claude) → **Phase 7** (pane pump). Phase 4 (s3 + fixes s7, re-review s9) feeds Phase 5.
 
 Phase 2 split on the toolchain boundary for review: **2a (Rust, s6)** adds `convo.abilities`,
 `convo.controls`, `convo.actions`, `convo.tasks`, `convo.task`, `convo.trouble`, `convo.limits`,
@@ -142,7 +143,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 3 — muffit widened (muffit repo) — IN FLIGHT (s8)
 
-## Phase 4 — a keeper for a process that speaks lines — DONE, MERGED (b3b5411c); review fixes in flight (s7)
+## Phase 4 — a keeper for a process that speaks lines — DONE (b3b5411c + fixes 278e74b5); re-review in flight (s9)
 
 ## Phase 5 — Claude with no terminal — not started
 
