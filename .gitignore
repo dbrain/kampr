@@ -28,3 +28,4 @@ local.properties
 /.gotchas/
 /.claude/settings.local.json
 /.claude/worktrees/
+/.muffit/
