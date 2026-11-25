@@ -792,10 +792,10 @@ async fn kampr_hook_with_no_node_behind_its_socket_exits_zero_saying_nothing() {
     }
 }
 
-fn command(home: &Path) -> String {
-    let exe = kampr_keep::own_exe().unwrap().display().to_string();
-    let sock = socket(home).display().to_string();
-    format!("[ -x '{exe}' ] && '{exe}' hook --socket '{sock}' 2>/dev/null; exit 0")
+// The command the node writes, named by the environment it reads from rather than by a path, so
+// two nodes sharing one ~/.claude write the same bytes and stop reporting each other stale.
+fn command(_home: &Path) -> String {
+    kampr_node::hooks::command()
 }
 
 fn exec_form(home: &Path) -> String {
@@ -885,9 +885,11 @@ async fn installing_for_the_user_writes_the_hooks_keeps_the_operators_keys_and_c
 
     c.watch(true).await;
     let before = c.hooks_frame().await;
+    // The project's entry is a Kampr one in an older form, so it reads as current: the update is
+    // offered as an install for the user's scope, not as "out of date".
     assert_eq!(
         before,
-        json!({ "t": "claude.hooks", "pane": c.pane, "state": "stale", "scope": "project", "ask": true, "project": c.cwd }),
+        json!({ "t": "claude.hooks", "pane": c.pane, "state": "current", "scope": "project", "ask": true, "project": c.cwd }),
     );
 
     let ack = c
@@ -921,6 +923,26 @@ async fn installing_for_the_user_writes_the_hooks_keeps_the_operators_keys_and_c
         std::fs::read_to_string(&user).unwrap(),
         text,
         "a second install changed the file"
+    );
+}
+
+// A ~/.claude shared between nodes — an adopted container bind-mounts the host's, same uid and
+// $HOME — and each node used to write its own binary and socket in and call the other's entry
+// out of date, so the file flipped between them. A Kampr entry in any node's form is current.
+#[tokio::test]
+async fn a_sibling_nodes_kampr_entry_in_a_shared_home_is_current_not_stale() {
+    let mut c = Hooked::start().await;
+    let home = c.home();
+    let user = home.join(".claude/settings.json");
+    let sibling = json!({ "hooks": { "Stop": [ { "hooks": [ { "type": "command",
+        "command": "[ -x '/other/kampr' ] && '/other/kampr' hook --socket '/other/hooks.sock' 2>/dev/null; exit 0" } ] } ] } });
+    std::fs::write(&user, sibling.to_string()).unwrap();
+    c.watch(true).await;
+    let frame = c.hooks_frame().await;
+    assert_eq!(
+        (frame["state"].as_str(), frame["scope"].as_str()),
+        (Some("current"), Some("user")),
+        "the sibling's entry must read as current, so the file stops flipping: {frame}"
     );
 }
 
@@ -1251,7 +1273,7 @@ async fn a_request_is_let_go_when_its_pane_goes_away() {
 }
 
 #[tokio::test]
-async fn an_install_of_the_old_exec_form_is_stale_and_updating_replaces_it() {
+async fn an_install_of_the_old_exec_form_reads_current_and_installing_rewrites_it() {
     let mut c = Hooked::start().await;
     let home = c.home();
     let mut old = installed(&home);
@@ -1264,9 +1286,11 @@ async fn an_install_of_the_old_exec_form_is_stale_and_updating_replaces_it() {
     std::fs::write(&user, json!({ "hooks": old }).to_string()).unwrap();
     c.watch(true).await;
     let before = c.hooks_frame().await;
+    // An older form of the Kampr entry is still a Kampr entry, so it is current: nothing is
+    // offered as out of date, but an install still rewrites it to the current form.
     assert_eq!(
         (before["state"].as_str(), before["scope"].as_str()),
-        (Some("stale"), Some("user"))
+        (Some("current"), Some("user"))
     );
     let ack = c
         .manage(json!({ "op": "claude.hooks.install", "at": c.pane, "mode": "user" }))
@@ -1603,7 +1627,7 @@ async fn an_elicitation_is_never_held_and_is_shown_as_answered_at_the_terminal()
 }
 
 #[tokio::test]
-async fn an_install_from_before_elicitation_reads_stale() {
+async fn an_install_from_before_elicitation_reads_current() {
     let mut c = Hooked::start().await;
     let home = c.home();
     let mut old = installed(&home);
@@ -1617,9 +1641,10 @@ async fn an_install_from_before_elicitation_reads_stale() {
     .unwrap();
     c.watch(true).await;
     let frame = c.hooks_frame().await;
+    // A Kampr entry missing events is still a Kampr entry: current, not out of date.
     assert_eq!(
         (frame["state"].as_str(), frame["scope"].as_str()),
-        (Some("stale"), Some("user"))
+        (Some("current"), Some("user"))
     );
 }
 

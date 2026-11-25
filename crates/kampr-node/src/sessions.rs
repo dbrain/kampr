@@ -67,15 +67,15 @@ impl SessionNode {
     fn open(
         config: &Config,
         name: &str,
-        socket: PathBuf,
+        sockets: Sockets,
         primary: bool,
         desk: Option<Arc<NativeProvider>>,
         machine_muffit: Option<Arc<MuffitProvider>>,
         docker: Option<DockerHost>,
     ) -> Arc<Self> {
         let (docker, adopted) = docker.unzip();
-        let herdr = Herdr::new(&socket);
-        let native = primary.then(|| native_provider(config)).flatten();
+        let herdr = Herdr::new(&sockets.herdr);
+        let native = primary.then(|| native_provider(config, &sockets.hooks)).flatten();
         let muffit = primary.then(|| muffit_provider(config)).flatten();
         let machine_muffit = muffit.clone().or(machine_muffit);
         let desk = native.clone().or(desk);
@@ -218,13 +218,24 @@ impl SessionNode {
 
 /// A node whose native root cannot be made still serves its herd; it only has no sessions of
 /// its own.
-fn native_provider(config: &Config) -> Option<Arc<NativeProvider>> {
+fn native_provider(config: &Config, hook_socket: &Path) -> Option<Arc<NativeProvider>> {
     let built = config.native.resolve().and_then(|mut native| {
         native.send_argv = config.naming.send_argv;
         native.forget_ended = true;
         native.blocked = Some(Arc::new(|agent: Option<&str>, screen: &str| {
             crate::pending::detect_for(agent, screen).is_some()
         }));
+        // Named by the environment the hook reads rather than by a path, so a `~/.claude` shared
+        // between nodes holds one command for all of them; the node is what puts them in the pane.
+        native.hook_env = vec![
+            (
+                "KAMPR_BIN".into(),
+                kampr_keep::own_exe()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default(),
+            ),
+            ("KAMPR_HOOK_SOCKET".into(), hook_socket.display().to_string()),
+        ];
         NativeProvider::new(native)
     });
     match built {
@@ -241,6 +252,13 @@ fn native_provider(config: &Config) -> Option<Arc<NativeProvider>> {
 }
 
 type DockerHost = (Arc<kampr_docker::Directory>, Arc<crate::adopt::Ledger>);
+
+/// The two sockets a session node reaches out on: herdr's, and the one Claude's hooks dial back
+/// on (which the node also hands to every pane it launches).
+struct Sockets {
+    herdr: PathBuf,
+    hooks: PathBuf,
+}
 
 fn docker_source(config: &Config, state_dir: &Path) -> Option<DockerHost> {
     let source = config
@@ -324,7 +342,10 @@ impl Sessions {
         let primary = SessionNode::open(
             config,
             &session_name_of(&socket),
-            socket,
+            Sockets {
+                herdr: socket,
+                hooks: crate::hooks::socket(config, state_dir),
+            },
             true,
             None,
             None,
@@ -414,7 +435,10 @@ impl Sessions {
             let session = SessionNode::open(
                 &self.config,
                 &entry.name,
-                socket,
+                Sockets {
+                    herdr: socket,
+                    hooks: PathBuf::new(),
+                },
                 false,
                 self.primary.native.clone(),
                 self.primary.muffit.clone(),
@@ -590,7 +614,10 @@ mod tests {
         SessionNode::open(
             &config,
             if primary { "default" } else { "agents" },
-            "/nowhere/herdr.sock".into(),
+            Sockets {
+                herdr: "/nowhere/herdr.sock".into(),
+                hooks: PathBuf::new(),
+            },
             primary,
             None,
             None,

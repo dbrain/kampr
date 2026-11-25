@@ -26,7 +26,6 @@ pub use install::command;
 
 pub struct Hooks {
     socket: PathBuf,
-    exe: PathBuf,
     home: PathBuf,
     declined_at: PathBuf,
     asks: AtomicBool,
@@ -84,15 +83,7 @@ impl Hooks {
         sessions: Arc<Sessions>,
         herd: watch::Receiver<Arc<HerdModel>>,
     ) -> (Arc<Self>, Vec<JoinHandle<()>>) {
-        let socket = match config.hooks.socket.trim() {
-            "" => kampr_keep::runtime()
-                .map(|dir| dir.join(socket_name(state_dir)))
-                .unwrap_or_else(|e| {
-                    warn!(error = %e, "no private runtime directory, so Claude's hooks are not served");
-                    PathBuf::new()
-                }),
-            path => PathBuf::from(path),
-        };
+        let socket = socket(config, state_dir);
         let hooks = Self::new(config, state_dir, sessions, herd.clone(), socket);
         let mut tasks = vec![tokio::spawn(follow_herd(Arc::downgrade(&hooks), herd))];
         if !hooks.socket.as_os_str().is_empty() {
@@ -115,7 +106,6 @@ impl Hooks {
     ) -> Arc<Self> {
         let declined_at = state_dir.join("claude-hooks.json");
         Arc::new(Self {
-            exe: kampr_keep::own_exe().unwrap_or_else(|_| PathBuf::from("kampr")),
             home: config.journal_home(),
             asks: AtomicBool::new(!declined(&declined_at)),
             declined_at,
@@ -222,11 +212,11 @@ impl Hooks {
     }
 
     fn settings(&self) -> String {
-        install::settings(&command(&self.exe, &self.socket))
+        install::settings(&command())
     }
 
     pub fn frame(&self, pane: &str, project: Option<&Path>, claude: Option<u32>) -> ServerMsg {
-        let files = install::Files::new(&self.home, project, &self.exe, &self.socket);
+        let files = install::Files::new(&self.home, project);
         let (state, scope) = match files.status() {
             (HooksState::Absent, _)
                 if claude.is_some_and(|pid| launch::started_with(pid, &self.settings())) =>
@@ -254,7 +244,7 @@ impl Hooks {
                 ));
             }
         };
-        let files = install::Files::new(&self.home, project, &self.exe, &self.socket);
+        let files = install::Files::new(&self.home, project);
         let done = files.install(scope);
         self.installs.send_modify(|n| *n = n.wrapping_add(1));
         done
@@ -441,6 +431,21 @@ pub fn pending(pane: &str, asked: Option<Pending>) -> ServerMsg {
 
 // Every node a test suite starts is a node of this uid, and one of them must never take the
 // socket the operator's own Claude sessions are pointed at.
+/// Where the hook's socket lives: a configured path, or one under the private runtime directory
+/// named by the state directory. The node serves it, and it is what it tells a launched pane to
+/// dial back on — so it is computed once and shared rather than each asking its own.
+pub fn socket(config: &Config, state_dir: &Path) -> PathBuf {
+    match config.hooks.socket.trim() {
+        "" => kampr_keep::runtime()
+            .map(|dir| dir.join(socket_name(state_dir)))
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "no private runtime directory, so Claude's hooks are not served");
+                PathBuf::new()
+            }),
+        path => PathBuf::from(path),
+    }
+}
+
 fn socket_name(state_dir: &Path) -> String {
     if state_dir == kampr_core::local_node::default_state_dir() {
         return "hooks.sock".into();

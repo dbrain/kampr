@@ -51,6 +51,10 @@ pub struct NativeConfig {
     /// Whether a session closed on purpose or ended with status 0 is forgotten by itself. A fleet
     /// run is kept over the same keepers and its board needs every end it had.
     pub forget_ended: bool,
+    /// The environment every session is given on top of its own: the node's `KAMPR_BIN` and
+    /// `KAMPR_HOOK_SOCKET`, which the hook Claude runs reads instead of a path, so a `~/.claude`
+    /// shared between nodes holds one command for all of them.
+    pub hook_env: Vec<(String, String)>,
 }
 
 impl NativeConfig {
@@ -71,6 +75,7 @@ impl NativeConfig {
             blocked: None,
             send_argv: false,
             forget_ended: false,
+            hook_env: Vec::new(),
         })
     }
 }
@@ -178,6 +183,10 @@ impl NativeProvider {
         for (key, value) in new.env {
             spec.env.retain(|(have, _)| *have != key);
             spec.env.push((key, value));
+        }
+        for (key, value) in &self.inner.config.hook_env {
+            spec.env.retain(|(have, _)| *have != *key);
+            spec.env.push((key.clone(), value.clone()));
         }
         spec.cohort = new.cohort;
         spec.workspace = new.workspace;

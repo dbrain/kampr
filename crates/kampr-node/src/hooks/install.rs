@@ -25,14 +25,11 @@ pub struct Files {
 }
 
 impl Files {
-    pub fn new(home: &Path, project: Option<&Path>, exe: &Path, socket: &Path) -> Self {
+    pub fn new(home: &Path, project: Option<&Path>) -> Self {
         Self {
             user: home.join(".claude").join("settings.json"),
             project: project.map(|p| p.join(".claude").join("settings.local.json")),
-            mine: Mine {
-                command: command(exe, socket),
-                exe: quoted(&exe.display().to_string()),
-            },
+            mine: Mine { command: command() },
         }
     }
 
@@ -44,15 +41,13 @@ impl Files {
         .into_iter()
         .filter_map(|(scope, path)| {
             let doc = read(path?).ok().flatten()?;
-            Some((scope, entries(&doc, &self.mine)))
+            Some((scope, entries(&doc)))
         })
         .collect();
-        let expected = expected_entries(&self.mine.command);
-        if let Some((scope, _)) = found.iter().find(|(_, e)| *e == expected) {
-            return (HooksState::Current, Some(*scope));
-        }
+        // A Kampr entry in any node's form is current: comparing the exact command is what made
+        // two nodes sharing one settings.json report each other out of date.
         match found.iter().find(|(_, e)| !e.is_empty()) {
-            Some((scope, _)) => (HooksState::Stale, Some(*scope)),
+            Some((scope, _)) => (HooksState::Current, Some(*scope)),
             None => (HooksState::Absent, None),
         }
     }
@@ -76,7 +71,7 @@ impl Files {
                 target.display()
             ));
         }
-        strip(&mut doc, &self.mine, false);
+        strip(&mut doc, false);
         if doc.get("hooks").is_none()
             && let Json::Object(entries) = &mut doc
         {
@@ -99,7 +94,7 @@ impl Files {
         write(target, &doc)?;
         if let Some(other) = other
             && let Ok(Some(mut doc)) = read(other)
-            && strip(&mut doc, &self.mine, true)
+            && strip(&mut doc, true)
         {
             write(other, &doc)?;
         }
@@ -123,30 +118,35 @@ pub fn settings(command: &str) -> String {
     serde_json::to_string(&doc).unwrap_or_default()
 }
 
-pub fn command(exe: &Path, socket: &Path) -> String {
-    let exe = quoted(&exe.display().to_string());
-    let socket = quoted(&socket.display().to_string());
-    // A shell runs it, and an uninstalled Kampr must say nothing on the operator's screen (#630).
-    // Not `exec`: an older kampr that has no `hook` exits 2, which Claude reads as a decision, and
-    // only a shell still standing can turn that into `exit 0`.
-    format!("[ -x {exe} ] && {exe} hook --socket {socket} 2>/dev/null; exit 0")
+// The command every install writes, named by the environment the node puts in a pane it launches
+// rather than by a path, so a ~/.claude shared between nodes holds one command for all of them and
+// stops reading each other out of date. A shell runs it, and a Claude with no hook environment —
+// one not launched by a node — must say nothing on the operator's screen (#630). Not `exec`: an
+// older kampr that has no `hook` exits 2, which Claude reads as a decision, and only a shell still
+// standing can turn that into `exit 0`.
+pub fn command() -> String {
+    concat!(
+        r#"[ -n "${KAMPR_BIN:-}" ] && [ -x "${KAMPR_BIN}" ] && "#,
+        r#"[ -n "${KAMPR_HOOK_SOCKET:-}" ] && "#,
+        r#""${KAMPR_BIN}" hook --socket "${KAMPR_HOOK_SOCKET}" 2>/dev/null; exit 0"#,
+    )
+    .to_string()
 }
 
 pub(super) fn quoted(text: &str) -> String {
     format!("'{}'", text.replace('\'', r"'\''"))
 }
 
-struct Mine {
-    command: String,
-    exe: String,
+// A Kampr hook entry, in any node's form: the current one names the hook by the environment it
+// reads, an older one names it by a path. Every form runs `kampr hook --socket`, and nothing else
+// on the settings file does — so that is what marks an entry as ours, and any of them reads as
+// current rather than out of date.
+fn ours(command: &str) -> bool {
+    command.contains(" hook --socket ")
 }
 
-impl Mine {
-    fn ours(&self, command: &str) -> bool {
-        command == self.command
-            || (command.contains(" hook --socket ")
-                && (command.contains("kampr") || command.contains(&self.exe)))
-    }
+struct Mine {
+    command: String,
 }
 
 fn group(command: &str, matcher: Option<&str>, timeout: Option<u64>) -> Json {
@@ -167,23 +167,7 @@ fn group(command: &str, matcher: Option<&str>, timeout: Option<u64>) -> Json {
 
 type Entry = (String, Option<String>, String, Option<String>);
 
-fn expected_entries(command: &str) -> Vec<Entry> {
-    let mut all: Vec<Entry> = EVENTS
-        .iter()
-        .map(|(event, matcher, timeout)| {
-            (
-                event.to_string(),
-                matcher.map(str::to_string),
-                command.to_string(),
-                timeout.map(|t| t.to_string()),
-            )
-        })
-        .collect();
-    all.sort();
-    all
-}
-
-fn entries(doc: &Json, mine: &Mine) -> Vec<Entry> {
+fn entries(doc: &Json) -> Vec<Entry> {
     let mut out = Vec::new();
     let Some(Json::Object(hooks)) = doc.get("hooks") else {
         return out;
@@ -199,7 +183,7 @@ fn entries(doc: &Json, mine: &Mine) -> Vec<Entry> {
                 let Some(command) = hook.get("command").and_then(Json::as_str) else {
                     continue;
                 };
-                if mine.ours(command) {
+                if ours(command) {
                     let timeout = match hook.get("timeout") {
                         Some(Json::Number(n)) => Some(n.to_string()),
                         _ => None,
@@ -213,7 +197,7 @@ fn entries(doc: &Json, mine: &Mine) -> Vec<Entry> {
     out
 }
 
-fn strip(doc: &mut Json, mine: &Mine, prune: bool) -> bool {
+fn strip(doc: &mut Json, prune: bool) -> bool {
     let mut changed = false;
     let Some(Json::Object(hooks)) = doc.get_mut("hooks") else {
         return false;
@@ -225,12 +209,7 @@ fn strip(doc: &mut Json, mine: &Mine, prune: bool) -> bool {
                 return true;
             };
             let before = inner.len();
-            inner.retain(|hook| {
-                !hook
-                    .get("command")
-                    .and_then(Json::as_str)
-                    .is_some_and(|c| mine.ours(c))
-            });
+            inner.retain(|hook| !hook.get("command").and_then(Json::as_str).is_some_and(ours));
             changed |= inner.len() != before;
             !(inner.is_empty() && before > 0)
         });

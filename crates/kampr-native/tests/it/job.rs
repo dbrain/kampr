@@ -139,3 +139,54 @@ fn which(program: &str) -> std::path::PathBuf {
         .find(|p| p.is_file())
         .expect("on PATH")
 }
+
+/// The hook a pane's Claude runs names its binary and socket by environment, not by path, so two
+/// nodes sharing one ~/.claude write the same settings. The node is what puts them in the pane;
+/// the pane says so by writing out what it was given (the `env` is cleared from disk once the
+/// child is up, so the running process is the only place to read it back).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_carries_the_hook_environment_the_node_sets() {
+    let root = Root(
+        tempfile::Builder::new()
+            .prefix("kj")
+            .tempdir_in("/tmp")
+            .expect("a root"),
+    );
+    let out = root.0.path().join("hook-env");
+    let mut config = NativeConfig::new(Some(root.0.path().to_path_buf()), Some(kampr_testkit::keeper()))
+        .expect("a config");
+    config.launch = Some(Launch::Detached);
+    config.hook_env = vec![
+        ("KAMPR_BIN".into(), "/bin/kampr".into()),
+        ("KAMPR_HOOK_SOCKET".into(), "/tmp/hooks.sock".into()),
+    ];
+    let provider = NativeProvider::new(config).expect("a provider");
+    let script = format!(
+        "printf 'KAMPR_BIN=%s KAMPR_HOOK_SOCKET=%s' \"$KAMPR_BIN\" \"$KAMPR_HOOK_SOCKET\" > '{}'; sleep 30",
+        out.display()
+    );
+    let _pane = provider
+        .create(NewSession {
+            argv: vec!["sh".into(), "-c".into(), script],
+            cwd: None,
+            label: None,
+            cols: 80,
+            rows: 24,
+            env: vec![],
+            cohort: None,
+            workspace: None,
+            container: None,
+        })
+        .await
+        .expect("a session");
+    let deadline = Instant::now() + SOON;
+    while Instant::now() < deadline {
+        if let Ok(text) = std::fs::read_to_string(&out) {
+            assert!(text.contains("KAMPR_BIN=/bin/kampr"), "{text}");
+            assert!(text.contains("KAMPR_HOOK_SOCKET=/tmp/hooks.sock"), "{text}");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the pane never wrote out the environment it was given");
+}
