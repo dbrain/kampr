@@ -56,6 +56,11 @@ Built and committed so far: s1 (Phase 1), s2 (docs/22), s3 (Phase 4). Now in fli
 - **s7 — Phase 4 fixes**: the three defects s5's review found on the durability path (seq resume
   resetting to 0, `Truncated` never emitted, overlong `write` falsely acked) + a USR1-reexec pipe
   test. `kampr-keep` only.
+- **s8 — Phase 3 (muffit widened)**: the seven capabilities in the **muffit repo** (ask tool, live
+  child + answered prompts, shell tasks, tool-arg deltas/unqueue/clear/fork/rename, the
+  control-and-action listing verb tested against muffit's own TUI, provider/billing + rate-limit
+  state, prompt events + typed REST bodies). On its own `conv-sources` branch there; leaves the
+  unrelated in-flight muffit changes alone.
 
 - **s1 — Phase 1 (the seam)**: `kampr-core/src/conversation/` module with `Conversation`/`Source`
   traits + the types; turn/block/facet moved out of `kampr-journal` (parsers stay); `MuffitSource`
@@ -135,7 +140,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 2 — the wire and the client learn the new vocabulary — 2a IN FLIGHT (s6, Rust); 2b (Kotlin) after
 
-## Phase 3 — muffit widened (muffit repo) — not started
+## Phase 3 — muffit widened (muffit repo) — IN FLIGHT (s8)
 
 ## Phase 4 — a keeper for a process that speaks lines — DONE, MERGED (b3b5411c); review fixes in flight (s7)
 
