@@ -45,16 +45,15 @@ STILL DOABLE WITHOUT A TURN:
 
 ## Orchestration (in flight)
 
-Built and committed so far: s1 (Phase 1), s2 (docs/22), and **Phase 4 is CLOSED** (s3 pipe mode
-b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778; kampr-keep 48/48; two reviews passed).
-Now in flight:
+Built and committed so far: s1 (Phase 1), s2 (docs/22), s6 (Phase 2a, be4c2a9d), and **Phase 4 is
+CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778; kampr-keep
+48/48; two reviews passed). Now in flight:
 
 - **s4** — review of docs/22-parity.md.
-- **s6 — Phase 2a (the wire, Rust only)**: additive `convo.*` frames in `wire.rs` (both
-  directions), the node's `conversations.rs` emitting them from the seam `Update`s and routing
-  the new client verbs, and `MuffitConversation` lifting muffit's existing capabilities into the
-  new seam `Update`s (controls, actions, tasks, task-output, trouble, context, cost, limits,
-  session). No Kotlin (that's Phase 2b).
+- **s13 — Phase 2a review**: verify the additive-wire property (old client ↔ new node both ways,
+  widened `answer`), the node's `emit()` maps every seam `Update`, MuffitConversation's abilities
+  match what it emits, and the routing fix. Gate for launching 2b + 5. Notes the missing
+  `convo.cost` frame (the plan omits it; Cost absorbed → parity gap for Phase 8).
 - **s8 — Phase 3 (muffit widened)**: the seven capabilities in the **muffit repo** (ask tool, live
   child + answered prompts, shell tasks, tool-arg deltas/unqueue/clear/fork/rename, the
   control-and-action listing verb tested against muffit's own TUI, provider/billing + rate-limit
@@ -146,7 +145,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
   falls through to the REST path instead of erroring "the conversation closed" — the daemon
   still answers, and the tests do not reach the race.
 
-## Phase 2 — the wire and the client learn the new vocabulary — 2a IN FLIGHT (s6, Rust); 2b (Kotlin) after
+## Phase 2 — the wire and the client learn the new vocabulary — 2a COMMITTED (be4c2a9d, +1862/−74; 2089 passed); review in flight (s13); 2b (Kotlin) + 5 after
 
 ## Phase 3 — muffit widened (muffit repo) — IN FLIGHT (s8)
 
