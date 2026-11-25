@@ -47,13 +47,24 @@ STILL DOABLE WITHOUT A TURN:
 
 Built and committed so far: s1 (Phase 1), s2 (docs/22), s6 (Phase 2a, be4c2a9d), and **Phase 4 is
 CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778; kampr-keep
-48/48; two reviews passed). Now in flight:
+48/48; two reviews passed). **Phase 2a review (s13) passed (SOUND)** — 2b and 5 are unblocked and
+launching. Now in flight:
 
 - **s4** — review of docs/22-parity.md.
-- **s13 — Phase 2a review**: verify the additive-wire property (old client ↔ new node both ways,
-  widened `answer`), the node's `emit()` maps every seam `Update`, MuffitConversation's abilities
-  match what it emits, and the routing fix. Gate for launching 2b + 5. Notes the missing
-  `convo.cost` frame (the plan omits it; Cost absorbed → parity gap for Phase 8).
+- **s14 — Phase 5 (kampr-claude, the headless source)**: a new `kampr-claude` crate — the
+  stream-json reader/writer, `launch.rs` (scrubbed env + billing guards 1–5), `ClaudeSource`
+  (create/resume/end/hand-to-terminal) + `ClaudeConversation` (lines→`Update`s, `Command`s→lines,
+  guards 6–9), wired into the node's `conversations` registry. **Rust only** — the client
+  "new conversation" opener lands after 2b (s15) so it builds on the new pane. **Money-critical: no
+  test reaches Anthropic** — a mock `ANTHROPIC_BASE_URL` (happy SSE + error path) + throwaway
+  `CLAUDE_CONFIG_DIR` + `billing = any` + `KAMPR_TEST=1`, and a guard test that the launcher
+  refuses to start under `KAMPR_TEST=1` without a mock. In a worktree (isolated from s11's Rust WIP).
+- **s15 — Phase 2b (the client learns the vocabulary, Kotlin)**: mirror the 13 `convo.*`
+  `ServerMsg` + 5 `ClientMsg` + widened `answer` in `client/shared/.../wire/`, and build the pane
+  pieces in `client/conversation/` (controls sheet, actions palette, task panel, trouble banner,
+  billing/limits in the header, composer send/queue/send-now) + the `kampr-tui` mirror. Nothing the
+  source doesn't declare is drawn (no empty rows, no disabled controls, no gaps). Client-only
+  checks (not the full Rust gate, which s11 is churning).
 - **s8 — Phase 3 (muffit widened)**: the seven capabilities in the **muffit repo** (ask tool, live
   child + answered prompts, shell tasks, tool-arg deltas/unqueue/clear/fork/rename, the
   control-and-action listing verb tested against muffit's own TUI, provider/billing + rate-limit
@@ -86,8 +97,9 @@ CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778
   three fixed-correctly (each test fails without the fix, measured) and no new defect. **CLOSED**
   (kampr-keep 48/48).
 
-Critical path: **Phase 2a** (wire, Rust — in flight, s6) → **Phase 2b** (client UI, Kotlin) →
-**Phase 5** (kampr-claude) → **Phase 7** (pane pump). Phase 4 is **closed** and feeds Phase 5 (so Phase 5 now waits only on 2a/s6).
+Critical path: **Phase 2a** (wire, Rust — committed be4c2a9d, review s13 SOUND) → **Phase 2b**
+(client UI, Kotlin — launching, s15) + **Phase 5** (kampr-claude — launching, s14) → **Phase 7**
+(pane pump). Phase 4 is **closed**.
 
 Phase 2 split on the toolchain boundary for review: **2a (Rust, s6)** adds `convo.abilities`,
 `convo.controls`, `convo.actions`, `convo.tasks`, `convo.task`, `convo.trouble`, `convo.limits`,
