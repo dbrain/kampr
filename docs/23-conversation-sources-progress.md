@@ -50,7 +50,14 @@ CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778
 48/48; two reviews passed). **Phase 2a review (s13) passed (SOUND)** — 2b and 5 are unblocked and
 launching. Now in flight:
 
-- **s4** — review of docs/22-parity.md.
+- **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
+  for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
+  row** for the 2.1.326 no-turn `initialize` (63-command list) the table rests on, and coverage holes
+  (the `Files` input ability, the 4 terminal command names, the pane-pieces list shows 10 of 12).
+  Fix in flight (s16).
+- **s16 — docs/22 fixes** (from s4's 11 findings): correct the citations / mark not-probed with the
+  doc's idiom, append the 2.1.326 initialize row if genuinely absent (zero-cost no-turn probe only),
+  add the `Files`-ability row. Docs + one probe-log row; no Rust. Queued for a worker slot.
 - **s15 — Phase 5 (kampr-claude, the headless source)**: a new `kampr-claude` crate — the
   stream-json reader/writer, `launch.rs` (scrubbed env + billing guards 1–5), `ClaudeSource`
   (create/resume/end/hand-to-terminal) + `ClaudeConversation` (lines→`Update`s, `Command`s→lines,
