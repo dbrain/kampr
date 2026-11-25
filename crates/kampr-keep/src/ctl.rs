@@ -106,6 +106,25 @@ pub fn claim_size(session: &SessionDir, cols: u16, rows: u16, holder: &str) -> i
     }
 }
 
+pub fn write(session: &SessionDir, line: &str) -> io::Result<()> {
+    if line.contains(['\n', '\r']) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a written line must not carry a newline",
+        ));
+    }
+    let stream = request(session, &format!("write {line}\n"))?;
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply)?;
+    match reply.trim_end() {
+        "ok" => Ok(()),
+        "" => Err(io::Error::other("the keeper hung up on a write")),
+        reply => Err(io::Error::other(
+            reply.strip_prefix("error ").unwrap_or(reply).to_string(),
+        )),
+    }
+}
+
 pub fn close(session: &SessionDir) -> io::Result<()> {
     if session.exit().is_some() {
         return Ok(());

@@ -14,6 +14,14 @@ pub const CTL: &str = "ctl.sock";
 pub const HOSTS: &str = "hosts";
 const HOSTS_LOCK: &str = "hosts.lock";
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    #[default]
+    Pty,
+    Pipe,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spec {
     pub id: String,
@@ -22,6 +30,8 @@ pub struct Spec {
     pub cwd: Option<String>,
     #[serde(default)]
     pub env: Vec<(String, String)>,
+    #[serde(default)]
+    pub mode: Mode,
     pub cols: u16,
     pub rows: u16,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -46,6 +56,7 @@ impl Spec {
             argv,
             cwd: None,
             env: inherited(std::env::vars()),
+            mode: Mode::Pty,
             cols: 80,
             rows: 24,
             label: None,

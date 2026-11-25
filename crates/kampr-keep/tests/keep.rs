@@ -2,10 +2,10 @@ mod common;
 
 use common::{COUNTER, Live, contains, count, proc_alive, root, sh, until};
 use kampr_keep::{
-    Host, How, Launch, Replay, SEGMENT, Size, SizedReader, borrow, claim_size, close, list, register_host,
-    segments,
+    Host, How, Launch, Mode, PipeDir, PipeRead, Replay, SEGMENT, SeqReader, Size, SizedReader, borrow,
+    claim_size, close, list, register_host, segments, write,
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const SOON: Duration = Duration::from_secs(10);
 
@@ -460,4 +460,88 @@ fn a_command_over_before_its_keeper_answers_is_still_launched() {
         threads * 50,
         failed.first()
     );
+}
+
+fn next_entry(reader: &mut SeqReader, within: Duration) -> Option<(u64, PipeDir, String)> {
+    let deadline = Instant::now() + within;
+    loop {
+        match reader.read().expect("reading the pipe log") {
+            PipeRead::Entry(entry) => {
+                return Some((entry.seq, entry.dir, entry.line));
+            }
+            PipeRead::Truncated { .. } => {}
+            PipeRead::CaughtUp => {
+                if !reader
+                    .wait(Duration::from_millis(20))
+                    .expect("waiting on the pipe log")
+                    && Instant::now() >= deadline
+                {
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+fn entry_named(reader: &mut SeqReader, needle: &str, within: Duration) -> Option<(u64, PipeDir, String)> {
+    let deadline = Instant::now() + within;
+    while let Some(entry) = next_entry(reader, deadline.saturating_duration_since(Instant::now())) {
+        if entry.2.contains(needle) {
+            return Some(entry);
+        }
+    }
+    None
+}
+
+/// A line-speaking child: it starts a turn, stands a permission request, and finishes the turn
+/// once the request is answered. It speaks only on its pipes, so it is a stand-in for a
+/// stream-json agent with no network.
+const FAKE_TURN: &str = r#"
+read message
+printf 'turn:started %s\n' "$message"
+printf 'request:may I proceed\n'
+read answer
+printf 'turn:answered %s\n' "$answer"
+printf 'turn:done\n'
+"#;
+
+/// The node that reads the log goes down mid-turn, with a permission request standing, and comes
+/// back to that same request and to the rest of the turn: the keeper, and the log it drains the
+/// child into, are not the node's, so nothing the turn said is lost to the restart.
+#[test]
+fn a_node_restarting_mid_turn_comes_back_to_the_standing_request_and_the_rest_of_the_turn() {
+    let root = root();
+    let mut spec = sh(FAKE_TURN);
+    spec.mode = Mode::Pipe;
+    let live = Live::spawn(root.path(), spec, Launch::Detached);
+
+    let mut reader = SeqReader::at(live.session.path(), 0).expect("a reader from the start");
+    write(&live.session, "hello").expect("the first line to the child");
+    let (request_seq, request_dir, request) =
+        entry_named(&mut reader, "request:may I proceed", SOON).expect("the standing request");
+    assert_eq!(request_dir, PipeDir::Out);
+
+    drop(reader);
+    let mut reader = SeqReader::at(live.session.path(), request_seq).expect("the restarted node");
+    let (same_seq, same_dir, same) = next_entry(&mut reader, SOON).expect("the request comes back");
+    assert_eq!((same_seq, same_dir, same), (request_seq, request_dir, request));
+
+    write(&live.session, "yes").expect("the answer to the standing request");
+    let mut rest = Vec::new();
+    while let Some((_, _, line)) = next_entry(&mut reader, SOON) {
+        rest.push(line.clone());
+        if line == "turn:done" {
+            break;
+        }
+    }
+    assert!(
+        rest.iter().any(|l| l == "turn:answered yes"),
+        "the rest of the turn is gone: {rest:?}"
+    );
+
+    close(&live.session).expect("close");
+    live.exit(SOON);
+    let (start, log) = live.log();
+    assert!(start == 0, "the small log was trimmed: {start}");
+    assert!(contains(&log, b"turn:done"));
 }
