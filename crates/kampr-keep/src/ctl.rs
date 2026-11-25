@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 const RETRY: Duration = Duration::from_secs(2);
 const REPLY: Duration = Duration::from_secs(5);
 pub(crate) const HOLDER_MAX: usize = 256;
+pub(crate) const MAX_REQUEST: usize = 64 * 1024;
 
 fn request(session: &SessionDir, line: &str) -> io::Result<UnixStream> {
     let path = session.path().join(CTL);
@@ -112,6 +113,9 @@ pub fn write(session: &SessionDir, line: &str) -> io::Result<()> {
             io::ErrorKind::InvalidInput,
             "a written line must not carry a newline",
         ));
+    }
+    if line.len() > MAX_REQUEST {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "a written line is too long"));
     }
     let stream = request(session, &format!("write {line}\n"))?;
     let mut reply = String::new();

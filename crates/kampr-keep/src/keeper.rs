@@ -1,4 +1,4 @@
-use crate::ctl::{send_fd, set_winsize};
+use crate::ctl::{MAX_REQUEST, send_fd, set_winsize};
 use crate::dir::{
     CTL, EXIT, Exit, How, Image, KEEPER, KeeperInfo, Mode, SIZE, SPEC, SessionDir, Size, Spec, now_unix,
     write_json,
@@ -597,7 +597,10 @@ impl Keeper<'_> {
             return Ok(());
         }
         let mut line = String::new();
-        BufReader::new((&stream).take(64 * 1024)).read_line(&mut line)?;
+        BufReader::new((&stream).take(MAX_REQUEST as u64)).read_line(&mut line)?;
+        if !line.ends_with('\n') {
+            return (&stream).write_all(b"error request too long\n");
+        }
         let line = line.trim_end();
         match line.split_once(' ').unwrap_or((line, "")) {
             ("fd", "") if self.mode == Mode::Pty => send_fd(&stream, self.out),

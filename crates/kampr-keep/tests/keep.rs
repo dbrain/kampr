@@ -545,3 +545,95 @@ fn a_node_restarting_mid_turn_comes_back_to_the_standing_request_and_the_rest_of
     assert!(start == 0, "the small log was trimmed: {start}");
     assert!(contains(&log, b"turn:done"));
 }
+
+/// A USR1 re-exec of a pipe-mode keeper hands the child and the log back to the new image (v2
+/// handover, two fds from the fd store), and a node re-opening from a standing request's seq
+/// comes back to that same request and the rest of the turn.
+#[test]
+fn a_pipe_keeper_re_execd_on_usr1_comes_back_to_the_standing_request() {
+    let root = root();
+    let mut spec = sh(FAKE_TURN);
+    spec.mode = Mode::Pipe;
+    let live = Live::spawn(root.path(), spec, Launch::Detached);
+    let (keeper, child) = (live.keeper_pid(), live.child());
+
+    let mut reader = SeqReader::at(live.session.path(), 0).expect("a reader from the start");
+    write(&live.session, "hello").expect("the first line to the child");
+    let (request_seq, request_dir, request) =
+        entry_named(&mut reader, "request:may I proceed", SOON).expect("the standing request");
+    assert_eq!(request_dir, PipeDir::Out);
+    drop(reader);
+
+    unsafe { libc::kill(keeper as i32, libc::SIGUSR1) };
+    assert!(
+        until(SOON, || live
+            .session
+            .keeper()
+            .is_some_and(|k| k.how == How::ReExec)),
+        "the keeper never re-exec'd: {:?}",
+        live.session.keeper()
+    );
+    let info = live.session.keeper().expect("keeper.json");
+    assert_eq!(
+        (info.keeper, info.child),
+        (keeper, child),
+        "the child changed across the re-exec"
+    );
+
+    let mut reader = SeqReader::at(live.session.path(), request_seq).expect("the restarted node");
+    let (same_seq, same_dir, same) = next_entry(&mut reader, SOON).expect("the request comes back");
+    assert_eq!((same_seq, same_dir, same), (request_seq, request_dir, request));
+
+    write(&live.session, "yes").expect("the answer to the standing request");
+    let mut rest = Vec::new();
+    while let Some((_, _, line)) = next_entry(&mut reader, SOON) {
+        rest.push(line.clone());
+        if line == "turn:done" {
+            break;
+        }
+    }
+    assert!(
+        rest.iter().any(|l| l == "turn:answered yes"),
+        "the rest of the turn is gone: {rest:?}"
+    );
+
+    close(&live.session).expect("close");
+    live.exit(SOON);
+}
+
+#[test]
+fn an_overlong_write_is_refused_and_never_reaches_the_child() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixStream;
+
+    let root = root();
+    let mut spec = sh("read l; echo \"GOT:$l\"; exec cat");
+    spec.mode = Mode::Pipe;
+    let live = Live::spawn(root.path(), spec, Launch::Detached);
+
+    // Straight at the socket, past any client cap: the keeper must refuse, not ack.
+    let mut stream = UnixStream::connect(live.session.path().join("ctl.sock")).expect("connect");
+    let long = format!("write {}\n", "x".repeat(64 * 1024 + 100));
+    stream.write_all(long.as_bytes()).expect("send the overlong request");
+    stream.set_read_timeout(Some(SOON)).expect("timeout");
+    let mut reply = String::new();
+    BufReader::new(stream).read_line(&mut reply).expect("a reply");
+    assert!(reply.starts_with("error"), "an overlong write was not refused: {reply:?}");
+
+    close(&live.session).expect("close");
+    live.exit(SOON);
+    let (_, log) = live.log();
+    assert!(!contains(&log, b"GOT:"), "the truncated line reached the child");
+}
+
+#[test]
+fn the_client_refuses_an_overlong_write() {
+    let root = root();
+    let mut spec = sh("exec cat");
+    spec.mode = Mode::Pipe;
+    let live = Live::spawn(root.path(), spec, Launch::Detached);
+    let long = "x".repeat(64 * 1024 + 1);
+    assert!(write(&live.session, &long).is_err(), "an overlong line is refused");
+    close(&live.session).expect("close");
+    live.exit(SOON);
+}

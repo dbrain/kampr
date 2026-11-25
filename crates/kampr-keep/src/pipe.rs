@@ -79,21 +79,23 @@ impl PipeLog {
 }
 
 fn last_seq(dir: &Path) -> io::Result<Option<u64>> {
-    let offsets = segments(dir)?;
-    let Some(&last) = offsets.last() else {
-        return Ok(None);
-    };
-    let bytes = std::fs::read(dir.join(segment_name(last)))?;
-    let Some(end) = bytes.iter().rposition(|&b| b == b'\n') else {
-        return Ok(None);
-    };
-    let start = bytes[..end]
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .map(|p| p + 1)
-        .unwrap_or(0);
-    let entry: Entry = serde_json::from_slice(&bytes[start..end])?;
-    Ok(Some(entry.s))
+    // A roll opens the next segment empty, and a crash can tear its first entry, so the newest
+    // file may hold no line the numbering can resume from; walk back to one that does.
+    for &offset in segments(dir)?.iter().rev() {
+        let bytes = std::fs::read(dir.join(segment_name(offset)))?;
+        let Some(end) = bytes.iter().rposition(|&b| b == b'\n') else {
+            continue;
+        };
+        let start = bytes[..end]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        if let Ok(entry) = serde_json::from_slice::<Entry>(&bytes[start..end]) {
+            return Ok(Some(entry.s));
+        }
+    }
+    Ok(None)
 }
 
 pub struct SeqReader {
@@ -101,6 +103,7 @@ pub struct SeqReader {
     start: u64,
     line: Vec<u8>,
     buf: Vec<u8>,
+    truncated: bool,
 }
 
 impl SeqReader {
@@ -112,6 +115,7 @@ impl SeqReader {
             start: start_seq,
             line: Vec::new(),
             buf: vec![0u8; 64 * 1024],
+            truncated: false,
         })
     }
 
@@ -123,6 +127,10 @@ impl SeqReader {
                 if let Ok(entry) = serde_json::from_slice::<Entry>(&complete)
                     && entry.s >= self.start
                 {
+                    if self.truncated && entry.s > self.start {
+                        self.truncated = false;
+                        return Ok(PipeRead::Truncated { oldest_seq: entry.s });
+                    }
                     return Ok(PipeRead::Entry(PipeEntry {
                         seq: entry.s,
                         dir: entry.d,
@@ -135,6 +143,7 @@ impl SeqReader {
                 Ok(Read::Data(n)) => self.line.extend_from_slice(&self.buf[..n]),
                 Ok(Read::CaughtUp) => return Ok(PipeRead::CaughtUp),
                 Ok(Read::Truncated { .. }) => {
+                    self.truncated = true;
                     self.line.clear();
                     continue;
                 }
@@ -145,5 +154,71 @@ impl SeqReader {
 
     pub fn wait(&mut self, timeout: Duration) -> io::Result<bool> {
         self.inner.wait(timeout)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::log::SEGMENT;
+
+    fn append_len(seq: u64, line: &str) -> u64 {
+        serde_json::to_vec(&Entry {
+            s: seq,
+            d: PipeDir::In,
+            l: line.to_string(),
+        })
+        .expect("json")
+        .len() as u64
+            + 1
+    }
+
+    fn total_size(dir: &Path) -> u64 {
+        segments(dir)
+            .expect("segments")
+            .into_iter()
+            .map(|o| std::fs::metadata(dir.join(segment_name(o))).expect("meta").len())
+            .sum()
+    }
+
+    // A write that lands exactly on a segment boundary rolls an empty segment behind the
+    // entries, so the newest file holds no line at all.
+    #[test]
+    fn reopening_a_log_whose_newest_segment_is_empty_keeps_numbering() {
+        let dir = tempfile::tempdir().expect("dir");
+        let cap = 4 * SEGMENT;
+        let mut log = PipeLog::open(dir.path(), cap).expect("open");
+        let line = "x".repeat((SEGMENT - append_len(0, "")) as usize);
+        log.append_in(&line).expect("append");
+        assert_eq!(total_size(dir.path()), SEGMENT, "the log ends on the boundary");
+        assert_eq!(
+            segments(dir.path()).expect("segments").last(),
+            Some(&SEGMENT),
+            "the roll opened an empty segment"
+        );
+
+        drop(log);
+        let next = PipeLog::open(dir.path(), cap)
+            .expect("reopen")
+            .append_in("after the gap")
+            .expect("append");
+        assert_eq!(next, 1, "numbering continued past the surviving entry");
+    }
+
+    #[test]
+    fn a_reader_reopened_from_a_rolled_off_seq_is_told_the_oldest_that_remains() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mut log = PipeLog::open(dir.path(), SEGMENT).expect("open");
+        let line = "x".repeat(64 * 1024);
+        for _ in 0..40 {
+            log.append_in(&line).expect("append");
+        }
+        drop(log);
+
+        let mut reader = SeqReader::at(dir.path(), 0).expect("reader");
+        match reader.read().expect("read") {
+            PipeRead::Truncated { oldest_seq } => assert!(oldest_seq > 0, "seq 0 was rolled off"),
+            other => panic!("the rolled-off start was lost: {other:?}"),
+        }
     }
 }
