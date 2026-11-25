@@ -45,7 +45,8 @@ STILL DOABLE WITHOUT A TURN:
 
 ## Orchestration (in flight)
 
-Built and committed so far: s1 (Phase 1), s2 (docs/22), s3 (Phase 4). Now in flight:
+Built and committed so far: s1 (Phase 1), s2 (docs/22), s3 (Phase 4), s7 (Phase 4 fixes,
+278e74b5). Now in flight:
 
 - **s4** — review of docs/22-parity.md.
 - **s6 — Phase 2a (the wire, Rust only)**: additive `convo.*` frames in `wire.rs` (both
@@ -53,14 +54,15 @@ Built and committed so far: s1 (Phase 1), s2 (docs/22), s3 (Phase 4). Now in fli
   the new client verbs, and `MuffitConversation` lifting muffit's existing capabilities into the
   new seam `Update`s (controls, actions, tasks, task-output, trouble, context, cost, limits,
   session). No Kotlin (that's Phase 2b).
-- **s7 — Phase 4 fixes**: the three defects s5's review found on the durability path (seq resume
-  resetting to 0, `Truncated` never emitted, overlong `write` falsely acked) + a USR1-reexec pipe
-  test. `kampr-keep` only.
 - **s8 — Phase 3 (muffit widened)**: the seven capabilities in the **muffit repo** (ask tool, live
   child + answered prompts, shell tasks, tool-arg deltas/unqueue/clear/fork/rename, the
   control-and-action listing verb tested against muffit's own TUI, provider/billing + rate-limit
   state, prompt events + typed REST bodies). On its own `conv-sources` branch there; leaves the
   unrelated in-flight muffit changes alone.
+- **s10 — Phase 4 re-review fix**: s9's re-review found a real new defect (a spurious `Truncated`
+  when the standing seq survives the roll — the exact recovery path Phase 4 exists for) plus two
+  hygiene items (the client `write` cap unguarded by its test; the 65536-vs-65529 boundary
+  mismatch). TDD, `kampr-keep` only, then a re-review.
 
 - **s1 — Phase 1 (the seam)**: `kampr-core/src/conversation/` module with `Conversation`/`Source`
   traits + the types; turn/block/facet moved out of `kampr-journal` (parsers stay); `MuffitSource`
@@ -77,11 +79,13 @@ Built and committed so far: s1 (Phase 1), s2 (docs/22), s3 (Phase 4). Now in fli
   systemd 2-fd lifecycle. **MERGED** into `conv-sources` (b3b5411c, +507/−57, kampr-keep only);
   `make test-fast` 2072 passed; TDD restart-mid-turn test against a hermetic shell-script fake.
   Review (s5) found 3 defects on the durability path (seq-resume-to-0, `Truncated` never emitted,
-  overlong `write` falsely acked) — fixes committed (278e74b5, kampr-keep 43/43); re-review in
-  flight (s9).
+  overlong `write` falsely acked) — fixes committed (278e74b5, kampr-keep 46/46). Re-review (s9)
+  confirmed all three fixed-correctly (each test fails without the fix) but found a **new** defect
+  the fix introduced: a spurious `Truncated` when the standing seq survives the roll (the exact
+  recovery path Phase 4 exists for) + 2 hygiene items — fix in flight (s10), then a re-review.
 
 Critical path: **Phase 2a** (wire, Rust — in flight, s6) → **Phase 2b** (client UI, Kotlin) →
-**Phase 5** (kampr-claude) → **Phase 7** (pane pump). Phase 4 (s3 + fixes s7, re-review s9) feeds Phase 5.
+**Phase 5** (kampr-claude) → **Phase 7** (pane pump). Phase 4 (s3 + fixes s7, re-review fix s10) feeds Phase 5.
 
 Phase 2 split on the toolchain boundary for review: **2a (Rust, s6)** adds `convo.abilities`,
 `convo.controls`, `convo.actions`, `convo.tasks`, `convo.task`, `convo.trouble`, `convo.limits`,
@@ -143,7 +147,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 3 — muffit widened (muffit repo) — IN FLIGHT (s8)
 
-## Phase 4 — a keeper for a process that speaks lines — DONE (b3b5411c + fixes 278e74b5); re-review in flight (s9)
+## Phase 4 — a keeper for a process that speaks lines — b3b5411c + fixes 278e74b5; re-review (s9) found a new spurious-`Truncated` defect + 2 hygiene → fix in flight (s10), then re-review
 
 ## Phase 5 — Claude with no terminal — not started
 
