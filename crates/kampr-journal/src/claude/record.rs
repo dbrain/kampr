@@ -8,6 +8,10 @@ pub struct Record {
     #[serde(rename = "type")]
     pub kind: String,
     pub uuid: Option<String>,
+    #[serde(rename = "parentUuid")]
+    pub parent_uuid: Option<String>,
+    #[serde(rename = "subtype")]
+    pub subtype: Option<String>,
     pub timestamp: Option<String>,
     pub cwd: Option<String>,
     #[serde(rename = "isSidechain")]
@@ -20,6 +24,30 @@ pub struct Record {
     #[serde(rename = "toolUseResult")]
     pub tool_use_result: Option<Value>,
     pub attachment: Option<Attached>,
+    /// A turn the API refused: `true` with `terminal_reason: "api_error"`. `subtype` says
+    /// `"success"` on the very line, so it is not the question (#651).
+    #[serde(rename = "is_error")]
+    pub is_error: Option<bool>,
+    #[serde(rename = "terminal_reason")]
+    pub terminal_reason: Option<String>,
+    /// The sentence a refused turn ended with, on the `result` line that says it.
+    #[serde(rename = "result")]
+    pub result: Option<String>,
+    /// A retry the harness is about to make: `system` records of subtype `api_error` (#652).
+    /// `error` there is an object; on the `isApiErrorMessage` record below it is the kind's word.
+    #[serde(rename = "error")]
+    pub error: Option<Value>,
+    #[serde(rename = "retryAttempt")]
+    pub retry_attempt: Option<u32>,
+    #[serde(rename = "maxRetries")]
+    pub max_retries: Option<u32>,
+    #[serde(rename = "retryInMs")]
+    pub retry_in_ms: Option<u64>,
+    /// The record that carries the sentence the TUI prints when a turn is refused (#652).
+    #[serde(rename = "isApiErrorMessage")]
+    pub is_api_error_message: Option<bool>,
+    #[serde(rename = "apiErrorStatus")]
+    pub api_error_status: Option<u16>,
 }
 
 /// The harness files twelve kinds of `attachment` record and one of them is conversation: a prompt
@@ -52,6 +80,20 @@ impl Attached {
 pub fn queued_prompt(record: &Record) -> Option<&Content> {
     let attached = record.attachment.as_ref()?;
     attached.spoken().then_some(attached.prompt.as_ref()).flatten()
+}
+
+/// Whether a `user` record carries the operator's own words, as against a tool's result coming
+/// back: the difference between a new turn starting and a turn continuing.
+pub fn speaks(record: &Record) -> bool {
+    let Some(content) = record.message.as_ref().and_then(|m| m.content.as_ref()) else {
+        return false;
+    };
+    match content {
+        Content::Text(text) => !text.is_empty(),
+        Content::Blocks(blocks) => blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Text { .. })),
+    }
 }
 
 pub fn take_queued_prompt(record: &mut Record) -> Option<Content> {

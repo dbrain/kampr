@@ -18,6 +18,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 use tokio::sync::{broadcast, oneshot, watch};
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -44,7 +45,49 @@ struct State {
     asks: HashMap<String, VecDeque<Ask>>,
     live: HashMap<String, Live>,
     decided: HashMap<String, String>,
+    facts: HashMap<String, Facts>,
     next: u64,
+}
+
+/// What a pane's hooks have said about its running turn, apart from its dialogs: the failure a
+/// refused turn ended in, the tools in flight with their start times, the subagents it has
+/// launched, and the shells Claude itself lists as still running.
+#[derive(Default, Clone)]
+pub struct Facts {
+    pub failure: Option<Failure>,
+    /// A tool in flight, by the call's own id, and when it started.
+    pub tools: HashMap<String, SystemTime>,
+    /// A tool that has come back, by the call's own id, and how it came back.
+    pub tools_done: HashMap<String, bool>,
+    pub subs: HashMap<String, Sub>,
+    /// The running shells Claude's own `Stop` lists: its word for what is still going when a
+    /// turn ends, against the list a reader would fold from the transcript.
+    pub bg: Vec<Bg>,
+}
+
+/// The `error` a `StopFailure` hook carried (#652): the kind's word and the sentence it said.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Failure {
+    pub kind: String,
+    pub text: String,
+    pub at: SystemTime,
+}
+
+/// A subagent by the `agent_id` its hooks name: when it started, what kind of agent it is, and
+/// when it stopped.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Sub {
+    pub kind: Option<String>,
+    pub since: SystemTime,
+    pub ended: Option<SystemTime>,
+}
+
+/// One of the shells a `Stop`'s `background_tasks` lists.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Bg {
+    pub id: String,
+    pub status: String,
+    pub description: Option<String>,
 }
 
 const GONE: &str = "that question has already been answered";
@@ -155,6 +198,12 @@ impl Hooks {
 
     pub fn live(&self, pane: &str) -> Option<String> {
         self.state.lock().unwrap().live.get(pane).map(|l| l.text.clone())
+    }
+
+    /// What this pane's hooks have said about its running turn. A pane the hooks never spoke
+    /// for answers nothing at all.
+    pub fn facts(&self, pane: &str) -> Option<Facts> {
+        self.state.lock().unwrap().facts.get(pane).cloned()
     }
 
     pub fn answer(
@@ -308,6 +357,123 @@ impl Hooks {
         }
     }
 
+    fn fail(&self, pane: &str, kind: &str, text: &str) {
+        let mut state = self.state.lock().unwrap();
+        state.facts.entry(pane.to_string()).or_default().failure = Some(Failure {
+            kind: kind.to_string(),
+            text: text.to_string(),
+            at: SystemTime::now(),
+        });
+        drop(state);
+        self.bump();
+    }
+
+    fn tool_started(&self, pane: &str, event: &Value) {
+        let Some(id) = event["tool_use_id"].as_str() else {
+            return;
+        };
+        let mut state = self.state.lock().unwrap();
+        state.facts.entry(pane.to_string()).or_default().tools.insert(
+            id.to_string(),
+            SystemTime::now(),
+        );
+        drop(state);
+        self.bump();
+    }
+
+    fn tool_done(&self, pane: &str, tool_use_id: Option<&str>, ok: bool) {
+        let Some(tool) = tool_use_id else {
+            return;
+        };
+        let mut state = self.state.lock().unwrap();
+        let moved = state
+            .facts
+            .get_mut(pane)
+            .and_then(|facts| facts.tools.remove(tool))
+            .is_some();
+        if let Some(facts) = state.facts.get_mut(pane) {
+            facts.tools_done.insert(tool.to_string(), ok);
+        }
+        drop(state);
+        if moved {
+            self.bump();
+        }
+    }
+
+    fn sub_started(&self, pane: &str, event: &Value) {
+        let Some(id) = event["agent_id"].as_str() else {
+            return;
+        };
+        let mut state = self.state.lock().unwrap();
+        state
+            .facts
+            .entry(pane.to_string())
+            .or_default()
+            .subs
+            .entry(id.to_string())
+            .or_insert_with(|| Sub {
+                kind: event["agent_type"].as_str().map(str::to_string),
+                since: SystemTime::now(),
+                ended: None,
+            });
+        drop(state);
+        self.bump();
+    }
+
+    fn sub_ended(&self, pane: &str, event: &Value) {
+        let Some(id) = event["agent_id"].as_str() else {
+            return;
+        };
+        let moved = self
+            .state
+            .lock()
+            .unwrap()
+            .facts
+            .get_mut(pane)
+            .and_then(|facts| facts.subs.get_mut(id))
+            .map(|sub| {
+                sub.ended = Some(SystemTime::now());
+                true
+            })
+            .unwrap_or(false);
+        if moved {
+            self.bump();
+        }
+    }
+
+    fn background(&self, pane: &str, event: &Value) {
+        let tasks = event["background_tasks"].as_array().cloned().unwrap_or_default();
+        let list: Vec<Bg> = tasks
+            .iter()
+            .filter_map(|t| {
+                Some(Bg {
+                    id: t["id"].as_str()?.to_string(),
+                    status: t["status"].as_str().unwrap_or_default().to_string(),
+                    description: t["description"].as_str().map(str::to_string),
+                })
+            })
+            .collect();
+        let mut state = self.state.lock().unwrap();
+        state.facts.entry(pane.to_string()).or_default().bg = list;
+        drop(state);
+        self.bump();
+    }
+
+    fn forget_turn(&self, pane: &str) {
+        let mut state = self.state.lock().unwrap();
+        let facts = state.facts.get_mut(pane);
+        if let Some(facts) = facts {
+            facts.failure = None;
+            facts.tools.clear();
+            facts.tools_done.clear();
+        }
+        drop(state);
+    }
+
+    fn forget(&self, pane: &str) {
+        self.state.lock().unwrap().facts.remove(pane);
+    }
+
     fn display(&self, pane: &str, event: &Value) {
         let message = event["message_id"].as_str().unwrap_or_default();
         let delta = event["delta"].as_str().unwrap_or_default();
@@ -344,26 +510,46 @@ impl Hooks {
             // at once and the form is the desk's (#638).
             "Elicitation" => drop(self.ask(&pane, &event, Card::elicitation(&event))),
             "ElicitationResult" => self.release(&pane, |ask| ask.card.elicits()),
-            "PostToolUse" | "PostToolUseFailure" | "PermissionDenied" => {
+            "PostToolUse" => {
                 let tool = event["tool_use_id"].as_str();
                 self.release(&pane, |ask| tool.is_some() && ask.tool_use_id.as_deref() == tool);
+                self.tool_done(&pane, tool, true);
+            }
+            "PostToolUseFailure" | "PermissionDenied" => {
+                let tool = event["tool_use_id"].as_str();
+                self.release(&pane, |ask| tool.is_some() && ask.tool_use_id.as_deref() == tool);
+                self.tool_done(&pane, tool, false);
             }
             // The main agent's turn ends, and a finished background task starts the next, while a
             // background subagent's request is still held (#657).
             "UserPromptSubmit" => {
                 self.release(&pane, |ask| !ask.card.subagent());
                 self.quiet(&pane);
+                self.forget_turn(&pane);
                 if let Some(prompt) = event["prompt"].as_str() {
                     let _ = self.heard.send((pane, prompt.to_string()));
                 }
             }
-            "Stop" | "StopFailure" => {
+            "Stop" => {
                 self.release(&pane, |ask| !ask.card.subagent());
                 self.quiet(&pane);
+                self.forget_turn(&pane);
+                self.background(&pane, &event);
             }
+            "StopFailure" => {
+                self.release(&pane, |ask| !ask.card.subagent());
+                self.quiet(&pane);
+                let kind = event["error"].as_str().unwrap_or_default();
+                let text = event["last_assistant_message"].as_str().unwrap_or_default();
+                self.fail(&pane, kind, text);
+            }
+            "PreToolUse" => self.tool_started(&pane, &event),
+            "SubagentStart" => self.sub_started(&pane, &event),
+            "SubagentStop" => self.sub_ended(&pane, &event),
             "SessionEnd" => {
                 self.release(&pane, |_| true);
                 self.quiet(&pane);
+                self.forget(&pane);
             }
             "MessageDisplay" => self.display(&pane, &event),
             _ => {}

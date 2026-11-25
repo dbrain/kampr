@@ -816,6 +816,7 @@ fn installed(home: &Path) -> Value {
     let any = |timeout: Option<u64>| json!([ { "hooks": [ run(timeout) ] } ]);
     json!({
         "PermissionRequest": tool(Some(3600)),
+        "PreToolUse": tool(Some(5)),
         "PostToolUse": tool(None),
         "PostToolUseFailure": tool(None),
         "PermissionDenied": tool(None),
@@ -825,6 +826,8 @@ fn installed(home: &Path) -> Value {
         "ElicitationResult": any(Some(5)),
         "Stop": any(Some(10)),
         "StopFailure": any(Some(10)),
+        "SubagentStart": any(Some(5)),
+        "SubagentStop": any(Some(5)),
         "SessionEnd": any(Some(10)),
     })
 }
@@ -1913,4 +1916,229 @@ async fn a_dialog_the_node_answered_is_not_read_off_the_screen_while_it_is_still
             "an answered dialog came back off the screen: {read:?}"
         );
     }
+}
+
+/// The session's own directory beside its transcript, where the harness files `tasks` and
+/// `subagents`.
+fn session_dir(c: &Hooked) -> PathBuf {
+    let cwd = std::fs::canonicalize(c.h.work()).unwrap();
+    c.home()
+        .join(".claude/projects")
+        .join(cwd.to_string_lossy().replace('/', "-"))
+        .join(SESSION)
+}
+
+/// #652: the `StopFailure` hook carries the error kind and the sentence, and a turn that failed
+/// is one the conversation says so.
+#[tokio::test]
+async fn a_turn_that_fails_says_so_on_the_conversation() {
+    let mut c = Hooked::start().await;
+    c.watch(true).await;
+    c.fire(json!({
+        "hook_event_name": "StopFailure",
+        "error": "authentication_failed",
+        "last_assistant_message": "Not logged in · Please run /login",
+    }));
+    let frame = c
+        .client
+        .until(
+            "the trouble",
+            |c| {
+                c.others
+                    .iter()
+                    .position(|v| v["t"] == "convo.trouble" && v["trouble"]["kind"] == "not-logged-in")
+                    .map(|at| c.others.remove(at))
+            },
+        )
+        .await;
+    assert_eq!(
+        frame["trouble"]["text"],
+        "Not logged in · Please run /login"
+    );
+    assert_eq!(frame["pane"], json!(c.pane));
+}
+
+/// A `StopFailure` a new prompt supersedes: the trouble is cleared, not left standing.
+#[tokio::test]
+async fn a_new_prompt_clears_the_trouble_a_failure_left() {
+    let mut c = Hooked::start().await;
+    c.watch(true).await;
+    c.fire(json!({
+        "hook_event_name": "StopFailure",
+        "error": "authentication_failed",
+        "last_assistant_message": "Not logged in · Please run /login",
+    }));
+    c.client
+        .until(
+            "the trouble",
+            |c| {
+                c.others
+                    .iter()
+                    .any(|v| v["t"] == "convo.trouble" && !v["trouble"].is_null())
+                    .then_some(())
+            },
+        )
+        .await;
+    c.fire(json!({ "hook_event_name": "UserPromptSubmit", "prompt": "again" }));
+    c.client
+        .until(
+            "the trouble cleared",
+            |c| {
+                c.others
+                    .iter()
+                    .position(|v| v["t"] == "convo.trouble" && v["trouble"].is_null())
+                    .map(|at| c.others.remove(at))
+            },
+        )
+        .await;
+}
+
+/// #656: `Stop.background_tasks` is Claude's own list of what is still running when the turn
+/// ends, and the pane's task strip is what shows it.
+#[tokio::test]
+async fn what_is_still_running_is_claudes_own_list_when_the_turn_stops() {
+    let mut c = Hooked::start().await;
+    c.watch(true).await;
+    c.fire(json!({
+        "hook_event_name": "Stop",
+        "background_tasks": [
+            { "id": "b1", "type": "shell", "status": "running", "description": "sleep 4; echo shell-finished" },
+        ],
+    }));
+    let frame = c
+        .client
+        .until(
+            "the task list",
+            |c| {
+                c.others
+                    .iter()
+                    .position(|v| v["t"] == "convo.tasks" && v["tasks"].as_array().map(|t| t.len()) == Some(1))
+                    .map(|at| c.others.remove(at))
+            },
+        )
+        .await;
+    assert_eq!(frame["tasks"][0]["id"], "b1");
+    assert_eq!(frame["tasks"][0]["kind"], "shell");
+    assert_eq!(frame["tasks"][0]["state"], "running");
+    assert_eq!(frame["tasks"][0]["title"], "sleep 4; echo shell-finished");
+}
+
+/// A foreground `Bash`'s output file is named by a task id no transcript record carries (#649),
+/// so the `PreToolUse` that starts it is the key: the newest file in `tasks` after it is the one.
+/// The pane's stream is the file's, under the call's own id.
+#[tokio::test]
+async fn a_foreground_shells_output_is_streamed_from_its_task_file() {
+    use std::io::Write;
+    let mut c = Hooked::start().await;
+    c.watch(true).await;
+    let tasks = session_dir(&c).join("tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+
+    c.fire(json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "for i in 1 2; do echo line $i; sleep 0.3; done" },
+        "tool_use_id": "t-shell-1",
+    }));
+    let out = tasks.join("bm0x7nbxx.output");
+    std::fs::write(&out, "line 1\n").unwrap();
+
+    c.client
+        .until(
+            "the shell's first line",
+            |c| {
+                c.others
+                    .iter()
+                    .position(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && v["text"] == "line 1\n")
+                    .map(|at| c.others.remove(at))
+            },
+        )
+        .await;
+
+    std::thread::sleep(Duration::from_millis(400));
+    let mut f = std::fs::OpenOptions::new().append(true).open(&out).unwrap();
+    f.write_all(b"line 2\n").unwrap();
+    f.flush().unwrap();
+    c.client
+        .until(
+            "the shell's second line",
+            |c| {
+                c.others
+                    .iter()
+                    .any(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && v["text"] == "line 2\n")
+                    .then_some(())
+            },
+        )
+        .await;
+
+    c.fire(json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_use_id": "t-shell-1",
+        "tool_response": { "stdout": "line 1\nline 2\n" },
+    }));
+    let ended = c
+        .client
+        .until(
+            "the shell's end",
+            |c| {
+                c.others
+                    .iter()
+                    .position(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && !v["ended"].is_null())
+                    .map(|at| c.others.remove(at))
+            },
+        )
+        .await;
+    assert_eq!(ended["ended"]["ok"], json!(true));
+}
+
+/// A subagent's conversation is followed live from the strip: what the client opens by the
+/// handle a card carries keeps arriving while the agent works (docs/12 W2).
+#[tokio::test]
+async fn a_subagents_conversation_is_followed_live_from_the_strip() {
+    use std::io::Write;
+    let mut c = Hooked::start().await;
+    c.watch(true).await;
+    let sub = session_dir(&c).join("subagents").join("agent-probe.jsonl");
+    std::fs::create_dir_all(sub.parent().unwrap()).unwrap();
+    std::fs::write(
+        &sub,
+        "{\"type\":\"user\",\"uuid\":\"s-1\",\"message\":{\"role\":\"user\",\"content\":\"sweep\"}}\n",
+    )
+    .unwrap();
+
+    let root = kampr_journal::TranscriptRoot::new(c.home().join(".claude")).unwrap();
+    let id = kampr_journal::SubRef::new("claude", &root, &sub).encode();
+    c.client
+        .send(json!({ "t": "convo.sub", "pane": c.pane, "id": id }))
+        .await;
+    c.client
+        .until(
+            "the subagent's first page",
+            |c| {
+                c.others
+                    .iter()
+                    .position(|v| v["t"] == "convo" && v["sub"] == id)
+                    .map(|at| c.others.remove(at))
+            },
+        )
+        .await;
+
+    let mut f = std::fs::OpenOptions::new().append(true).open(&sub).unwrap();
+    f.write_all(
+        b"{\"type\":\"assistant\",\"uuid\":\"s-2\",\"message\":{\"role\":\"assistant\",\"content\":\"swept\"}}\n",
+    )
+    .unwrap();
+    f.flush().unwrap();
+    c.client
+        .until(
+            "the subagent's growth",
+            |c| {
+                c.others
+                    .iter()
+                    .any(|v| v["t"] == "convo.turn" && v["sub"] == id && v["turns"][0]["id"] == "s-2")
+                    .then_some(())
+            },
+        )
+        .await;
 }

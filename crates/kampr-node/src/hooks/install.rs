@@ -6,6 +6,7 @@ const TOOL: Option<&str> = Some("*");
 
 const EVENTS: &[(&str, Option<&str>, Option<u64>)] = &[
     ("PermissionRequest", TOOL, Some(3600)),
+    ("PreToolUse", TOOL, Some(5)),
     ("PostToolUse", TOOL, None),
     ("PostToolUseFailure", TOOL, None),
     ("PermissionDenied", TOOL, None),
@@ -13,6 +14,8 @@ const EVENTS: &[(&str, Option<&str>, Option<u64>)] = &[
     ("MessageDisplay", None, Some(5)),
     ("Elicitation", None, Some(5)),
     ("ElicitationResult", None, Some(5)),
+    ("SubagentStart", None, Some(5)),
+    ("SubagentStop", None, Some(5)),
     ("Stop", None, Some(10)),
     ("StopFailure", None, Some(10)),
     ("SessionEnd", None, Some(10)),

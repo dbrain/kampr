@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::attach::{MAX_RECORD_BYTES, Origin};
 use crate::error::JournalError;
 use crate::live::{self, ScreenReader};
-use crate::model::{Block, Page, Role, Turn};
+use crate::model::{Block, Page, Role, TroubleNews, Turn};
 use crate::search::{ConvoFound, search_turns};
 use crate::store::TurnStore;
 
@@ -17,11 +17,21 @@ pub trait TranscriptParser: Send {
     fn reset(&mut self);
     fn store(&self) -> &TurnStore;
     fn store_mut(&mut self) -> &mut TurnStore;
+    /// Trouble the records read since the last take carry, in the order they carried it.
+    ///
+    /// The default is a parser whose records never do.
+    fn take_trouble(&mut self) -> Vec<TroubleNews> {
+        Vec::new()
+    }
 }
 
 pub trait Journal: Send {
     /// Turns added or revised since the last call. Empty when the transcript has not grown.
     fn poll(&mut self) -> Result<Vec<Turn>, JournalError>;
+    /// Trouble the records read since the last take carry, in the order they carried it.
+    fn take_trouble(&mut self) -> Vec<TroubleNews> {
+        Vec::new()
+    }
     fn page_before(&self, before: Option<&str>, limit: usize) -> Page;
     /// Every turn in the transcript that holds `query`, counted in full and listed up to `cap`.
     /// The client's own search is over the turns it holds; this is over the transcript.
@@ -195,6 +205,10 @@ impl Journal for FileJournal {
         }
 
         Ok(self.parser.store_mut().drain_changed())
+    }
+
+    fn take_trouble(&mut self) -> Vec<TroubleNews> {
+        self.parser.take_trouble()
     }
 
     fn page_before(&self, before: Option<&str>, limit: usize) -> Page {

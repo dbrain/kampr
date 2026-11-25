@@ -2,6 +2,7 @@ mod facet;
 mod record;
 mod running;
 mod subagent;
+pub mod trouble;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -20,7 +21,7 @@ use crate::error::JournalError;
 use crate::facet::{FacetFold, Facets};
 use crate::live::{Layout, LiveBlock, ScreenReader};
 use crate::marker::SessionMarker;
-use crate::model::{Attachment, Block, Role, ToolState, Turn, TurnKind};
+use crate::model::{Attachment, Block, Role, ToolState, TroubleNews, Turn, TurnKind};
 use crate::output;
 use crate::process::{PaneProcess, Started};
 use crate::root::TranscriptRoot;
@@ -269,6 +270,25 @@ pub struct ClaudeParser {
     seq: u64,
     origin: Option<Origin>,
     filed: Option<Filed>,
+    /// Trouble the records read since the last take carried, in the order they carried it.
+    trouble: Vec<TroubleNews>,
+    /// A trouble has gone out and nothing since has said the turn is past it.
+    trouble_open: bool,
+    /// The transcript two processes wrote is a tree, and a reader must not draw two of its lines
+    /// at once (#655). `leaf` is the newest record of the line being drawn; `known` names the
+    /// line every record read belongs to; `branches` holds the lines out of the drawing, each
+    /// with the turns it added past its fork; `cur` is the line in the drawing.
+    leaf: Option<String>,
+    known: HashMap<String, usize>,
+    branches: Vec<Branch>,
+    cur: usize,
+    cur_ids: Vec<String>,
+}
+
+/// A line out of the drawing: the turns it added past where it left the shared history.
+#[derive(Default)]
+struct Branch {
+    turns: Vec<Turn>,
 }
 
 impl TranscriptParser for ClaudeParser {
@@ -300,10 +320,16 @@ impl TranscriptParser for ClaudeParser {
     fn store_mut(&mut self) -> &mut TurnStore {
         &mut self.store
     }
+
+    fn take_trouble(&mut self) -> Vec<TroubleNews> {
+        std::mem::take(&mut self.trouble)
+    }
 }
 
 impl ClaudeParser {
     fn ingest(&mut self, mut record: Record, seq: u64, at: u64) {
+        let line = self.follow(&record);
+        self.note_trouble(&record);
         // An absorbed prompt is a turn the operator took, filed under a record kind of its own
         // because the harness had already started answering when it arrived (#462).
         let absorbed = record.kind == "attachment";
@@ -357,7 +383,104 @@ impl ClaudeParser {
         }
 
         if !turn.blocks.is_empty() {
-            self.store.push(turn);
+            // A record on a line no longer being drawn adds nothing to the drawing.
+            if line.map_or(true, |l| l == self.cur) {
+                self.store.push(turn);
+                self.cur_ids.push(id.clone());
+            }
+        }
+    }
+
+    /// Which line this record belongs to, moving the drawing to it when it is not the one
+    /// drawn. A record with no `uuid` names no line at all.
+    fn follow(&mut self, record: &Record) -> Option<usize> {
+        let Some(uuid) = record.uuid.as_deref() else {
+            return None;
+        };
+        if self.known.contains_key(uuid) {
+            // A duplicate of a record already read in this pass: the drawing does not move.
+            return None;
+        }
+        // The newest record read is what the next one's parent names, whatever line it was on —
+        // a record with no line of its own (a snapshot) sits between two that have one.
+        self.leaf = Some(uuid.to_string());
+        let line = if self.branches.is_empty() {
+            self.branches.push(Branch::default());
+            self.cur
+        } else {
+            match record.parent_uuid.as_deref() {
+                Some(parent) if Some(parent) == self.leaf.as_deref() => self.cur,
+                Some(parent) => self.fork_from(parent),
+                // A record with no parent link cannot be placed, so it continues the line drawn.
+                None => self.cur,
+            }
+        };
+        self.known.insert(uuid.to_string(), line);
+        Some(line)
+    }
+
+    /// Take the line being drawn out of the drawing and open the one that forks off `fork`.
+    ///
+    /// The fork point and everything before it are shared history and stay drawn; the turns
+    /// past it are kept where the line goes, to come back with the line.
+    fn fork_from(&mut self, fork: &str) -> usize {
+        let old = self.cur;
+        let keep = self.cur_ids.iter().position(|id| id == fork);
+        let mut turns = Vec::new();
+        for (i, id) in self.cur_ids.drain(..).enumerate() {
+            if keep.is_some_and(|k| i <= k) {
+                continue;
+            }
+            if let Some(at) = self.store.position(&id) {
+                turns.push(self.store.turns()[at].clone());
+            }
+            self.store.retire(&id);
+        }
+        self.branches[old].turns = turns;
+
+        let mut seed = Vec::new();
+        if let Some(at) = self.store.position(fork)
+            && self.store.turns()[at].blocks.is_empty()
+        {
+            // The fork point's turn went out of the drawing with its own line; bring it back.
+            for branch in self.branches.iter() {
+                if let Some(t) = branch.turns.iter().find(|t| t.id == fork) {
+                    seed.push(t.clone());
+                    break;
+                }
+            }
+        }
+        self.branches.push(Branch { turns: seed });
+        let line = self.branches.len() - 1;
+        self.cur = line;
+        for t in &self.branches[line].turns {
+            self.store.push(t.clone());
+            self.cur_ids.push(t.id.clone());
+        }
+        line
+    }
+
+    /// What a record says about the turn going wrong, in the order the records say it: a retry
+    /// names its attempt and delay, the message record the sentence, the `result` line the end
+    /// of it. A new prompt, and a `result` that ended without error, take it off again — and
+    /// only then, because a read that learned nothing must not take a trouble off the screen.
+    fn note_trouble(&mut self, record: &Record) {
+        if let Some(trouble) = trouble::from_retry(record)
+            .or_else(|| trouble::from_api_message(record))
+            .or_else(|| trouble::from_result(record))
+        {
+            self.trouble.push(TroubleNews::Trouble(trouble));
+            self.trouble_open = true;
+            return;
+        }
+        let closed = match record.kind.as_str() {
+            "result" => true,
+            "user" if record.is_sidechain != Some(true) || self.launched => record::speaks(record),
+            _ => false,
+        };
+        if closed && self.trouble_open {
+            self.trouble.push(TroubleNews::Clear);
+            self.trouble_open = false;
         }
     }
 

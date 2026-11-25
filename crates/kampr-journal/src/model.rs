@@ -131,6 +131,38 @@ pub struct Page {
     pub more: bool,
 }
 
+/// What went wrong with a turn, read off what the harness itself wrote down.
+///
+/// `kind` is an open string the way [`Mode`]'s are: the words are Claude's measured vocabulary
+/// for now, and a client renders the word it is given rather than matching an enum it would have
+/// to be reinstalled to extend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trouble {
+    pub kind: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry: Option<Retry>,
+}
+
+/// A retry of the refused call: which attempt, of how many, and the delay before the next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Retry {
+    pub attempt: u32,
+    pub of: u32,
+    pub in_ms: u64,
+}
+
+/// What one read of the transcript learned about trouble. `Clear` is a word of its own rather
+/// than an empty answer, because a read that learned nothing must not take a trouble off the
+/// screen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TroubleNews {
+    Trouble(Trouble),
+    Clear,
+}
+
 impl Block {
     pub fn md(text: impl Into<String>) -> Self {
         Self::Md {

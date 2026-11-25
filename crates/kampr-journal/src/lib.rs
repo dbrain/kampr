@@ -43,7 +43,9 @@ pub use facet::{
 pub use ledger::Ledger;
 pub use live::{Change, LIVE_ID, LiveBlock, ScreenReader, StatusReader, Watch, retired};
 pub use marker::SessionMarker;
-pub use model::{Attachment, Block, CodeRole, Page, Role, ToolState, Turn, TurnKind};
+pub use model::{
+    Attachment, Block, CodeRole, Page, Retry, Role, ToolState, Trouble, TroubleNews, Turn, TurnKind,
+};
 pub use omp::OmpAdapter;
 pub use process::{Harness, PaneProcess, Started};
 pub use root::TranscriptRoot;

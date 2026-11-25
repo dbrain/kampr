@@ -7,11 +7,12 @@ use kampr_core::provider::AgentStatus;
 use kampr_core::wire::ServerMsg;
 use kampr_journal::{
     Change, Composed, ComposerFeed, ComposerReader, FacetFeed, Facets, Harness, Journal, JournalError,
-    PaneProcess, Registry as Journals, Role, SessionKind, SessionMarker, SessionRef, Turn, Watch,
+    PaneProcess, Registry as Journals, Role, SessionKind, SessionMarker, SessionRef, TroubleNews, Turn,
+    Watch,
 };
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::watch;
 use tokio::time::Instant;
 use tracing::debug;
@@ -394,6 +395,16 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut due = true;
     let mut misses = 0u32;
     let mut emptied = false;
+    // What the transcript's own records say is going wrong, and what the client last was told —
+    // the hooks' `StopFailure` is folded in at the telling, because the transcript is the side
+    // that also says when it is over.
+    let mut transcript_trouble: Option<kampr_journal::Trouble> = None;
+    let mut trouble_out: Option<kampr_core::conversation::Trouble> = None;
+    let mut tasks_out: Vec<kampr_core::conversation::Task> = Vec::new();
+    // The task output files this pump has taken up: the file, how much of it is sent, and the
+    // tool it runs under, where one names it.
+    let mut task_files: std::collections::HashMap<String, (PathBuf, u64, Option<String>)> =
+        std::collections::HashMap::new();
     let mut live = Watch::default();
     let mut was_working = false;
     let mut desk = ComposerFeed::default();
@@ -443,7 +454,9 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // record and *then* goes idle, so withdrawing before that read leaves the client with
         // neither the preview nor its replacement for as long as the follow tick takes to notice.
         if (!live_now || opened.is_none()) && live.showing() {
-            if !flush(&journal, &wire, &global, &held).await {
+            let (ok, news) = flush(&journal, &wire, &global, &held).await;
+            apply_news(&mut transcript_trouble, news);
+            if !ok {
                 return;
             }
             if send_live(&wire, &global, live.stop(), &held).is_err() {
@@ -601,7 +614,12 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     inherited = false;
                     *journal.lock().unwrap() = Some(fresh);
                     warm.lock().unwrap().opened = opened.clone();
-                    if !deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live).await
+                    task_files.clear();
+                    let (delivered, news) =
+                        deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live)
+                            .await;
+                    apply_news(&mut transcript_trouble, news);
+                    if !delivered
                         || !publish_facets(
                             &warm,
                             &journals,
@@ -624,7 +642,11 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // fold that already exist, which is the whole of what warmth buys.
         if std::mem::take(&mut inherited)
             && let Some(path) = opened.clone()
-            && (!deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live).await
+        {
+            let (delivered, news) =
+                deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live).await;
+            apply_news(&mut transcript_trouble, news);
+            if !delivered
                 || !publish_facets(
                     &warm,
                     &journals,
@@ -634,9 +656,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     now.agent.as_deref(),
                     describe(&local),
                 )
-                .await)
-        {
-            return;
+                .await
+            {
+                return;
+            }
         }
 
         let key = (now.agent.clone(), now.cwd.clone(), opened.clone());
@@ -686,8 +709,16 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 }
                 _ => {}
             }
+            // The shells the pane's agent runs write their output to the transcript's `tasks/`
+            // directory, and a watched one is read for whatever it has grown by.
+            if let Some(path) = opened.clone() {
+                if !tasks_tick(&path, &hooks, &herd_pane, &global, &wire, &mut task_files).await {
+                    return;
+                }
+            }
             match drain(&journal).await {
-                Ok(mut turns) if !turns.is_empty() => {
+                Ok((mut turns, news)) if !turns.is_empty() => {
+                    apply_news(&mut transcript_trouble, news);
                     // A record that carries the words the preview is showing replaces it in
                     // this frame. Left to the next screen read, the client files the record
                     // under a preview still standing and draws the message twice until then (#554).
@@ -709,7 +740,9 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         return;
                     }
                 }
-                Ok(_) => {}
+                Ok((_, news)) => {
+                    apply_news(&mut transcript_trouble, news);
+                }
                 Err(e) => {
                     debug!(pane = %global, error = %e, "transcript unreadable; re-deriving");
                     opened = None;
@@ -720,6 +753,32 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 }
             }
             screen_facets.owe();
+        }
+
+        // What is going wrong with the turn, from the transcript's own records and from the
+        // hooks' `StopFailure` folded onto them, sent only when it moves: a trouble is a
+        // standing notice, not a stream. The hooks clear it of their own accord — a new prompt,
+        // a `Stop`, a `SessionEnd` — so a pane whose transcript has not been written yet can
+        // still be told its turn failed.
+        let current = trouble_now(transcript_trouble.as_ref(), &hooks, &herd_pane);
+        if current != trouble_out {
+            if !wire.send(&ServerMsg::ConvoTrouble {
+                pane: global.clone(),
+                trouble: current.clone(),
+            }) {
+                return;
+            }
+            trouble_out = current;
+        }
+        let wanted = tasks_now(&hooks, &herd_pane);
+        if wanted != tasks_out {
+            if !wire.send(&ServerMsg::ConvoTasks {
+                pane: global.clone(),
+                tasks: wanted.clone(),
+            }) {
+                return;
+            }
+            tasks_out = wanted;
         }
 
         // What the harness wrote down beside the turns moves while the turns do: a prompt the
@@ -890,6 +949,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             _ = dirs.changed() => {
                 look.owe();
                 screen_facets.owe();
+                follow.owe();
             }
             woke = wake::frame(frames.as_ref(), FRAME_NET, DESK_POLL), if wants_frames => {
                 match (woke, frames.as_mut()) {
@@ -988,7 +1048,7 @@ async fn deliver(
     transcript: &Path,
     relayed: bool,
     live: &mut HookedLive,
-) -> bool {
+) -> (bool, Vec<TroubleNews>) {
     // What the client is holding *of this transcript*, when this node knows. A page for a
     // transcript it is already showing merges into it; every other page replaces it. Read before
     // [`withdraw`], which takes the record.
@@ -999,12 +1059,13 @@ async fn deliver(
         .filter(|(path, _)| path == transcript)
         .map(|(_, ids)| ids.clone());
     if !withdraw(wire, pane, held, transcript) {
-        return false;
+        return (false, Vec::new());
     }
     // The first read is the page the client is about to be sent, so it must not also arrive behind
     // it as a revision. On a warm pump it is the handful of records written while nobody was
-    // watching; on a cold one it is the whole file.
-    let _ = drain(journal).await;
+    // watching; on a cold one it is the whole file. Its trouble news is handed back, because a
+    // failure at the tail of a resumed session is exactly what the reader wanted to be told.
+    let (_, news) = drain(journal).await.unwrap_or_default();
     match reopened(journal, pane, showing_already.as_deref(), relayed) {
         Some(first) if wire.send(&first) => {
             if let ServerMsg::Convo { turns, .. } | ServerMsg::ConvoTurn { turns, .. } = &first {
@@ -1021,10 +1082,10 @@ async fn deliver(
             };
             tracing::info!(pane = %pane, kind, turns = count, "conversation delivered");
         }
-        _ => return false,
+        _ => return (false, news),
     }
     *held.lock().unwrap() = showing(journal);
-    true
+    (true, news)
 }
 
 /// The facets that go with the conversation just delivered.
@@ -1081,19 +1142,24 @@ async fn publish_facets(
     })
 }
 
-/// Sends whatever the transcript has grown by, if anything. A read that fails is left to the
+/// Sends whatever the transcript has grown by, if anything, and hands back the trouble news the
+/// same read carried, so the caller can file it. A read that fails is left to the
 /// follow tick, which re-derives the transcript rather than dropping a turn.
-async fn flush(journal: &Open, wire: &Wire, pane: &str, held: &Held) -> bool {
+async fn flush(journal: &Open, wire: &Wire, pane: &str, held: &Held) -> (bool, Vec<TroubleNews>) {
     match drain(journal).await {
-        Ok(turns) if !turns.is_empty() => {
+        Ok((turns, news)) if !turns.is_empty() => {
             holding(held, &turns);
-            wire.send(&ServerMsg::ConvoTurn {
-                pane: pane.to_string(),
-                sub: None,
-                turns,
-            })
+            (
+                wire.send(&ServerMsg::ConvoTurn {
+                    pane: pane.to_string(),
+                    sub: None,
+                    turns,
+                }),
+                news,
+            )
         }
-        _ => true,
+        Ok((_, news)) => (true, news),
+        Err(_) => (true, Vec::new()),
     }
 }
 
@@ -1453,14 +1519,355 @@ async fn refold(
 /// **Off the executor**, because the lock it takes is the one `convo.load` also wants and the
 /// work under it is a file read: `poll` re-reads a transcript that can be tens of megabytes, and
 /// the first one after a resolve parses the whole file.
-async fn drain(journal: &Open) -> Result<Vec<Turn>, JournalError> {
+///
+/// The read's trouble news comes off the same lock: a turn the read refused is a word the client
+/// cannot get any other way from the transcript side, and taking it here is what keeps it from
+/// sitting in the journal while the pane shows a failure its records no longer carry.
+async fn drain(journal: &Open) -> Result<(Vec<Turn>, Vec<TroubleNews>), JournalError> {
     let journal = journal.clone();
     tokio::task::spawn_blocking(move || match journal.lock().unwrap().as_mut() {
-        Some(journal) => journal.poll(),
-        None => Ok(Vec::new()),
+        Some(journal) => {
+            let turns = journal.poll()?;
+            Ok((turns, journal.take_trouble()))
+        }
+        None => Ok((Vec::new(), Vec::new())),
     })
     .await
     .unwrap_or_else(|e| Err(JournalError::Io(std::io::Error::other(e))))
+}
+
+/// Files a read's trouble news onto what the transcript last said is going wrong.
+fn apply_news(state: &mut Option<kampr_journal::Trouble>, news: Vec<TroubleNews>) {
+    for item in news {
+        match item {
+            TroubleNews::Trouble(trouble) => *state = Some(trouble),
+            TroubleNews::Clear => *state = None,
+        }
+    }
+}
+
+/// What the pane is to be told is going wrong: the transcript's own word, which is also the side
+/// that says when it is over, and the hooks' `StopFailure` where the transcript has nothing.
+fn trouble_now(
+    transcript: Option<&kampr_journal::Trouble>,
+    hooks: &crate::hooks::Hooks,
+    pane: &str,
+) -> Option<kampr_core::conversation::Trouble> {
+    transcript
+        .cloned()
+        .map(wire_trouble)
+        .or_else(|| hooks.facts(pane).and_then(|facts| facts.failure).map(wire_failure))
+}
+
+/// The transcript's trouble onto the wire's shape, with the fix a known kind names.
+fn wire_trouble(trouble: kampr_journal::Trouble) -> kampr_core::conversation::Trouble {
+    let fix = match trouble.kind.as_str() {
+        "not-logged-in" | "login-expired" => Some(kampr_core::conversation::Fix::Login),
+        "rate-limit" | "overloaded" => trouble
+            .retry
+            .as_ref()
+            .map(|retry| {
+                kampr_core::conversation::Fix::Wait {
+                    until: stamp(SystemTime::now() + Duration::from_millis(retry.in_ms)),
+                }
+            }),
+        _ => None,
+    };
+    kampr_core::conversation::Trouble {
+        kind: trouble.kind,
+        text: trouble.text,
+        status: trouble.status.map(|status| status.to_string()).unwrap_or_default(),
+        retry: trouble
+            .retry
+            .map(|retry| kampr_core::conversation::Retry {
+                attempt: retry.attempt,
+                of: retry.of,
+                in_ms: retry.in_ms,
+            }),
+        fix,
+    }
+}
+
+/// The hooks' `StopFailure`, in the transcript's own kind words: the hook carries the SDK's word,
+/// and the classifier is the one the transcript side already answers with.
+fn wire_failure(failure: crate::hooks::Failure) -> kampr_core::conversation::Trouble {
+    let kind = kampr_journal::claude::trouble::classify(Some(&failure.kind), None, &failure.text);
+    let fix = match kind {
+        "not-logged-in" | "login-expired" => Some(kampr_core::conversation::Fix::Login),
+        _ => None,
+    };
+    kampr_core::conversation::Trouble {
+        kind: kind.to_string(),
+        text: failure.text.clone(),
+        status: String::new(),
+        retry: None,
+        fix,
+    }
+}
+
+/// The tasks the pane's hooks know about, for the `convo.tasks` frame: the subagents it has
+/// launched, and the shells its own `Stop` lists as still running.
+fn tasks_now(hooks: &crate::hooks::Hooks, pane: &str) -> Vec<kampr_core::conversation::Task> {
+    let Some(facts) = hooks.facts(pane) else {
+        return Vec::new();
+    };
+    let mut tasks = facts
+        .subs
+        .iter()
+        .map(|(id, sub)| kampr_core::conversation::Task {
+            id: id.clone(),
+            kind: "agent".to_string(),
+            call: None,
+            parent: None,
+            title: sub.kind.clone(),
+            since: Some(stamp(sub.since)),
+            backgrounded: true,
+            state: if sub.ended.is_some() {
+                kampr_core::conversation::TaskState::Ended
+            } else {
+                kampr_core::conversation::TaskState::Running
+            },
+        })
+        .collect::<Vec<_>>();
+    tasks.extend(facts.bg.iter().map(|bg| kampr_core::conversation::Task {
+        id: bg.id.clone(),
+        kind: "shell".to_string(),
+        call: None,
+        parent: None,
+        title: bg.description.clone(),
+        since: None,
+        backgrounded: true,
+        state: if bg.status == "running" {
+            kampr_core::conversation::TaskState::Running
+        } else {
+            kampr_core::conversation::TaskState::Ended
+        },
+    }));
+    tasks
+}
+
+/// An instant in the transcript's own timestamp words: RFC 3339 at the UTC offset, which the
+/// transcript spells with a `Z`.
+fn stamp(at: SystemTime) -> String {
+    let Ok(elapsed) = at.duration_since(SystemTime::UNIX_EPOCH) else {
+        return String::new();
+    };
+    time::OffsetDateTime::from_unix_timestamp(i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX))
+        .ok()
+        .map(|at| {
+            at.to_offset(time::UtcOffset::UTC)
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default()
+                .replace("+00:00", "Z")
+        })
+        .unwrap_or_default()
+}
+
+/// One task output file's movement since the last tick: what it has grown by, and whether the
+/// tool it runs under has come back.
+struct TaskTick {
+    id: String,
+    path: PathBuf,
+    offset: u64,
+    text: String,
+    ended: Option<bool>,
+    tool: Option<String>,
+}
+
+/// The shells the pane's agent runs write their output to the transcript's `tasks/` directory,
+/// and a watched one is read for whatever it has grown by. A file is taken up for the one tool
+/// in flight it was written after (#649), or for the shell Claude's own `Stop` names it by, and
+/// it is let go when that tool comes back.
+async fn tasks_tick(
+    transcript: &Path,
+    hooks: &crate::hooks::Hooks,
+    pane: &str,
+    global: &str,
+    wire: &Wire,
+    files: &mut std::collections::HashMap<String, (PathBuf, u64, Option<String>)>,
+) -> bool {
+    let dir = transcript.with_extension("").join("tasks");
+    let facts = hooks.facts(pane).unwrap_or_default();
+    let known: Vec<(String, u64, Option<String>)> = files
+        .iter()
+        .map(|(id, (_path, offset, tool))| {
+            (id.clone(), *offset, tool.clone())
+        })
+        .collect();
+    let ticks = tokio::task::spawn_blocking(move || {
+        let mut entries: Vec<(String, PathBuf, Option<SystemTime>)> = Vec::new();
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            return Vec::new();
+        };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(stem) = name.strip_suffix(".output") else {
+                continue;
+            };
+            let mtime = entry.metadata().and_then(|m| m.modified()).ok();
+            entries.push((stem.to_string(), entry.path(), mtime));
+        }
+        // The file a shell writes can land before its `PreToolUse` reaches the node, so a file
+        // that does not postdate the one tool in flight is taken up where it is the newest one
+        // not already followed: one foreground command at a time, the newest file is the answer
+        // (#649).
+        let newest = entries
+            .iter()
+            .filter(|(stem, _, _)| !known.iter().any(|(id, _, _)| id == stem))
+            .filter_map(|(stem, _, mtime)| (*mtime).map(|m| (stem.as_str(), m)))
+            .max_by_key(|(_, mtime)| *mtime)
+            .map(|(stem, _)| stem.to_string());
+        let mut ticks = Vec::new();
+        for (stem, path, mtime) in entries {
+            match known.iter().find(|(id, _, _)| id == &stem) {
+                Some((_, offset, tool)) => {
+                    let (text, ended) = grown(&path, *offset, tool.as_deref(), &facts);
+                    // A shell Claude's own `Stop` still names as running keeps going after its
+                    // tool call came back: it was backgrounded, not finished.
+                    let ended =
+                        ended.filter(|_| !facts.bg.iter().any(|b| b.id == stem));
+                    ticks.push(TaskTick {
+                        id: stem,
+                        offset: text_end(&path, *offset),
+                        text,
+                        ended,
+                        tool: tool.clone(),
+                        path,
+                    });
+                }
+                None => {
+                    let bound = bind(&stem, mtime.as_ref(), newest.as_deref(), &facts);
+                    if bound.is_some() || facts.bg.iter().any(|b| b.id == stem) {
+                        let (text, ended) = grown(&path, 0, bound.as_deref(), &facts);
+                        let offset = text_end(&path, 0);
+                        ticks.push(TaskTick {
+                            id: stem,
+                            path,
+                            offset,
+                            text,
+                            ended,
+                            tool: bound,
+                        });
+                    }
+                }
+            }
+        }
+        ticks
+    })
+    .await
+    .unwrap_or_default();
+    for tick in ticks {
+        let ended = tick.ended;
+        let text = tick.text;
+        let moved = !text.is_empty() || ended.is_some();
+        if !moved {
+            continue;
+        }
+        // The stream is the file's, but it goes out under the call's own id, which is what the
+        // client's tool card carries; a shell Claude's `Stop` names by id has no call, and keeps
+        // its own (#649).
+        let id = tick.tool.clone().unwrap_or_else(|| tick.id.clone());
+        match ended {
+            Some(ok) => {
+                files.remove(&tick.id);
+                if !wire.send(&ServerMsg::ConvoTask {
+                    pane: global.to_string(),
+                    id,
+                    at: now_ms(),
+                    text,
+                    ended: Some(kampr_core::conversation::TaskEnd {
+                        ok,
+                        summary: None,
+                    }),
+                }) {
+                    return false;
+                }
+            }
+            None => {
+                files.insert(
+                    tick.id.clone(),
+                    (tick.path, tick.offset, tick.tool),
+                );
+                if text.is_empty() {
+                    continue;
+                }
+                if !wire.send(&ServerMsg::ConvoTask {
+                    pane: global.to_string(),
+                    id,
+                    at: now_ms(),
+                    text,
+                    ended: None,
+                }) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// A file the pump has not taken up, bound to the tool it was written for: the one tool in
+/// flight, where the file postdates it — or, where it does not, where it is the newest file not
+/// already followed (#649).
+fn bind(
+    stem: &str,
+    mtime: Option<&SystemTime>,
+    newest: Option<&str>,
+    facts: &crate::hooks::Facts,
+) -> Option<String> {
+    let mut in_flight: Vec<String> = facts.tools.keys().cloned().collect();
+    in_flight.sort();
+    if in_flight.len() != 1 {
+        return None;
+    }
+    let tool = in_flight.pop().unwrap();
+    let postdates = mtime.is_some_and(|mtime| {
+        facts
+            .tools
+            .get(&tool)
+            .is_some_and(|started| mtime >= started)
+    });
+    (postdates || Some(stem) == newest).then_some(tool)
+}
+
+/// How much a taken-up file has grown, and whether its tool has come back.
+fn grown(
+    path: &Path,
+    offset: u64,
+    tool: Option<&str>,
+    facts: &crate::hooks::Facts,
+) -> (String, Option<bool>) {
+    let ended = tool
+        .filter(|t| !facts.tools.contains_key(*t))
+        .and_then(|t| facts.tools_done.get(t).copied())
+        .map(|ok| ok);
+    let mut text = String::new();
+    if ended.is_none() {
+        if let Ok(mut file) = std::fs::File::open(path) {
+            use std::io::{Read, Seek, SeekFrom};
+            if let Ok(len) = file.metadata().map(|m| m.len()) {
+                if len > offset {
+                    let mut buf = Vec::new();
+                    let _ = file.seek(SeekFrom::Start(offset));
+                    let _ = file.read_to_end(&mut buf);
+                    text = String::from_utf8_lossy(&buf).into_owned();
+                }
+            }
+        }
+    }
+    (text, ended)
+}
+
+/// Where a file's read has reached after taking its growth.
+fn text_end(path: &Path, offset: u64) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(offset)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 pub fn found(pane: &str, query: &str, found: kampr_journal::ConvoFound) -> ServerMsg {
