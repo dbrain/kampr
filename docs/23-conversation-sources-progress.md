@@ -45,8 +45,17 @@ STILL DOABLE WITHOUT A TURN:
 
 ## Orchestration (in flight)
 
-Three background workers are building, each on `conv-sources` (s3 in a worktree on
-`conv-sources-phase4-pipe`):
+Built and committed so far: s1 (Phase 1), s2 (docs/22), s3 (Phase 4). Now in flight:
+
+- **s4** — review of docs/22-parity.md.
+- **s6 — Phase 2a (the wire, Rust only)**: additive `convo.*` frames in `wire.rs` (both
+  directions), the node's `conversations.rs` emitting them from the seam `Update`s and routing
+  the new client verbs, and `MuffitConversation` lifting muffit's existing capabilities into the
+  new seam `Update`s (controls, actions, tasks, task-output, trouble, context, cost, limits,
+  session). No Kotlin (that's Phase 2b).
+- **s7 — Phase 4 fixes**: the three defects s5's review found on the durability path (seq resume
+  resetting to 0, `Truncated` never emitted, overlong `write` falsely acked) + a USR1-reexec pipe
+  test. `kampr-keep` only.
 
 - **s1 — Phase 1 (the seam)**: `kampr-core/src/conversation/` module with `Conversation`/`Source`
   traits + the types; turn/block/facet moved out of `kampr-journal` (parsers stay); `MuffitSource`
@@ -62,17 +71,21 @@ Three background workers are building, each on `conv-sources` (s3 in a worktree 
   seq numbers, `SeqReader` read-from-seq + live follow, `write` ctl request, mode-aware keeper +
   systemd 2-fd lifecycle. **MERGED** into `conv-sources` (b3b5411c, +507/−57, kampr-keep only);
   `make test-fast` 2072 passed; TDD restart-mid-turn test against a hermetic shell-script fake.
-  Review in flight (s5).
+  Review (s5) found 3 defects on the durability path (seq-resume-to-0, `Truncated` never emitted,
+  overlong `write` falsely acked) — fix in flight (s7).
 
-Critical path after s1: **Phase 2** (wire + client) → **Phase 5** (kampr-claude) → **Phase 7**
-(pane pump). Phase 2 depends on Phase 1's types existing. Phase 4 (s3) feeds Phase 5.
+Critical path: **Phase 2a** (wire, Rust — in flight, s6) → **Phase 2b** (client UI, Kotlin) →
+**Phase 5** (kampr-claude) → **Phase 7** (pane pump). Phase 4 (s3, s7 fixing) feeds Phase 5.
 
-Phase 2 shape (briefed when s1 lands): add `convo.abilities`, `convo.controls`, `convo.actions`,
-`convo.tasks`, `convo.task_output`, `convo.trouble`, `convo.limits`, `convo.context`, `convo.cost`,
-`convo.state` etc. to `ServerMsg`/`ClientMsg` in `crates/kampr-core/src/wire.rs` (additive, serde
-renamed), mirror them in `client/shared/.../wire/`, and build the new pane pieces in
-`client/conversation/` (activity bar, tasks sheet, ask dock, trouble banner, session sheet,
-controls/actions rows) drawn from the declared abilities — nothing the source doesn't declare is drawn.
+Phase 2 split on the toolchain boundary for review: **2a (Rust, s6)** adds `convo.abilities`,
+`convo.controls`, `convo.actions`, `convo.tasks`, `convo.task`, `convo.trouble`, `convo.limits`,
+`convo.context`, `convo.session`, `convo.state`, `convo.live`, `convo.suggested`, `convo.acted` to
+`ServerMsg` and `convo.steer`/`convo.set`/`convo.act`/`convo.follow`/`convo.suggest` (+ widened
+`answer`) to `ClientMsg` in `crates/kampr-core/src/wire.rs` (additive, serde renamed), maps them
+in the node's `conversations.rs`, and lifts muffit's existing capabilities into the seam
+`Update`s. **2b (Kotlin, after 2a)** mirrors them in `client/shared/.../wire/` and builds the pane
+pieces in `client/conversation/` (controls sheet, actions palette, task panel, trouble banner,
+billing/limits in the header) — nothing the source doesn't declare is drawn.
 
 ## Phase 1 — the seam, and muffit on it — DONE (s1)
 
@@ -120,11 +133,11 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
   falls through to the REST path instead of erroring "the conversation closed" — the daemon
   still answers, and the tests do not reach the race.
 
-## Phase 2 — the wire and the client learn the new vocabulary — not started (after s1)
+## Phase 2 — the wire and the client learn the new vocabulary — 2a IN FLIGHT (s6, Rust); 2b (Kotlin) after
 
 ## Phase 3 — muffit widened (muffit repo) — not started
 
-## Phase 4 — a keeper for a process that speaks lines — IN FLIGHT (s3, worktree)
+## Phase 4 — a keeper for a process that speaks lines — DONE, MERGED (b3b5411c); review fixes in flight (s7)
 
 ## Phase 5 — Claude with no terminal — not started
 
