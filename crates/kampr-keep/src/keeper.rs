@@ -1,10 +1,12 @@
-use crate::ctl::{HOLDER_MAX, send_fd, set_winsize};
+use crate::ctl::{send_fd, set_winsize};
 use crate::dir::{
-    CTL, EXIT, Exit, How, Image, KEEPER, KeeperInfo, SIZE, SPEC, SessionDir, Size, Spec, now_unix, write_json,
+    CTL, EXIT, Exit, How, Image, KEEPER, KeeperInfo, Mode, SIZE, SPEC, SessionDir, Size, Spec, now_unix,
+    write_json,
 };
 use crate::launch::READY_FD;
 use crate::log::{Appender, DEFAULT_CAP};
 use crate::notify::notify;
+use crate::pipe::PipeLog;
 use crate::procs;
 use crate::sizes::write_size;
 use crate::sys::{self, Usr1};
@@ -61,15 +63,22 @@ impl std::fmt::Display for Unstarted {
 }
 
 struct Started {
-    master: OwnedFd,
+    out: OwnedFd,
+    child_in: Option<OwnedFd>,
     child: u32,
     how: How,
+    mode: Mode,
 }
 
 enum Outcome {
     Running,
     Reaped { code: Option<i32>, signal: Option<i32> },
     Lost,
+}
+
+enum Log {
+    Pty(Appender),
+    Pipe(PipeLog),
 }
 
 pub fn serve(dir: &Path) -> Result<()> {
@@ -80,7 +89,7 @@ pub fn serve(dir: &Path) -> Result<()> {
     let session = SessionDir::at(&dir);
     let spec = session.spec().context("reading spec.json")?;
 
-    let started = match recover(&session).and_then(|found| match found {
+    let started = match recover(&session, spec.mode).and_then(|found| match found {
         Some(started) => Ok(started),
         None => spawn_child(&spec).map_err(|e| e.context(Unstarted)),
     }) {
@@ -101,8 +110,17 @@ pub fn serve(dir: &Path) -> Result<()> {
             return Ok(());
         }
     };
-    let Started { master, child, how } = started;
-    fcntl_setfd(&master, FdFlags::CLOEXEC)?;
+    let Started {
+        out,
+        child_in,
+        child,
+        how,
+        mode,
+    } = started;
+    fcntl_setfd(&out, FdFlags::CLOEXEC)?;
+    if let Some(in_) = &child_in {
+        fcntl_setfd(in_, FdFlags::CLOEXEC)?;
+    }
 
     write_json(
         &dir.join(KEEPER),
@@ -131,17 +149,36 @@ pub fn serve(dir: &Path) -> Result<()> {
                 holder: "spawn".into(),
             },
         )?;
-        notify("FDSTORE=1\nFDNAME=pty", &[master.as_fd()])?;
+        match mode {
+            Mode::Pty => notify("FDSTORE=1\nFDNAME=pty", &[out.as_fd()])?,
+            Mode::Pipe => notify(
+                "FDSTORE=1\nFDNAME=out\nFDNAME=in",
+                &[
+                    out.as_fd(),
+                    child_in
+                        .as_ref()
+                        .expect("a pipe keeper keeps its child's stdin")
+                        .as_fd(),
+                ],
+            )?,
+        }
     }
 
-    let mut log = Appender::open(&dir, spec.log_cap.unwrap_or(DEFAULT_CAP))?;
+    let mut log = match mode {
+        Mode::Pty => Log::Pty(Appender::open(&dir, spec.log_cap.unwrap_or(DEFAULT_CAP))?),
+        Mode::Pipe => Log::Pipe(PipeLog::open(&dir, spec.log_cap.unwrap_or(DEFAULT_CAP))?),
+    };
     let ctl_path = dir.join(CTL);
     let _ = std::fs::remove_file(&ctl_path);
     let listener = UnixListener::bind(&ctl_path)?;
     listener.set_nonblocking(true)?;
-    let tty = rustix::pty::ptsname(&master, Vec::new())
-        .ok()
-        .and_then(|n| n.into_string().ok());
+    let tty = (mode == Mode::Pty)
+        .then(|| {
+            rustix::pty::ptsname(&out, Vec::new())
+                .ok()
+                .and_then(|n| n.into_string().ok())
+        })
+        .flatten();
     let mut ended: Option<Instant> = None;
     let mut outcome = Outcome::Running;
     let mut watching = Watching::Ticked(Instant::now());
@@ -165,10 +202,10 @@ pub fn serve(dir: &Path) -> Result<()> {
             (left, tick) => left.or(tick),
         };
         let timeout = wake.and_then(|wake| Timespec::try_from(wake).ok());
-        let (master_ready, ctl_ready, signal_ready, child_ready) = {
+        let (out_ready, ctl_ready, signal_ready, child_ready) = {
             let signal_fd = signals.fd();
             let mut fds = vec![
-                PollFd::new(&master, PollFlags::IN),
+                PollFd::new(&out, PollFlags::IN),
                 PollFd::new(&listener, PollFlags::IN),
                 PollFd::new(&signal_fd, PollFlags::IN),
             ];
@@ -191,16 +228,29 @@ pub fn serve(dir: &Path) -> Result<()> {
         }
         look(child, &mut watching, &mut outcome, &mut ended);
         if signal_ready && signals.take() {
-            let err = reexec(&exe, &dir, master.as_fd(), child);
+            let err = reexec(
+                &exe,
+                &dir,
+                out.as_fd(),
+                child_in.as_ref().map(|i| i.as_fd()),
+                child,
+                mode,
+            );
             eprintln!("kampr keep: re-exec of {} failed: {err}", exe.display());
-            fcntl_setfd(&master, FdFlags::CLOEXEC)?;
+            fcntl_setfd(&out, FdFlags::CLOEXEC)?;
+            if let Some(in_) = &child_in {
+                fcntl_setfd(in_, FdFlags::CLOEXEC)?;
+            }
         }
         // Before any request: a resize drains the master, and a read after it would block on
         // whatever readiness this wake reported having been drained.
-        if master_ready {
-            match rustix::io::read(&master, &mut buf) {
+        if out_ready {
+            match rustix::io::read(&out, &mut buf) {
                 Ok(0) | Err(Errno::IO) => break,
-                Ok(n) => log.write(&buf[..n])?,
+                Ok(n) => match &mut log {
+                    Log::Pty(appender) => appender.write(&buf[..n])?,
+                    Log::Pipe(pipe) => pipe.append_out(&buf[..n])?,
+                },
                 Err(Errno::INTR | Errno::AGAIN) => {}
                 Err(e) => return Err(e.into()),
             }
@@ -208,9 +258,11 @@ pub fn serve(dir: &Path) -> Result<()> {
         if ctl_ready {
             let keeper = Keeper {
                 dir: &dir,
-                master: master.as_fd(),
+                out: out.as_fd(),
+                child_in: child_in.as_ref().map(|i| i.as_fd()),
                 child,
                 tty: tty.as_deref(),
+                mode,
             };
             keeper.accept_all(&listener, &mut log, &mut buf);
         }
@@ -243,7 +295,10 @@ pub fn serve(dir: &Path) -> Result<()> {
             error: None,
         },
     )?;
-    notify("FDSTOREREMOVE=1\nFDNAME=pty", &[])?;
+    match mode {
+        Mode::Pty => notify("FDSTOREREMOVE=1\nFDNAME=pty", &[])?,
+        Mode::Pipe => notify("FDSTOREREMOVE=1\nFDNAME=out\nFDNAME=in", &[])?,
+    }
     let _ = std::fs::remove_file(&ctl_path);
     Ok(())
 }
@@ -295,13 +350,15 @@ fn ready_pipe() -> Option<OwnedFd> {
     Some(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
-fn recover(session: &SessionDir) -> Result<Option<Started>> {
+fn recover(session: &SessionDir, mode: Mode) -> Result<Option<Started>> {
     if let Some(handover) = std::env::var_os(HANDOVER) {
-        let (master, child) = parse_handover(&handover.to_string_lossy())?;
+        let (out, child_in, child, mode) = parse_handover(&handover.to_string_lossy())?;
         return Ok(Some(Started {
-            master: unsafe { OwnedFd::from_raw_fd(master) },
+            out: unsafe { OwnedFd::from_raw_fd(out) },
+            child_in: child_in.map(|fd| unsafe { OwnedFd::from_raw_fd(fd) }),
             child,
             how: How::ReExec,
+            mode,
         }));
     }
     let listening = std::env::var("LISTEN_PID")
@@ -314,11 +371,17 @@ fn recover(session: &SessionDir) -> Result<Option<Started>> {
             .is_some_and(|n| n >= 1);
     let previous = session.keeper();
     match (listening, previous) {
-        (true, Some(previous)) => Ok(Some(Started {
-            master: unsafe { OwnedFd::from_raw_fd(LISTEN_FDS_START) },
-            child: previous.child,
-            how: How::FdStore,
-        })),
+        (true, Some(previous)) => {
+            let child_in =
+                (mode == Mode::Pipe).then(|| unsafe { OwnedFd::from_raw_fd(LISTEN_FDS_START + 1) });
+            Ok(Some(Started {
+                out: unsafe { OwnedFd::from_raw_fd(LISTEN_FDS_START) },
+                child_in,
+                child: previous.child,
+                how: How::FdStore,
+                mode,
+            }))
+        }
         (true, None) => bail!("systemd handed over a master but keeper.json names no child"),
         (false, Some(_)) => {
             bail!("this session already had a keeper and nothing handed its master over")
@@ -327,17 +390,75 @@ fn recover(session: &SessionDir) -> Result<Option<Started>> {
     }
 }
 
-fn parse_handover(value: &str) -> Result<(RawFd, u32)> {
+fn parse_handover(value: &str) -> Result<(RawFd, Option<RawFd>, u32, Mode)> {
     let mut parts = value.split(':');
-    match (parts.next(), parts.next(), parts.next(), parts.next()) {
-        (Some("v1"), Some(fd), Some(child), None) => Ok((fd.parse()?, child.parse()?)),
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("v1"), Some(fd), Some(child), None, None) => Ok((fd.parse()?, None, child.parse()?, Mode::Pty)),
+        (Some("v2"), Some(out), Some(child), Some(in_), None) => {
+            Ok((out.parse()?, Some(in_.parse()?), child.parse()?, Mode::Pipe))
+        }
         _ => Err(anyhow!("unrecognised {HANDOVER}={value}")),
     }
 }
 
 fn spawn_child(spec: &Spec) -> Result<Started> {
-    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     let program = spec.argv.first().context("the session has no command")?;
+    if spec.mode == Mode::Pipe {
+        return spawn_pipe_child(spec, program);
+    }
+    spawn_pty_child(spec, program)
+}
+
+fn spawn_pipe_child(spec: &Spec, program: &str) -> Result<Started> {
+    use std::os::fd::IntoRawFd;
+    let (out_read, out_write) = std::io::pipe()?;
+    let (in_read, in_write) = std::io::pipe()?;
+    let mut command = Command::new(program);
+    command
+        .args(&spec.argv[1..])
+        .env_clear()
+        .envs(child_env(spec))
+        .stdin(Stdio::from(unsafe {
+            OwnedFd::from_raw_fd(in_read.into_raw_fd())
+        }))
+        .stdout(Stdio::from(unsafe {
+            OwnedFd::from_raw_fd(out_write.try_clone()?.into_raw_fd())
+        }))
+        .stderr(Stdio::from(unsafe {
+            OwnedFd::from_raw_fd(out_write.into_raw_fd())
+        }));
+    if let Some(cwd) = &spec.cwd {
+        command.current_dir(cwd);
+    }
+    unsafe {
+        command.pre_exec(move || {
+            sys::child_pre_exec();
+            if libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let child = command.spawn().with_context(|| format!("starting `{program}`"))?;
+    let pid = child.id();
+    drop(child);
+    Ok(Started {
+        out: unsafe { OwnedFd::from_raw_fd(out_read.into_raw_fd()) },
+        child_in: Some(unsafe { OwnedFd::from_raw_fd(in_write.into_raw_fd()) }),
+        child: pid,
+        how: How::Spawn,
+        mode: Mode::Pipe,
+    })
+}
+
+fn spawn_pty_child(spec: &Spec, program: &str) -> Result<Started> {
+    use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     let master = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
     fcntl_setfd(&master, FdFlags::CLOEXEC)?;
     grantpt(&master)?;
@@ -376,9 +497,11 @@ fn spawn_child(spec: &Spec) -> Result<Started> {
     let pid = child.id();
     drop(child);
     Ok(Started {
-        master,
+        out: master,
+        child_in: None,
         child: pid,
         how: How::Spawn,
+        mode: Mode::Pty,
     })
 }
 
@@ -428,17 +551,27 @@ fn reap(child: u32, exited: bool) -> Outcome {
     }
 }
 
+fn write_all(fd: BorrowedFd<'_>, bytes: &[u8]) -> io::Result<()> {
+    let mut offset = 0;
+    while offset < bytes.len() {
+        offset += rustix::io::write(fd, &bytes[offset..])?;
+    }
+    Ok(())
+}
+
 const DRAIN_MAX: usize = 1 << 20;
 
 struct Keeper<'a> {
     dir: &'a Path,
-    master: BorrowedFd<'a>,
+    out: BorrowedFd<'a>,
+    child_in: Option<BorrowedFd<'a>>,
     child: u32,
     tty: Option<&'a str>,
+    mode: Mode,
 }
 
 impl Keeper<'_> {
-    fn accept_all(&self, listener: &UnixListener, log: &mut Appender, buf: &mut [u8]) {
+    fn accept_all(&self, listener: &UnixListener, log: &mut Log, buf: &mut [u8]) {
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
@@ -456,7 +589,7 @@ impl Keeper<'_> {
         }
     }
 
-    fn answer(&self, stream: UnixStream, log: &mut Appender, buf: &mut [u8]) -> io::Result<()> {
+    fn answer(&self, stream: UnixStream, log: &mut Log, buf: &mut [u8]) -> io::Result<()> {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(CTL_TIMEOUT))?;
         stream.set_write_timeout(Some(CTL_TIMEOUT))?;
@@ -464,10 +597,11 @@ impl Keeper<'_> {
             return Ok(());
         }
         let mut line = String::new();
-        BufReader::new((&stream).take(64 + HOLDER_MAX as u64)).read_line(&mut line)?;
+        BufReader::new((&stream).take(64 * 1024)).read_line(&mut line)?;
         let line = line.trim_end();
         match line.split_once(' ').unwrap_or((line, "")) {
-            ("fd", "") => send_fd(&stream, self.master),
+            ("fd", "") if self.mode == Mode::Pty => send_fd(&stream, self.out),
+            ("fd", "") => Ok(()),
             ("state", "") => {
                 let tty = self.tty.map(str::to_string);
                 let mut reply =
@@ -482,13 +616,43 @@ impl Keeper<'_> {
                 };
                 (&stream).write_all(reply.as_bytes())
             }
+            ("write", line) => {
+                let reply = match self.write_line(line, log) {
+                    Ok(()) => "ok\n".to_string(),
+                    Err(e) => format!("error {}\n", e.to_string().replace('\n', " ")),
+                };
+                (&stream).write_all(reply.as_bytes())
+            }
             _ => Ok(()),
         }
     }
 
+    fn write_line(&self, line: &str, log: &mut Log) -> io::Result<()> {
+        let mut bytes = line.as_bytes().to_vec();
+        bytes.push(b'\n');
+        if self.mode == Mode::Pty {
+            write_all(self.out, &bytes)?;
+            return Ok(());
+        }
+        let in_ = self
+            .child_in
+            .ok_or_else(|| io::Error::other("this session has no child stdin"))?;
+        write_all(in_, &bytes)?;
+        if let Log::Pipe(pipe) = log {
+            pipe.append_in(line)?;
+        }
+        Ok(())
+    }
+
     // Draining first puts every byte the program wrote before the resize ahead of its record;
     // nothing else reads the master, so nothing else can order the two.
-    fn resize(&self, args: &str, log: &mut Appender, buf: &mut [u8]) -> io::Result<()> {
+    fn resize(&self, args: &str, log: &mut Log, buf: &mut [u8]) -> io::Result<()> {
+        if self.mode == Mode::Pipe {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "resize is not available in pipe mode",
+            ));
+        }
         let mut parts = args.splitn(3, ' ');
         let parsed = (
             parts.next().and_then(|c| c.parse::<u16>().ok()),
@@ -507,9 +671,13 @@ impl Keeper<'_> {
                 format!("{cols}x{rows} is not a size"),
             ));
         }
-        self.drain(log, buf)?;
-        log.resize(cols, rows, holder)?;
-        set_winsize(self.master, cols, rows)?;
+        let appender = match log {
+            Log::Pty(appender) => appender,
+            Log::Pipe(_) => unreachable!("resize is pty-mode only"),
+        };
+        self.drain(appender, buf)?;
+        appender.resize(cols, rows, holder)?;
+        set_winsize(self.out, cols, rows)?;
         write_size(self.dir, cols, rows, holder)
     }
 
@@ -520,14 +688,14 @@ impl Keeper<'_> {
         };
         let mut drained = 0;
         while drained < DRAIN_MAX {
-            let mut fds = [PollFd::new(&self.master, PollFlags::IN)];
+            let mut fds = [PollFd::new(&self.out, PollFlags::IN)];
             match poll(&mut fds, Some(&now)) {
                 Ok(_) if !fds[0].revents().contains(PollFlags::IN) => return Ok(()),
                 Ok(_) => {}
                 Err(Errno::INTR) => continue,
                 Err(e) => return Err(e.into()),
             }
-            match rustix::io::read(self.master, &mut *buf) {
+            match rustix::io::read(self.out, &mut *buf) {
                 Ok(0) | Err(Errno::IO) => return Ok(()),
                 Ok(n) => {
                     log.write(&buf[..n])?;
@@ -541,12 +709,24 @@ impl Keeper<'_> {
     }
 }
 
-fn reexec(exe: &Path, dir: &Path, master: BorrowedFd<'_>, child: u32) -> io::Error {
-    let flags = match fcntl_getfd(master) {
+fn reexec(
+    exe: &Path,
+    dir: &Path,
+    out: BorrowedFd<'_>,
+    child_in: Option<BorrowedFd<'_>>,
+    child: u32,
+    mode: Mode,
+) -> io::Error {
+    let flags = match fcntl_getfd(out) {
         Ok(flags) => flags,
         Err(e) => return e.into(),
     };
-    if let Err(e) = fcntl_setfd(master, flags - FdFlags::CLOEXEC) {
+    if let Err(e) = fcntl_setfd(out, flags - FdFlags::CLOEXEC) {
+        return e.into();
+    }
+    if let Some(in_) = child_in
+        && let Err(e) = fcntl_setfd(in_, fcntl_getfd(in_).unwrap() - FdFlags::CLOEXEC)
+    {
         return e.into();
     }
     let cstr = |b: &[u8]| CString::new(b).map_err(io::Error::other);
@@ -566,9 +746,14 @@ fn reexec(exe: &Path, dir: &Path, master: BorrowedFd<'_>, child: u32) -> io::Err
             pair.extend_from_slice(v.as_bytes());
             envp.push(cstr(&pair)?);
         }
-        envp.push(cstr(
-            format!("{HANDOVER}=v1:{}:{child}", master.as_raw_fd()).as_bytes(),
-        )?);
+        let handover = match (mode, child_in) {
+            (Mode::Pty, None) => format!("{HANDOVER}=v1:{}:{child}", out.as_raw_fd()),
+            (Mode::Pipe, Some(in_)) => {
+                format!("{HANDOVER}=v2:{}:{child}:{}", out.as_raw_fd(), in_.as_raw_fd())
+            }
+            _ => return Err(io::Error::other("cannot re-exec this session")),
+        };
+        envp.push(cstr(handover.as_bytes())?);
         Ok((path, argv, envp))
     };
     let (path, argv, envp) = match build() {

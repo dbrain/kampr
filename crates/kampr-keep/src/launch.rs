@@ -129,7 +129,7 @@ fn systemd(session: &SessionDir, id: &str, exe: &Path) -> Result<()> {
             "-p",
             "KillMode=process",
             "-p",
-            "FileDescriptorStoreMax=1",
+            "FileDescriptorStoreMax=2",
             "-p",
             "CollectMode=inactive-or-failed",
         ])

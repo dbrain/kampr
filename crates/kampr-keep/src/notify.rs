@@ -17,7 +17,7 @@ pub(crate) fn notify(message: &str, fds: &[BorrowedFd<'_>]) -> io::Result<()> {
         None => SocketAddrUnix::new(target)?,
     };
     let sock = socket(AddressFamily::UNIX, SocketType::DGRAM, None)?;
-    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(1))];
+    let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(2))];
     let mut control = SendAncillaryBuffer::new(&mut space);
     if !fds.is_empty() && !control.push(SendAncillaryMessage::ScmRights(fds)) {
         return Err(io::Error::other("ancillary buffer too small"));
