@@ -633,7 +633,32 @@ fn the_client_refuses_an_overlong_write() {
     spec.mode = Mode::Pipe;
     let live = Live::spawn(root.path(), spec, Launch::Detached);
     let long = "x".repeat(64 * 1024 + 1);
-    assert!(write(&live.session, &long).is_err(), "an overlong line is refused");
+    let err = write(&live.session, &long).expect_err("an overlong line is refused");
+    assert!(
+        err.to_string().contains("a written line is too long"),
+        "the client's own cap did not fire: {err}"
+    );
+    close(&live.session).expect("close");
+    live.exit(SOON);
+}
+
+#[test]
+fn a_write_at_the_server_boundary_round_trips() {
+    let root = root();
+    let mut spec = sh("exec cat");
+    spec.mode = Mode::Pipe;
+    let live = Live::spawn(root.path(), spec, Launch::Detached);
+
+    // The server reads at most 64 KiB of "write <line>\n", so the client's payload cap is that
+    // minus the framing: the at-cap line earns the server's own ack, one past it the client's.
+    let max = 64 * 1024 - "write \n".len();
+    write(&live.session, &"x".repeat(max)).expect("the server acks a line at the boundary");
+    let err = write(&live.session, &"x".repeat(max + 1)).expect_err("one past the boundary is refused");
+    assert!(
+        err.to_string().contains("a written line is too long"),
+        "the client's cap did not guard the boundary: {err}"
+    );
+
     close(&live.session).expect("close");
     live.exit(SOON);
 }

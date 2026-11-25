@@ -114,7 +114,7 @@ pub fn write(session: &SessionDir, line: &str) -> io::Result<()> {
             "a written line must not carry a newline",
         ));
     }
-    if line.len() > MAX_REQUEST {
+    if line.len() > MAX_REQUEST - "write \n".len() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "a written line is too long"));
     }
     let stream = request(session, &format!("write {line}\n"))?;

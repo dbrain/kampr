@@ -127,9 +127,11 @@ impl SeqReader {
                 if let Ok(entry) = serde_json::from_slice::<Entry>(&complete)
                     && entry.s >= self.start
                 {
-                    if self.truncated && entry.s > self.start {
+                    if self.truncated {
                         self.truncated = false;
-                        return Ok(PipeRead::Truncated { oldest_seq: entry.s });
+                        if entry.s > self.start {
+                            return Ok(PipeRead::Truncated { oldest_seq: entry.s });
+                        }
                     }
                     return Ok(PipeRead::Entry(PipeEntry {
                         seq: entry.s,
@@ -181,6 +183,18 @@ mod tests {
             .sum()
     }
 
+    fn first_seq_in(dir: &Path, offset: u64) -> u64 {
+        let bytes = std::fs::read(dir.join(segment_name(offset))).expect("read");
+        let mut start = 0usize;
+        while let Some(pos) = bytes[start..].iter().position(|&b| b == b'\n') {
+            if let Ok(entry) = serde_json::from_slice::<Entry>(&bytes[start..start + pos]) {
+                return entry.s;
+            }
+            start += pos + 1;
+        }
+        panic!("segment {offset} holds no entry")
+    }
+
     // A write that lands exactly on a segment boundary rolls an empty segment behind the
     // entries, so the newest file holds no line at all.
     #[test]
@@ -219,6 +233,32 @@ mod tests {
         match reader.read().expect("read") {
             PipeRead::Truncated { oldest_seq } => assert!(oldest_seq > 0, "seq 0 was rolled off"),
             other => panic!("the rolled-off start was lost: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_reader_reopened_from_a_surviving_seq_is_not_told_it_rolled_off() {
+        let dir = tempfile::tempdir().expect("dir");
+        let cap = 2 * SEGMENT;
+        let mut log = PipeLog::open(dir.path(), cap).expect("open");
+        let line = "x".repeat(64 * 1024);
+        for _ in 0..40 {
+            log.append_in(&line).expect("append");
+        }
+        drop(log);
+
+        let offsets = segments(dir.path()).expect("segments");
+        assert!(*offsets.first().expect("a segment") > 0, "segment 0 rolled off");
+        let start = first_seq_in(dir.path(), *offsets.first().unwrap());
+
+        let mut reader = SeqReader::at(dir.path(), start).expect("reader");
+        match reader.read().expect("read") {
+            PipeRead::Entry(e) => assert_eq!(e.seq, start, "the surviving standing seq came back"),
+            other => panic!("the surviving standing seq was lost: {other:?}"),
+        }
+        match reader.read().expect("read") {
+            PipeRead::Entry(e) => assert_eq!(e.seq, start + 1, "no spurious Truncated followed"),
+            other => panic!("a spurious truncation was reported: {other:?}"),
         }
     }
 }
