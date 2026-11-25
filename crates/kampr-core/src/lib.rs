@@ -8,6 +8,7 @@
 
 pub mod agent_view;
 pub mod backoff;
+pub mod conversation;
 pub mod desk;
 pub mod herdr_provider;
 pub mod keys;

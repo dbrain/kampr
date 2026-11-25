@@ -174,6 +174,9 @@ impl SessionNode {
                 terminal: false,
             });
         }
+        if self.machine_muffit.is_none() {
+            return None;
+        }
         let session = self.held_muffit(&self.pane_processes(local))?;
         Some(MuffitLink {
             provider: self.machine_muffit.clone()?,
@@ -191,6 +194,22 @@ impl SessionNode {
             return None;
         }
         self.machine_muffit.as_ref()?.held_by(&pids)
+    }
+
+    /// What this pane's conversation is, from the sources this node serves.
+    pub fn conversation(&self, local: &str) -> Option<crate::conversations::ConversationRef> {
+        let link = self.muffit_link(local)?;
+        Some(crate::conversations::ConversationRef {
+            source: Arc::new(kampr_muffit::MuffitSource::new(link.provider)),
+            pane: kampr_muffit::pane_id(&link.session),
+            terminal: link.terminal,
+        })
+    }
+
+    /// The pane's waiting prompt, answered with the key through its daemon's REST.
+    pub async fn answer(&self, local: &str, key: &str) -> Option<crate::muffit::AnswerResult> {
+        let link = self.muffit_link(local)?;
+        Some(crate::muffit::answer(&link.provider, &link.session, key).await)
     }
 
     pub fn online(&self) -> bool {

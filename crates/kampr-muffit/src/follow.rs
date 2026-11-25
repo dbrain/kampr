@@ -18,7 +18,7 @@ const FIRST_RETRY: Duration = Duration::from_millis(250);
 const LAST_RETRY: Duration = Duration::from_secs(5);
 // A worker can't be attached (kampr.md §6), so an open one is polled.
 const WORKER_POLL: Duration = Duration::from_millis(1500);
-const CAPABILITIES: &[&str] = &[
+pub(crate) const CAPABILITIES: &[&str] = &[
     "input",
     "interrupt",
     "history",
@@ -27,7 +27,7 @@ const CAPABILITIES: &[&str] = &[
     "permissions",
 ];
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Input {
         text: String,

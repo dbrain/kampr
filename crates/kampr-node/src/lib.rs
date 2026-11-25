@@ -14,6 +14,7 @@ pub mod caps;
 pub mod child;
 pub mod config;
 pub mod convo;
+pub mod conversations;
 pub mod desk;
 pub mod device_watch;
 pub mod docker;

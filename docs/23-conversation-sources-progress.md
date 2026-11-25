@@ -43,13 +43,88 @@ STILL DOABLE WITHOUT A TURN:
 - `docs/22-parity.md` (the TUI surface list).
 - Phases 1, 2, 4, 5, 7 (pure code, mock endpoint).
 
-## Phase 1 — the seam, and muffit on it — not started
+## Orchestration (in flight)
 
-## Phase 2 — the wire and the client learn the new vocabulary — not started
+Three background workers are building, each on `conv-sources` (s3 in a worktree on
+`conv-sources-phase4-pipe`):
+
+- **s1 — Phase 1 (the seam)**: `kampr-core/src/conversation/` module with `Conversation`/`Source`
+  traits + the types; turn/block/facet moved out of `kampr-journal` (parsers stay); `MuffitSource`
+  over the existing `kampr-muffit::Follow`; the `conversations` registry in `kampr-node`;
+  `session.rs` routing through the registry. No wire changes (that's Phase 2). **DONE, committed**
+  (`make test-fast` 2079 passed; the 22 muffit integration tests unmodified; `session.rs` free of
+  `kampr_muffit` paths).
+- **s2 — Phase 0 `docs/22-parity.md`**: the line-by-line TUI surface list, built from the measured
+  probe rows. **DONE, committed** (111 rows; 63 slash commands from a no-turn `initialize`; every
+  terminal-only row has a measured reason; the command list is state-dependent — this login omits
+  login/add-dir/resume/btw/permissions/status/help, so the plan's 68 is not confirmed).
+- **s3 — Phase 4 (the keeper)**: pipe mode in `kampr-keep` — stdin/stdout pipes, `PipeLog` with
+  seq numbers, `SeqReader` read-from-seq + live follow, `write` ctl request, mode-aware keeper +
+  systemd 2-fd lifecycle. **MERGED** into `conv-sources` (b3b5411c, +507/−57, kampr-keep only);
+  `make test-fast` 2072 passed; TDD restart-mid-turn test against a hermetic shell-script fake.
+  Review in flight (s5).
+
+Critical path after s1: **Phase 2** (wire + client) → **Phase 5** (kampr-claude) → **Phase 7**
+(pane pump). Phase 2 depends on Phase 1's types existing. Phase 4 (s3) feeds Phase 5.
+
+Phase 2 shape (briefed when s1 lands): add `convo.abilities`, `convo.controls`, `convo.actions`,
+`convo.tasks`, `convo.task_output`, `convo.trouble`, `convo.limits`, `convo.context`, `convo.cost`,
+`convo.state` etc. to `ServerMsg`/`ClientMsg` in `crates/kampr-core/src/wire.rs` (additive, serde
+renamed), mirror them in `client/shared/.../wire/`, and build the new pane pieces in
+`client/conversation/` (activity bar, tasks sheet, ask dock, trouble banner, session sheet,
+controls/actions rows) drawn from the declared abilities — nothing the source doesn't declare is drawn.
+
+## Phase 1 — the seam, and muffit on it — DONE (s1)
+
+Built as the plan's "The seam" section, verbatim for the trait shapes:
+
+- `kampr-core/src/conversation/`: `mod.rs` (the `Conversation` and `Source` traits, `Emit`,
+  `Refusal`, `NewSession`, `Stored`, `Ending`), `command.rs` (`Command`, `When`, `Reply`,
+  `SuggestKind`), `update.rs` (`Update`, `Live`, `Notice`, `ConvoFound`), `abilities.rs`,
+  `ask.rs`, `control.rs`, `facts.rs`, plus `composer.rs` — the muffit line editor, moved here so
+  the node's `Session` can hold one without a muffit path (deviation: an 8th file; see below).
+- Turn/block/facet/model types moved to `kampr-core::conversation`; `kampr-journal` re-exports
+  every one, parsers unchanged, core no longer depends on journal in the seam's types
+  (journal ← core only, through the re-exports).
+- `kampr-muffit/src/source.rs`: `MuffitSource` (abilities declared from the capabilities the
+  client asks for in its attach hello) and `MuffitConversation`, which wraps `Follow`'s run loop
+  unchanged in shape, translating seam `Command`s to `follow::Command`s and `follow::Update`s to
+  seam `Update`s. 4 new unit tests on the mapping.
+- `kampr-node/src/conversations.rs`: the `Conversations` registry, keyed by pane, one per socket:
+  `open` (source → conversation → spawned task), `command` (verbs, non-blocking), `send`
+  (composer messages, queued), `take`, `drain`; the `Update` → wire-message mapping lives here.
+- `kampr-node/src/sessions.rs`: `conversation()` (the pane's source + its id in that source's
+  namespace + whether a terminal sits beside it) and `answer()` (the REST prompt answer).
+- `kampr-node/src/session.rs`: no `kampr_muffit` path left — `watch` routes every conversation
+  pane through `Conversations::open`, `convo.sub`/`convo.find`/`convo.load` through
+  `Conversations::command`, input through `crate::muffit::input` (composer line → seam command,
+  REST fallback when no conversation is open), answers through `SessionNode::answer`.
+
+Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
+
+- `composer.rs` is an 8th file in `kampr-core/src/conversation/` (the plan lists seven). The
+  line editor is a seam-shape type the node's `Session.lines` must hold; keeping it in
+  `kampr-muffit` would put a muffit path back in `session.rs`. `kampr_muffit::input` survives as
+  a re-export.
+- `Source::open` receives the pane **in the source's own namespace** (`m:<id>`), not the node's
+  local pane id: a TUI's pane is `n:<id>` in the herd and the daemon knows only `<id>`.
+  `SessionNode::conversation()` does the mapping; the registry just forwards.
+- `MuffitSource::open` never refuses for a well-named pane — liveness failures surface as
+  `Update::Missing`/`Failed` from the run loop, exactly as `Follow` does today (today's
+  `watch_muffit` had no open step at all; refusing up front would change what a re-watch of a
+  just-stopped session sends).
+- The seam's `Update::Asks` maps to the same `Pending` frame as today's `Update::Pending`:
+  `id` stays `None`, the three `1/2/3` options, `source: Transcript`. The frame is byte-identical
+  to the old one; the seam's wider `Ask` (by, kind, multi) has no wire frame until Phase 2.
+- A composer submit for a pane whose conversation task has ended (link still registered) now
+  falls through to the REST path instead of erroring "the conversation closed" — the daemon
+  still answers, and the tests do not reach the race.
+
+## Phase 2 — the wire and the client learn the new vocabulary — not started (after s1)
 
 ## Phase 3 — muffit widened (muffit repo) — not started
 
-## Phase 4 — a keeper for a process that speaks lines — not started
+## Phase 4 — a keeper for a process that speaks lines — IN FLIGHT (s3, worktree)
 
 ## Phase 5 — Claude with no terminal — not started
 

@@ -255,6 +255,7 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
         peer,
         caller,
         panes: HashMap::new(),
+        conversations: crate::conversations::Conversations::default(),
         held: HashMap::new(),
         matched: HashMap::new(),
         taken: HashSet::new(),
@@ -341,6 +342,9 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
     for handle in session.panes.into_values() {
         handle.stop();
     }
+    for link in session.conversations.drain() {
+        link.stop();
+    }
     herd_task.abort();
     outbox.close();
     let _ = writer.await;
@@ -376,8 +380,6 @@ struct PaneHandle {
     warmth: Arc<crate::warm::ConvoWarmth>,
     /// The launched conversation this client has open on the pane, followed while it has it.
     followed: convo::Followed,
-    /// A muffit pane's conversation follower, which also carries its composer's messages.
-    muffit: Option<crate::muffit::Commands>,
     _hold: Option<Hold>,
 }
 
@@ -578,6 +580,8 @@ struct Session {
     peer: String,
     caller: Caller,
     panes: HashMap<String, PaneHandle>,
+    /// The conversations this socket has open, by the pane it watches them under.
+    conversations: crate::conversations::Conversations,
     /// What this client is holding from each pane's conversation, kept past the pump that sent it
     /// and past the `unwatch` that stopped the pump. See [`convo::Held`].
     held: HashMap<String, convo::Held>,
@@ -600,8 +604,8 @@ struct Session {
     /// The pane's boot episode, by global id: the inputs it is holding and the task flushing
     /// them. Dropped with the session, which is what aborts the task.
     boot_holds: HashMap<String, BootHoldEntry>,
-    /// What this socket has typed into each muffit pane since its last carriage return.
-    lines: HashMap<(String, Option<String>), kampr_muffit::input::Line>,
+    /// What this socket has typed into each conversation pane since its last carriage return.
+    lines: HashMap<(String, Option<String>), kampr_core::conversation::composer::Line>,
     /// Names this socket's typing to a peer, when a pane it relays keeps a line per typist.
     origin: String,
     unreadable: u32,
@@ -887,8 +891,11 @@ impl Session {
                 .error(ErrorCode::UnknownPane, "no such pane", Some(pane));
             return;
         }
-        if let Some(muffit) = session.muffit_of(&local) {
-            self.watch_muffit(muffit.clone(), pane, &local, scrollback, conversation);
+        if let Some(convo) = session.conversation(&local)
+            && !convo.terminal
+        {
+            self.watch_conversation(convo, pane, scrollback, conversation)
+                .await;
             return;
         }
         if !session.online() && !local.starts_with(kampr_native::PREFIX) {
@@ -930,13 +937,12 @@ impl Session {
         let warm = self.node.convo_warmth.take(pane);
         let convo = warm.lock().unwrap().journal.clone();
         let followed = convo::followed();
-        let tui = conversation.then(|| session.muffit_link(&local)).flatten();
-        let mut muffit = None;
-        if let Some(tui) = tui {
-            let (task, commands) =
-                crate::muffit::follow(tui.provider, tui.session, self.wire.clone(), pane.to_string());
-            tasks.push(task);
-            muffit = Some(commands);
+        let tui = conversation
+            .then(|| session.conversation(&local))
+            .flatten()
+            .filter(|convo| convo.terminal);
+        if let Some(convo) = tui {
+            self.conversations.open(&convo, pane, &self.wire).await;
         } else if conversation {
             let for_identity = self.node.journals();
             let for_marker = self.node.journals();
@@ -977,79 +983,74 @@ impl Session {
                 warm,
                 warmth: self.node.convo_warmth.clone(),
                 followed,
-                muffit,
                 _hold: hold,
             },
         );
     }
 
-    /// A muffit session has no terminal, so nothing streams it through the registry: its
-    /// conversation is followed whether or not the watch asked for one, because it is all there is.
-    fn watch_muffit(
+    /// A conversation with no terminal beside it: it is followed whether or not the watch asked for
+    /// one, because it is all there is.
+    async fn watch_conversation(
         &mut self,
-        provider: Arc<kampr_muffit::MuffitProvider>,
+        convo: crate::conversations::ConversationRef,
         pane: &str,
-        local: &str,
         scrollback: bool,
         conversation: bool,
     ) {
         self.audit(
             "watch",
             Some(pane),
-            Some(json!({ "scrollback": scrollback, "conversation": conversation, "muffit": true })),
+            Some(json!({ "scrollback": scrollback, "conversation": conversation, "convo": true })),
         );
         if let Some(old) = self.panes.remove(pane) {
             old.stop();
         }
+        if let Some(old) = self.conversations.take(pane) {
+            old.stop();
+        }
         self.wire.outbox().resume_pane(pane);
-        let session = kampr_muffit::session_of(local).unwrap_or_default().to_string();
-        let (task, commands) = crate::muffit::follow(provider, session, self.wire.clone(), pane.to_string());
+        self.conversations.open(&convo, pane, &self.wire).await;
         self.panes.insert(
             pane.to_string(),
             PaneHandle {
                 pane: pane.to_string(),
                 outbox: self.wire.outbox().clone(),
-                tasks: vec![task],
+                tasks: Vec::new(),
                 scrollback,
                 conversation,
                 reflow: None,
-                convo: convo::open(),
-                warm: convo::warmth(),
+                convo: crate::convo::open(),
+                warm: crate::convo::warmth(),
                 warmth: self.node.convo_warmth.clone(),
-                followed: convo::followed(),
-                muffit: Some(commands),
+                followed: crate::convo::followed(),
                 _hold: None,
             },
         );
     }
 
-    /// The follower a verb about a muffit pane's conversation goes to, or the refusal every
+    /// The conversation a verb about a pane's conversation goes to, or the refusal every
     /// unwatched pane gets.
-    fn muffit_command(&self, pane: &str, command: kampr_muffit::follow::Command) {
-        match self.panes.get(pane).and_then(|h| h.muffit.as_ref()) {
-            Some(commands) => {
-                if commands.try_send(command).is_err() {
-                    self.wire.error(
-                        ErrorCode::SessionUnavailable,
-                        "this conversation is busy",
-                        Some(pane),
-                    );
-                }
-            }
-            None => {
+    fn convo_command(&self, pane: &str, command: kampr_core::conversation::Command) {
+        match self.conversations.command(pane, command) {
+            Ok(()) => {}
+            Err(crate::conversations::CommandError::Busy) => {
                 self.wire.error(
-                    ErrorCode::NotFound,
-                    "no conversation open for this pane",
+                    ErrorCode::SessionUnavailable,
+                    "this conversation is busy",
                     Some(pane),
                 );
+            }
+            Err(crate::conversations::CommandError::Closed) => {
+                self.wire
+                    .error(ErrorCode::NotFound, "no conversation open for this pane", Some(pane));
             }
         }
     }
 
-    fn is_muffit(&self, pane: &str) -> bool {
+    fn has_conversation(&self, pane: &str) -> bool {
         self.node
             .resolve(pane)
-            .is_some_and(|(session, local)| session.muffit_link(&local).is_some())
+            .is_some_and(|(session, local)| session.conversation(&local).is_some())
     }
 
     /// A pane on another host. The hub holds one relay per pane however many clients are looking
@@ -1102,7 +1103,6 @@ impl Session {
                 warm: convo::warmth(),
                 warmth: self.node.convo_warmth.clone(),
                 followed: convo::followed(),
-                muffit: None,
                 _hold: hold,
             },
         );
@@ -1152,10 +1152,10 @@ impl Session {
             );
             return;
         }
-        if self.is_muffit(pane) {
+        if self.has_conversation(pane) {
             let id = id.to_string();
             let before = before.map(str::to_string);
-            self.muffit_command(pane, kampr_muffit::follow::Command::Sub { id, before });
+            self.convo_command(pane, kampr_core::conversation::Command::Sub { id, before });
             return;
         }
         // The same gate `convo_load` takes, because this is the same `Arc` and here it is the
@@ -1292,10 +1292,10 @@ impl Session {
             self.relay_to_peer(pane, json!({ "t": "convo.find", "pane": via, "query": query }));
             return;
         }
-        if self.is_muffit(pane) {
+        if self.has_conversation(pane) {
             let query = query.to_string();
-            let cap = crate::muffit::MATCHES;
-            self.muffit_command(pane, kampr_muffit::follow::Command::Find { query, cap });
+            let cap = crate::conversations::MATCHES;
+            self.convo_command(pane, kampr_core::conversation::Command::Find { query, cap });
             return;
         }
         // The same `confirmed` gate `convo.load` takes, and for the same reason: the handle a
@@ -1333,9 +1333,9 @@ impl Session {
             self.relay_to_peer(pane, json!({ "t": "convo.load", "pane": via, "before": before }));
             return;
         }
-        if self.is_muffit(pane) {
+        if self.has_conversation(pane) {
             let before = before.map(str::to_string);
-            self.muffit_command(pane, kampr_muffit::follow::Command::Older { before });
+            self.convo_command(pane, kampr_core::conversation::Command::Older { before });
             return;
         }
         let page = self
@@ -1564,6 +1564,9 @@ impl Session {
         // newer viewer's, which is the failure ADR 0013 files under "a bug in the token".
         if let Some(handle) = self.panes.remove(pane) {
             handle.stop();
+            if let Some(link) = self.conversations.take(pane) {
+                link.stop();
+            }
             self.audit("unwatch", Some(pane), None);
         }
     }
@@ -1648,10 +1651,20 @@ impl Session {
             Input::Keys(keys) => json!({ "keys": keys.len() }),
         };
         self.audit("input", Some(pane), Some(detail));
-        if let Some(muffit) = session.muffit_of(&local) {
+        if let Some(provider) = session.muffit_of(&local) {
             let typist = from.filter(|_| self.caller == Caller::Hub);
-            self.muffit_input(muffit.clone(), pane, &local, input, typist)
-                .await;
+            crate::muffit::input(
+                &mut self.lines,
+                provider,
+                pane,
+                &local,
+                input,
+                typist,
+                &self.conversations,
+                &self.wire,
+                &self.node.state_dir,
+            )
+            .await;
             return true;
         }
         let source = if typed { Source::Terminal } else { Source::Reply };
@@ -1689,47 +1702,6 @@ impl Session {
                     true
                 }
             },
-        }
-    }
-
-    /// The composer's text is held per socket until its carriage return and sent as one message,
-    /// over the follower's socket with a `msg_id` when this socket is watching the pane.
-    async fn muffit_input(
-        &mut self,
-        provider: Arc<kampr_muffit::MuffitProvider>,
-        pane: &str,
-        local: &str,
-        input: Input,
-        typist: Option<String>,
-    ) {
-        use kampr_muffit::input::Step;
-        let line = self.lines.entry((pane.to_string(), typist)).or_default();
-        let steps = match input {
-            Input::Bytes(bytes) => line.feed(&String::from_utf8_lossy(&bytes)),
-            Input::Paste(text) => line.feed(&kampr_core::paste::bracketed(&text)),
-            Input::Keys(keys) => line.keys(&keys),
-        };
-        let session = kampr_muffit::session_of(local).unwrap_or_default();
-        for step in steps {
-            let sent = match step {
-                Step::Interrupt => provider.client().interrupt(session).await,
-                Step::Submit(text) => {
-                    let msg_id = ulid::Ulid::generate().to_string();
-                    let (text, images) = crate::paste::lift_images(&self.node.state_dir, &text);
-                    match self.panes.get(pane).and_then(|h| h.muffit.as_ref()) {
-                        Some(commands) => commands
-                            .send(kampr_muffit::follow::Command::Input { text, msg_id, images })
-                            .await
-                            .map_err(|_| anyhow::anyhow!("the conversation closed")),
-                        None => provider.client().input(session, &text, &images, None).await,
-                    }
-                }
-            };
-            if let Err(e) = sent {
-                self.wire
-                    .error(ErrorCode::SessionUnavailable, &format!("{e:#}"), Some(pane));
-                return;
-            }
         }
     }
 
@@ -2018,9 +1990,9 @@ impl Session {
             );
             return;
         }
-        if let Some(link) = session.muffit_link(&local) {
-            self.audit("answer", Some(pane), Some(json!({ "key": key, "muffit": true })));
-            self.muffit_answer(link.provider, pane, &link.session, key).await;
+        if let Some(result) = session.answer(&local, key).await {
+            self.audit("answer", Some(pane), Some(json!({ "key": key, "convo": true })));
+            crate::muffit::answer_result(&self.wire, pane, result);
             return;
         }
         // The node decides whether a submit key follows, per harness — the client sends only the
@@ -2059,39 +2031,6 @@ impl Session {
                 self.wire
                     .error(offline_code(&session, &local), &e.to_string(), Some(pane));
                 return;
-            }
-        }
-    }
-
-    /// A permission prompt is answered over muffit's REST, never with keystrokes; a prompt that
-    /// is already gone clears the strip.
-    async fn muffit_answer(
-        &mut self,
-        provider: Arc<kampr_muffit::MuffitProvider>,
-        pane: &str,
-        session: &str,
-        key: &str,
-    ) {
-        let Some(answer) = crate::muffit::answer_for(key) else {
-            self.wire.error(
-                ErrorCode::BadRequest,
-                "a muffit prompt is answered 1, 2 or 3",
-                Some(pane),
-            );
-            return;
-        };
-        let Some(prompt) = crate::muffit::prompt(&provider, session) else {
-            self.wire.send(&crate::muffit::pending(pane, None));
-            return;
-        };
-        match provider.client().answer(session, prompt.id, answer).await {
-            Ok(kampr_muffit::Answered::Taken) => {}
-            Ok(kampr_muffit::Answered::NoLongerWaiting) => {
-                self.wire.send(&crate::muffit::pending(pane, None));
-            }
-            Err(e) => {
-                self.wire
-                    .error(ErrorCode::SessionUnavailable, &format!("{e:#}"), Some(pane));
             }
         }
     }
@@ -3012,9 +2951,9 @@ fn offline_code(session: &crate::sessions::SessionNode, local: &str) -> ErrorCod
     }
 }
 
-/// A native pane has no herdr behind it, only its keeper.
+/// A pane with no herdr behind it, only its keeper.
 fn failure_code(local: &str) -> ErrorCode {
-    match local.starts_with(kampr_native::PREFIX) || local.starts_with(kampr_muffit::PREFIX) {
+    match crate::conversations::session_pane(local) {
         true => ErrorCode::SessionUnavailable,
         false => ErrorCode::HerdrUnavailable,
     }
@@ -3985,7 +3924,6 @@ mod tests {
                     warm: convo::warmth(),
                     warmth: Arc::new(crate::warm::ConvoWarmth::default()),
                     followed: convo::followed(),
-                    muffit: None,
                     _hold: hold,
                 },
             );
