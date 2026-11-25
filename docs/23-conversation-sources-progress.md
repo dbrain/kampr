@@ -51,7 +51,7 @@ CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778
 launching. Now in flight:
 
 - **s4** — review of docs/22-parity.md.
-- **s14 — Phase 5 (kampr-claude, the headless source)**: a new `kampr-claude` crate — the
+- **s15 — Phase 5 (kampr-claude, the headless source)**: a new `kampr-claude` crate — the
   stream-json reader/writer, `launch.rs` (scrubbed env + billing guards 1–5), `ClaudeSource`
   (create/resume/end/hand-to-terminal) + `ClaudeConversation` (lines→`Update`s, `Command`s→lines,
   guards 6–9), wired into the node's `conversations` registry. **Rust only** — the client
@@ -59,7 +59,7 @@ launching. Now in flight:
   test reaches Anthropic** — a mock `ANTHROPIC_BASE_URL` (happy SSE + error path) + throwaway
   `CLAUDE_CONFIG_DIR` + `billing = any` + `KAMPR_TEST=1`, and a guard test that the launcher
   refuses to start under `KAMPR_TEST=1` without a mock. In a worktree (isolated from s11's Rust WIP).
-- **s15 — Phase 2b (the client learns the vocabulary, Kotlin)**: mirror the 13 `convo.*`
+- **s14 — Phase 2b (the client learns the vocabulary, Kotlin)**: mirror the 13 `convo.*`
   `ServerMsg` + 5 `ClientMsg` + widened `answer` in `client/shared/.../wire/`, and build the pane
   pieces in `client/conversation/` (controls sheet, actions palette, task panel, trouble banner,
   billing/limits in the header, composer send/queue/send-now) + the `kampr-tui` mirror. Nothing the
@@ -98,7 +98,7 @@ launching. Now in flight:
   (kampr-keep 48/48).
 
 Critical path: **Phase 2a** (wire, Rust — committed be4c2a9d, review s13 SOUND) → **Phase 2b**
-(client UI, Kotlin — launching, s15) + **Phase 5** (kampr-claude — launching, s14) → **Phase 7**
+(client UI, Kotlin — launching, s14) + **Phase 5** (kampr-claude — launching, s15) → **Phase 7**
 (pane pump). Phase 4 is **closed**.
 
 Phase 2 split on the toolchain boundary for review: **2a (Rust, s6)** adds `convo.abilities`,
