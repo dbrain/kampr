@@ -170,9 +170,9 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 4 — a keeper for a process that speaks lines — CLOSED (b3b5411c + 278e74b5 + 36622778; kampr-keep 48/48; two reviews passed). Note for Phase 5's pipe consumer: a `Truncated { oldest_seq }` does NOT deliver the `oldest_seq` entry itself — treat it as a hard gap boundary.
 
-## Phase 5 — Claude with no terminal — not started
+## Phase 5 — Claude with no terminal — IN FLIGHT (s15, Rust, worktree): the `kampr-claude` crate (stream-json reader/writer, `launch.rs` scrubbed env + billing guards 1–5, `ClaudeSource` + `ClaudeConversation` guards 6–9), node wiring, mock endpoint (no test reaches Anthropic).
 
-## Phase 6 — Claude in a terminal, the gaps that need no trait — not started
+## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685): trouble parsing (`system/api_error`, `isApiErrorMessage`, `StopFailure.error`), the unused hooks (`PreToolUse`/`SubagentStart`/`SubagentStop`/`Stop.background_tasks`), fork-aware transcript read, live shell/subagent data — in `kampr-journal` + `kampr-node`. Review pending.
 
 ## Phase 7 — the pane pump behind the trait — not started
 
