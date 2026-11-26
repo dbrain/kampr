@@ -49,10 +49,19 @@ Built and committed so far: s1 (Phase 1), s2 (docs/22), s6 (Phase 2a, be4c2a9d),
 CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778; kampr-keep
 48/48; two reviews passed). **Phase 2a review (s13) passed (SOUND)** — 2b and 5 are unblocked and
 launching. **CURRENT STATUS:** Phases 0,1,2a,2b,3,4,5,6,7 are ALL DONE with their review loops
-CLOSED (2a=s13, 2b=s21, 3=s23, 4=s12, 5=s19, 6=s20, 7=s25→s26 B1 fix). **No build workers in
-flight.** Next: the gate-green pass (`make check` is red on pre-existing toolchain drift — rustfmt
-1.10.0/1.99.1 wants to split ~34 files' long call lists + clippy), then Phase 8 (parity pass) and
-Phase 9 (third source).
+CLOSED (2a=s13, 2b=s21, 3=s23, 4=s12, 5=s19, 6=s20, 7=s25→s26 B1 fix). **Gate-green DONE (s27):**
+fmt `b5e11691` + clippy `bf9beefc`; `make check` GREEN (2341 tests). **Phase 8 DONE (s28,
+`108a7ce1`)** — the parity pass over docs/22 against the code; it found a **CRITICAL functional
+bug**: the headless Claude pane *declares* send/answer but the node routes the pane's `Input`/
+`Answer` to the provider's `write_pane` (which bails — a headless pane has no PTY) instead of the
+conversation, so composer send and ask-dock answer are drawn but non-functional for headless Claude.
+Both prior reviews (s19 money-safety, s25 wire-unchanged) had scopes that missed this. Phase 8 also
+named the remaining headless gaps: interrupt (never sends the `interrupt` control request), context
+usage (never calls `get_context_usage`), `convo.suggest` (slash/@ completion not handled),
+queue/send-now/unqueue (node ignores `when`, never sends `cancel_async_message`), files (dropped on
+dispatch), and subagent-live + search/older (not handled). **Next: Phase 5b-1 (wire headless
+Input+Answer to the conversation — the routing fix, CRITICAL), then 5b-2/5b-3 (source
+completeness), Phase 9 (Codex third source), the muffit gate, and screenshots.**
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
@@ -108,6 +117,16 @@ Phase 9 (third source).
   `Update::Missing`; D3 `lifecycle` assert. Both B1 tests red→green; node 474 (1 = D4 flake);
   clippy 0 new; test-fast 2150. Kept the mass `cargo fmt` reformat OUT (pre-existing drift,
   separate gate-green pass). **Phase 7 review loop CLOSED.**
+- **s27 — gate-green (kampr): DONE** — fmt `b5e11691` (rustfmt 1.10.0 / the pinned 1.99.1
+  toolchain) + clippy `bf9beefc`; `make check` **GREEN** (2341 tests). The flakes it hit
+  (`a_blocked_agent_pane`, the journal `it` set) were environmental — other sessions building on
+  the shared tree in parallel — and all pass alone.
+- **s28 — Phase 8 (parity pass over docs/22): DONE** (`108a7ce1`, docs only) — checked every row
+  against the headless source, the terminal pump, the muffit source and the node's routing. Every
+  terminal-only row carries its measured reason; the "Not determined" section is resolved. **Found
+  the CRITICAL headless routing bug** (Input/Answer → provider `write_pane`, which bails) plus the
+  headless gap list (interrupt, context usage, `convo.suggest`, queue/send-now, files,
+  subagent-live, search/older). **Unblocks Phase 5b-1.**
 - **s14 — Phase 2b (the client learns the vocabulary, Kotlin): DONE** — committed `80fe0d2a`
   (13 files, +2457/−242, `client/` only). Wire mirror (`Protocol.kt`/`Codec.kt`/`Serializers.kt`):
   all 13 `convo.*` `ServerMsg` + 5 `ClientMsg` + widened `Answer.reply`, field-for-field vs the Rust
