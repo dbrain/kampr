@@ -266,6 +266,12 @@ impl Conversation for ClaudeConversation {
                         }
                     }
                     Ok(PipeRead::CaughtUp) => {
+                        // A quiet death writes no further line, and a failed send is the only
+                        // other exit: without this check the thread outlives the conversation
+                        // and pins the runtime's shutdown.
+                        if line_tx.is_closed() {
+                            break;
+                        }
                         let _ = reader.wait(Duration::from_millis(100));
                     }
                     Ok(PipeRead::Truncated { .. }) => {}

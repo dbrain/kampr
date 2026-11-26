@@ -22,6 +22,7 @@ const MOCK: &str = concat!(
 struct Mock {
     port: u16,
     child: Child,
+    _dir: tempfile::TempDir,
 }
 
 impl Mock {
@@ -40,8 +41,7 @@ impl Mock {
             assert!(Instant::now() < deadline, "the mock never came up");
             std::thread::sleep(Duration::from_millis(50));
         }
-        std::mem::forget(dir);
-        Mock { port, child }
+        Mock { port, child, _dir: dir }
     }
 
     fn url(&self) -> String {
