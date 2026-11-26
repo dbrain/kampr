@@ -1769,6 +1769,28 @@ impl Session {
             .await;
             return true;
         }
+        // A headless conversation pane has no terminal: its input is the conversation's, not a
+        // keystroke to a pane there is none behind.
+        if let Some(ref_) = session.conversation(&local)
+            && !ref_.terminal
+        {
+            let text = match &input {
+                Input::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
+                Input::Paste(text) => text.clone(),
+                Input::Keys(keys) => keys.join(" "),
+            };
+            self.convo_command(
+                pane,
+                kampr_core::conversation::Command::Input {
+                    text,
+                    msg_id: ulid::Ulid::generate().to_string(),
+                    images: vec![],
+                    files: vec![],
+                    when: kampr_core::conversation::When::Idle,
+                },
+            );
+            return true;
+        }
         let source = if typed { Source::Terminal } else { Source::Reply };
         let reader = (!typed).then(|| self.boot_hold_reader(pane)).flatten();
         match reader {
@@ -2091,6 +2113,38 @@ impl Session {
             if let Err(why) = answered {
                 self.wire.error(ErrorCode::BadRequest, &why, Some(pane));
             }
+            return;
+        }
+        // A headless conversation pane answers through its conversation, not a terminal keystroke.
+        if let Some(ref_) = session.conversation(&local)
+            && !ref_.terminal
+        {
+            let reply = reply.cloned().unwrap_or(match key {
+                "1" => Reply::Allow {
+                    input: None,
+                    remember: false,
+                },
+                "2" => Reply::Allow {
+                    input: None,
+                    remember: true,
+                },
+                "3" => Reply::Deny { message: None },
+                _ => {
+                    self.wire.error(
+                        ErrorCode::BadRequest,
+                        "this conversation takes no such answer key",
+                        Some(pane),
+                    );
+                    return;
+                }
+            });
+            self.convo_command(
+                pane,
+                kampr_core::conversation::Command::Answer {
+                    ask: id.unwrap_or_default().to_string(),
+                    reply,
+                },
+            );
             return;
         }
         if text.is_some_and(|t| !t.trim().is_empty()) {

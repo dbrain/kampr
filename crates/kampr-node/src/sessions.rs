@@ -340,12 +340,19 @@ fn claude_source(
             return (None, None);
         }
     };
-    let keeper = match kampr_keep::own_exe() {
-        Ok(keeper) => keeper,
-        Err(e) => {
-            warn!(error = %format!("{e:#}"), "headless Claude sessions are unavailable on this node");
-            return (None, None);
-        }
+    // KAMPR_KEEP_EXE points a test at the keeper the test built; own_exe is the installed binary.
+    let keeper = match std::env::var_os("KAMPR_KEEP_EXE") {
+        Some(p) => PathBuf::from(p),
+        None => match kampr_keep::own_exe() {
+            Ok(keeper) => keeper,
+            Err(e) => {
+                warn!(
+                    error = %format!("{e:#}"),
+                    "headless Claude sessions are unavailable on this node"
+                );
+                return (None, None);
+            }
+        },
     };
     let (herd, _topology) = kampr_claude::Herd::new();
     let herd = Arc::new(herd);
@@ -401,6 +408,11 @@ pub struct Sessions {
 }
 
 impl Sessions {
+    /// The primary's headless Claude source, so a test can open a session the herd lists.
+    pub fn claude_source(&self) -> Option<Arc<kampr_claude::ClaudeSource>> {
+        self.primary.claude.clone()
+    }
+
     /// **Never touches the network.** Every provider connects on its own supervised loop, so a
     /// node with no herdr at all still binds its port and serves an empty herd.
     pub fn open(config: &Config, state_dir: &Path) -> Arc<Self> {

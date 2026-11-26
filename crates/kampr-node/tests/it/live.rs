@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
-type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
+pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 mod native;
 
@@ -367,10 +367,10 @@ fn herdr_home() -> PathBuf {
         .join("herdr")
 }
 
-struct Harness {
+pub(crate) struct Harness {
     _session: Session,
     _state: tempfile::TempDir,
-    node: Arc<Node>,
+    pub(crate) node: Arc<Node>,
     origin: String,
     server: tokio::task::JoinHandle<()>,
 }
@@ -382,7 +382,7 @@ impl Drop for Harness {
 }
 
 impl Harness {
-    async fn start_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Self {
+    pub(crate) async fn start_with(tag: &str, tweak: impl FnOnce(&mut Config)) -> Self {
         let session = Session::start(tag).await;
         let created = session
             .call("workspace.create", json!({ "label": "kampr", "cwd": "/tmp" }))
@@ -461,7 +461,7 @@ impl Harness {
         }
     }
 
-    async fn token(&self, role: Role) -> String {
+    pub(crate) async fn token(&self, role: Role) -> String {
         let pairing = self
             .node
             .auth
@@ -476,7 +476,7 @@ impl Harness {
         response["token"].as_str().expect("a token").to_string()
     }
 
-    async fn connect(&self, token: &str) -> Socket {
+    pub(crate) async fn connect(&self, token: &str) -> Socket {
         let url = self.origin.replacen("http", "ws", 1) + "/ws";
         let mut request = tungstenite::client::IntoClientRequest::into_client_request(url).unwrap();
         request.headers_mut().insert(

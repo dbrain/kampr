@@ -51,6 +51,29 @@ def sse(text):
                                "usage": {"output_tokens": 15}})
         + ev("message_stop", {"type": "message_stop"}))
 
+def tool_sse():
+    """The Anthropic Messages SSE completion for a single tool_use block: `claude -p` will
+    answer it with a `can_use_tool` control request when it is in a mode that asks."""
+    def ev(name, data):
+        return f"event: {name}\ndata: {json.dumps(data)}\n\n"
+    return (
+        ev("message_start", {"type": "message_start", "message": {
+            "id": "msg_mock", "type": "message", "role": "assistant", "model": "mock",
+            "content": [], "stop_reason": None, "stop_sequence": None,
+            "usage": {"input_tokens": 8, "output_tokens": 0}}})
+        + ev("content_block_start", {"type": "content_block_start", "index": 0,
+                                     "content_block": {"type": "tool_use",
+                                                       "id": "toolu_mock", "name": "Bash",
+                                                       "input": {}}})
+        + ev("input_json_delta", {"type": "input_json_delta", "index": 0,
+                                  "delta": {"type": "input_json_delta",
+                                            "partial_json": "{\"command\": \"echo mock\"}"}})
+        + ev("content_block_stop", {"type": "content_block_stop", "index": 0})
+        + ev("message_delta", {"type": "message_delta",
+                               "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                               "usage": {"output_tokens": 15}})
+        + ev("message_stop", {"type": "message_stop"}))
+
 class Handler(BaseHTTPRequestHandler):
     def _body(self):
         n = int(self.headers.get("content-length", 0))
@@ -73,6 +96,13 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return
         text = " ".join(m[1:]) if m and len(m) > 1 else "Hello from the mock."
+        if m and m[0] == "tool":
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(tool_sse().encode())
+            self.wfile.flush()
+            return
         if m and m[0] == "overage":
             self.send_response(200)
             self.send_header("content-type", "text/event-stream")

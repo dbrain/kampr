@@ -10,6 +10,7 @@ mod docker_mesh;
 mod done_read;
 mod files;
 mod fleet_book;
+mod headless;
 mod hub_enrolment;
 mod limits;
 mod live;
