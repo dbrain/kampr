@@ -592,6 +592,10 @@ fn client() -> Vec<ClientMsg> {
             id: None,
             when: None,
         },
+        ClientMsg::InputUnqueue {
+            pane: pane(),
+            id: "m1".into(),
+        },
         ClientMsg::Paste {
             pane: pane(),
             b64: "dA==".into(),
