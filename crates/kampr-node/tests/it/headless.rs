@@ -41,7 +41,11 @@ impl Mock {
             assert!(Instant::now() < deadline, "the mock never came up");
             std::thread::sleep(Duration::from_millis(50));
         }
-        Mock { port, child, _dir: dir }
+        Mock {
+            port,
+            child,
+            _dir: dir,
+        }
     }
 
     fn url(&self) -> String {
@@ -95,7 +99,10 @@ async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_
         ("KAMPR_KEEP_LAUNCH", "detached"),
         ("ANTHROPIC_BASE_URL", mock.url().as_str()),
         ("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"),
-        ("KAMPR_KEEP_EXE", kampr_testkit::keeper().display().to_string().as_str()),
+        (
+            "KAMPR_KEEP_EXE",
+            kampr_testkit::keeper().display().to_string().as_str(),
+        ),
     ] {
         unsafe { std::env::set_var(k, v) };
     }
