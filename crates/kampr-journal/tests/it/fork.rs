@@ -58,7 +58,10 @@ fn a_branch_written_again_after_the_other_is_shown_again() {
     let turns = scratch.turns();
     assert_eq!(shown(&turns), ["p", "a1", "a2"], "a2 was written last");
 
-    append(&scratch.transcript, &rec("b3", "b1", "assistant", "b3").to_string());
+    append(
+        &scratch.transcript,
+        &rec("b3", "b1", "assistant", "b3").to_string(),
+    );
     let grown = scratch.turns();
     assert_eq!(
         shown(&grown),

@@ -614,11 +614,16 @@ fn an_overlong_write_is_refused_and_never_reaches_the_child() {
     // Straight at the socket, past any client cap: the keeper must refuse, not ack.
     let mut stream = UnixStream::connect(live.session.path().join("ctl.sock")).expect("connect");
     let long = format!("write {}\n", "x".repeat(64 * 1024 + 100));
-    stream.write_all(long.as_bytes()).expect("send the overlong request");
+    stream
+        .write_all(long.as_bytes())
+        .expect("send the overlong request");
     stream.set_read_timeout(Some(SOON)).expect("timeout");
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply).expect("a reply");
-    assert!(reply.starts_with("error"), "an overlong write was not refused: {reply:?}");
+    assert!(
+        reply.starts_with("error"),
+        "an overlong write was not refused: {reply:?}"
+    );
 
     close(&live.session).expect("close");
     live.exit(SOON);

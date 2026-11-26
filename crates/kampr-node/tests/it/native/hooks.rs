@@ -1952,20 +1952,14 @@ async fn a_turn_that_fails_says_so_on_the_conversation() {
     }));
     let frame = c
         .client
-        .until(
-            "the trouble",
-            |c| {
-                c.others
-                    .iter()
-                    .position(|v| v["t"] == "convo.trouble" && v["trouble"]["kind"] == "not-logged-in")
-                    .map(|at| c.others.remove(at))
-            },
-        )
+        .until("the trouble", |c| {
+            c.others
+                .iter()
+                .position(|v| v["t"] == "convo.trouble" && v["trouble"]["kind"] == "not-logged-in")
+                .map(|at| c.others.remove(at))
+        })
         .await;
-    assert_eq!(
-        frame["trouble"]["text"],
-        "Not logged in · Please run /login"
-    );
+    assert_eq!(frame["trouble"]["text"], "Not logged in · Please run /login");
     assert_eq!(frame["pane"], json!(c.pane));
 }
 
@@ -1980,27 +1974,21 @@ async fn a_new_prompt_clears_the_trouble_a_failure_left() {
         "last_assistant_message": "Not logged in · Please run /login",
     }));
     c.client
-        .until(
-            "the trouble",
-            |c| {
-                c.others
-                    .iter()
-                    .any(|v| v["t"] == "convo.trouble" && !v["trouble"].is_null())
-                    .then_some(())
-            },
-        )
+        .until("the trouble", |c| {
+            c.others
+                .iter()
+                .any(|v| v["t"] == "convo.trouble" && !v["trouble"].is_null())
+                .then_some(())
+        })
         .await;
     c.fire(json!({ "hook_event_name": "UserPromptSubmit", "prompt": "again" }));
     c.client
-        .until(
-            "the trouble cleared",
-            |c| {
-                c.others
-                    .iter()
-                    .position(|v| v["t"] == "convo.trouble" && v["trouble"].is_null())
-                    .map(|at| c.others.remove(at))
-            },
-        )
+        .until("the trouble cleared", |c| {
+            c.others
+                .iter()
+                .position(|v| v["t"] == "convo.trouble" && v["trouble"].is_null())
+                .map(|at| c.others.remove(at))
+        })
         .await;
 }
 
@@ -2018,15 +2006,12 @@ async fn what_is_still_running_is_claudes_own_list_when_the_turn_stops() {
     }));
     let frame = c
         .client
-        .until(
-            "the task list",
-            |c| {
-                c.others
-                    .iter()
-                    .position(|v| v["t"] == "convo.tasks" && v["tasks"].as_array().map(|t| t.len()) == Some(1))
-                    .map(|at| c.others.remove(at))
-            },
-        )
+        .until("the task list", |c| {
+            c.others
+                .iter()
+                .position(|v| v["t"] == "convo.tasks" && v["tasks"].as_array().map(|t| t.len()) == Some(1))
+                .map(|at| c.others.remove(at))
+        })
         .await;
     assert_eq!(frame["tasks"][0]["id"], "b1");
     assert_eq!(frame["tasks"][0]["kind"], "shell");
@@ -2056,15 +2041,12 @@ async fn a_foreground_shells_output_is_streamed_from_its_task_file() {
     std::fs::write(&out, "line 1\n").unwrap();
 
     c.client
-        .until(
-            "the shell's first line",
-            |c| {
-                c.others
-                    .iter()
-                    .position(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && v["text"] == "line 1\n")
-                    .map(|at| c.others.remove(at))
-            },
-        )
+        .until("the shell's first line", |c| {
+            c.others
+                .iter()
+                .position(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && v["text"] == "line 1\n")
+                .map(|at| c.others.remove(at))
+        })
         .await;
 
     std::thread::sleep(Duration::from_millis(400));
@@ -2072,15 +2054,12 @@ async fn a_foreground_shells_output_is_streamed_from_its_task_file() {
     f.write_all(b"line 2\n").unwrap();
     f.flush().unwrap();
     c.client
-        .until(
-            "the shell's second line",
-            |c| {
-                c.others
-                    .iter()
-                    .any(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && v["text"] == "line 2\n")
-                    .then_some(())
-            },
-        )
+        .until("the shell's second line", |c| {
+            c.others
+                .iter()
+                .any(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && v["text"] == "line 2\n")
+                .then_some(())
+        })
         .await;
 
     c.fire(json!({
@@ -2091,15 +2070,12 @@ async fn a_foreground_shells_output_is_streamed_from_its_task_file() {
     }));
     let ended = c
         .client
-        .until(
-            "the shell's end",
-            |c| {
-                c.others
-                    .iter()
-                    .position(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && !v["ended"].is_null())
-                    .map(|at| c.others.remove(at))
-            },
-        )
+        .until("the shell's end", |c| {
+            c.others
+                .iter()
+                .position(|v| v["t"] == "convo.task" && v["id"] == "t-shell-1" && !v["ended"].is_null())
+                .map(|at| c.others.remove(at))
+        })
         .await;
     assert_eq!(ended["ended"]["ok"], json!(true));
 }
@@ -2133,15 +2109,12 @@ async fn a_shell_named_by_stops_background_tasks_keeps_its_own_id() {
     std::fs::write(&out, "from b1\n").unwrap();
 
     c.client
-        .until(
-            "the background shell under its own id",
-            |c| {
-                c.others
-                    .iter()
-                    .position(|v| v["t"] == "convo.task" && v["id"] == "b1" && v["text"] == "from b1\n")
-                    .map(|at| c.others.remove(at))
-            },
-        )
+        .until("the background shell under its own id", |c| {
+            c.others
+                .iter()
+                .position(|v| v["t"] == "convo.task" && v["id"] == "b1" && v["text"] == "from b1\n")
+                .map(|at| c.others.remove(at))
+        })
         .await;
 
     let post = c.fire(json!({
@@ -2155,15 +2128,17 @@ async fn a_shell_named_by_stops_background_tasks_keeps_its_own_id() {
     f.write_all(b"still b1\n").unwrap();
     f.flush().unwrap();
     c.client
-        .until(
-            "the background shell goes on after the tool came back",
-            |c| {
-                c.others
-                    .iter()
-                    .any(|v| v["t"] == "convo.task" && v["id"] == "b1" && v["text"] == "still b1\n" && v["ended"].is_null())
-                    .then_some(())
-            },
-        )
+        .until("the background shell goes on after the tool came back", |c| {
+            c.others
+                .iter()
+                .any(|v| {
+                    v["t"] == "convo.task"
+                        && v["id"] == "b1"
+                        && v["text"] == "still b1\n"
+                        && v["ended"].is_null()
+                })
+                .then_some(())
+        })
         .await;
 }
 
@@ -2188,15 +2163,12 @@ async fn a_subagents_conversation_is_followed_live_from_the_strip() {
         .send(json!({ "t": "convo.sub", "pane": c.pane, "id": id }))
         .await;
     c.client
-        .until(
-            "the subagent's first page",
-            |c| {
-                c.others
-                    .iter()
-                    .position(|v| v["t"] == "convo" && v["sub"] == id)
-                    .map(|at| c.others.remove(at))
-            },
-        )
+        .until("the subagent's first page", |c| {
+            c.others
+                .iter()
+                .position(|v| v["t"] == "convo" && v["sub"] == id)
+                .map(|at| c.others.remove(at))
+        })
         .await;
 
     let mut f = std::fs::OpenOptions::new().append(true).open(&sub).unwrap();
@@ -2206,14 +2178,11 @@ async fn a_subagents_conversation_is_followed_live_from_the_strip() {
     .unwrap();
     f.flush().unwrap();
     c.client
-        .until(
-            "the subagent's growth",
-            |c| {
-                c.others
-                    .iter()
-                    .any(|v| v["t"] == "convo.turn" && v["sub"] == id && v["turns"][0]["id"] == "s-2")
-                    .then_some(())
-            },
-        )
+        .until("the subagent's growth", |c| {
+            c.others
+                .iter()
+                .any(|v| v["t"] == "convo.turn" && v["sub"] == id && v["turns"][0]["id"] == "s-2")
+                .then_some(())
+        })
         .await;
 }

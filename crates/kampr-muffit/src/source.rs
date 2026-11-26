@@ -1,12 +1,10 @@
 use crate::follow::{self, Follow};
 use crate::provider::AGENT;
 use crate::wire::{Image, PermissionPrompt, SessionState};
-use kampr_core::conversation::abilities::{
-    AskAbility, Fact, InputAbility, Lifecycle, Stream, Steer,
-};
+use kampr_core::conversation::abilities::{AskAbility, Fact, InputAbility, Lifecycle, Steer, Stream};
 use kampr_core::conversation::{
-    Abilities, Ask, AskOption, Command, Conversation, Ending, Emit, NewSession, Refusal, Source,
-    Stored, Update,
+    Abilities, Ask, AskOption, Command, Conversation, Emit, Ending, NewSession, Refusal, Source, Stored,
+    Update,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -31,8 +29,8 @@ impl Source for MuffitSource {
     }
 
     async fn open(&self, pane: &str) -> Result<Box<dyn Conversation>, Refusal> {
-        let session = crate::session_of(pane)
-            .ok_or_else(|| Refusal::new(format!("{pane} is not a muffit session")))?;
+        let session =
+            crate::session_of(pane).ok_or_else(|| Refusal::new(format!("{pane} is not a muffit session")))?;
         Ok(Box::new(MuffitConversation::new(
             self.provider.clone(),
             session.to_string(),
@@ -75,8 +73,8 @@ impl Source for MuffitSource {
     }
 
     async fn end(&self, pane: &str, _how: Ending) -> Result<(), Refusal> {
-        let session = crate::session_of(pane)
-            .ok_or_else(|| Refusal::new(format!("{pane} is not a muffit session")))?;
+        let session =
+            crate::session_of(pane).ok_or_else(|| Refusal::new(format!("{pane} is not a muffit session")))?;
         self.provider
             .client()
             .stop(session)
@@ -155,17 +153,11 @@ impl Conversation for MuffitConversation {
 
 /// What the seam says, in the follower's words. A command the follower has no word for is
 /// dropped: the pane asked for something the source did not declare.
-async fn commands_to_follow(
-    mut commands: mpsc::Receiver<Command>,
-    outgoing: mpsc::Sender<follow::Command>,
-) {
+async fn commands_to_follow(mut commands: mpsc::Receiver<Command>, outgoing: mpsc::Sender<follow::Command>) {
     while let Some(command) = commands.recv().await {
         let mapped = match command {
             Command::Input {
-                text,
-                msg_id,
-                images,
-                ..
+                text, msg_id, images, ..
             } => Some(follow::Command::Input {
                 text,
                 msg_id,
@@ -211,12 +203,7 @@ fn update_of(update: follow::Update) -> Update {
         follow::Update::SubTurns { id, turns } => Update::SubTurns { id, turns },
         follow::Update::State(state) => Update::State(state),
         follow::Update::Tasks(tasks) => Update::Tasks(tasks),
-        follow::Update::TaskOutput {
-            id,
-            at,
-            text,
-            ended,
-        } => Update::TaskOutput { id, at, text, ended },
+        follow::Update::TaskOutput { id, at, text, ended } => Update::TaskOutput { id, at, text, ended },
         follow::Update::Trouble(trouble) => Update::Trouble(trouble),
         follow::Update::Session(facts) => Update::Session(facts),
         follow::Update::Controls(controls) => Update::Controls(controls),
@@ -239,20 +226,16 @@ fn ask_of(prompt: &PermissionPrompt) -> Ask {
         question: prompt.action.clone(),
         multi: false,
         context: None,
-        options: [
-            ("1", "Allow"),
-            ("2", "Always allow"),
-            ("3", "Deny"),
-        ]
-        .into_iter()
-        .map(|(key, label)| AskOption {
-            key: key.into(),
-            label: label.into(),
-            detail: None,
-            chosen: false,
-            text: false,
-        })
-        .collect(),
+        options: [("1", "Allow"), ("2", "Always allow"), ("3", "Deny")]
+            .into_iter()
+            .map(|(key, label)| AskOption {
+                key: key.into(),
+                label: label.into(),
+                detail: None,
+                chosen: false,
+                text: false,
+            })
+            .collect(),
     }
 }
 
@@ -260,8 +243,8 @@ fn ask_of(prompt: &PermissionPrompt) -> Ask {
 mod tests {
     use super::*;
     use kampr_core::conversation::{
-        ContextUse, Cost, FileRef, Image as SeamImage, Live as SeamLive, Reply, RunState,
-        SessionFacts, Steer, When,
+        ContextUse, Cost, FileRef, Image as SeamImage, Live as SeamLive, Reply, RunState, SessionFacts,
+        Steer, When,
     };
     use kampr_journal::{ConvoFound, Facets, Page, Turn};
 
@@ -298,16 +281,16 @@ mod tests {
             more: false,
         };
         let cases: [(follow::Update, Update); 21] = [
-            (
-                follow::Update::Page(page.clone()),
-                Update::Page(page.clone()),
-            ),
+            (follow::Update::Page(page.clone()), Update::Page(page.clone())),
             (
                 follow::Update::Turns(page.turns.clone()),
                 Update::Turns(page.turns.clone()),
             ),
             (follow::Update::Older(page.clone()), Update::Older(page)),
-            (follow::Update::Facets(Facets::default()), Update::Facets(Facets::default())),
+            (
+                follow::Update::Facets(Facets::default()),
+                Update::Facets(Facets::default()),
+            ),
             (
                 follow::Update::Pending(Some(prompt())),
                 Update::Asks(vec![ask_of(&prompt())]),
@@ -522,9 +505,7 @@ mod tests {
             .await
             .unwrap();
         incoming
-            .send(Command::Unfollow {
-                id: "call_7".into(),
-            })
+            .send(Command::Unfollow { id: "call_7".into() })
             .await
             .unwrap();
         drop(incoming);
@@ -571,9 +552,7 @@ mod tests {
                     id: "call_7".into(),
                     from: 0,
                 },
-                follow::Command::Unfollow {
-                    id: "call_7".into(),
-                },
+                follow::Command::Unfollow { id: "call_7".into() },
             ]
         );
     }

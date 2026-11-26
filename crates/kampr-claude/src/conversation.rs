@@ -2,23 +2,19 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use kampr_core::conversation::abilities::{Abilities, AskAbility, Fact, InputAbility, Lifecycle, Stream, Steer};
+use kampr_core::conversation::abilities::{
+    Abilities, AskAbility, Fact, InputAbility, Lifecycle, Steer, Stream,
+};
 use kampr_core::conversation::control::{Action, Control, ControlKind};
-use kampr_core::conversation::facts::{
-    Cost, Fix, Limits, RunState, SessionFacts, Task, TaskState, Trouble,
-};
-use kampr_core::conversation::{
-    Ask, AskOption, Command, Conversation, Emit, Live, LiveTool, Reply, Update,
-};
-use kampr_keep::{PipeDir, PipeRead, SeqReader, SessionDir, write};
+use kampr_core::conversation::facts::{Cost, Fix, Limits, RunState, SessionFacts, Task, TaskState, Trouble};
+use kampr_core::conversation::{Ask, AskOption, Command, Conversation, Emit, Live, LiveTool, Reply, Update};
 use kampr_journal::Journal;
+use kampr_keep::{PipeDir, PipeRead, SeqReader, SessionDir, write};
 use tokio::sync::mpsc;
 
-use crate::billing::{
-    self, Account, OverageDecision, account_allowed, overage_decision, turn_key_source_ok,
-};
-use crate::config::{Billing as Policy, Overage};
+use crate::billing::{self, Account, OverageDecision, account_allowed, overage_decision, turn_key_source_ok};
 use crate::config::Config;
+use crate::config::{Billing as Policy, Overage};
 use crate::wire::{self, Assistant, BlockStart, ContentBlock, Line, StreamEvent};
 
 const COMMANDS: usize = 64;
@@ -36,7 +32,12 @@ pub struct ClaudeConversation {
 }
 
 impl ClaudeConversation {
-    pub fn new(config: &Config, session_path: PathBuf, session_id: String, transcript: Option<PathBuf>) -> Self {
+    pub fn new(
+        config: &Config,
+        session_path: PathBuf,
+        session_id: String,
+        transcript: Option<PathBuf>,
+    ) -> Self {
         Self {
             config: config.clone(),
             session_path,
@@ -190,7 +191,11 @@ impl Inner {
         self.tasks.insert(
             id,
             Task {
-                kind: task.task_type.clone().or_else(|| Some(existing.kind)).unwrap_or("task".into()),
+                kind: task
+                    .task_type
+                    .clone()
+                    .or_else(|| Some(existing.kind))
+                    .unwrap_or("task".into()),
                 backgrounded: task.is_backgrounded || existing.backgrounded,
                 state: match task.status.as_deref() {
                     Some(s) if s == "completed" || s == "failed" || s == "stopped" => TaskState::Ended,
@@ -237,7 +242,12 @@ impl Conversation for ClaudeConversation {
         // Guard 3, before a word is sent: `initialize` reads how the session would be paid for,
         // and it costs no turn.
         let init_id = inner.next_request();
-        if write(&session, &wire::control_request(&init_id, "initialize", serde_json::json!({}))).is_err() {
+        if write(
+            &session,
+            &wire::control_request(&init_id, "initialize", serde_json::json!({})),
+        )
+        .is_err()
+        {
             return;
         }
 
@@ -314,10 +324,21 @@ fn process_line(
             if !push(emit, Update::Actions(ClaudeConversation::actions_from(&init))) {
                 return false;
             }
-            if !push(emit, Update::Controls(ClaudeConversation::controls_from(&init, policy))) {
+            if !push(
+                emit,
+                Update::Controls(ClaudeConversation::controls_from(&init, policy)),
+            ) {
                 return false;
             }
-            if !push(emit, Update::Session(session_facts(session_id, Some(&init), inner.account.as_ref(), inner.overage))) {
+            if !push(
+                emit,
+                Update::Session(session_facts(
+                    session_id,
+                    Some(&init),
+                    inner.account.as_ref(),
+                    inner.overage,
+                )),
+            ) {
                 return false;
             }
             true
@@ -352,7 +373,13 @@ fn process_line(
                 return false;
             }
             if result.is_error {
-                push(emit, Update::Trouble(Some(api_trouble(&result.error, result.terminal_reason.as_deref()))));
+                push(
+                    emit,
+                    Update::Trouble(Some(api_trouble(
+                        &result.error,
+                        result.terminal_reason.as_deref(),
+                    ))),
+                );
             }
             push(emit, Update::State(RunState::Idle))
         }
@@ -381,14 +408,25 @@ fn process_line(
                     }
                 }
             }
-            if !push(emit, Update::Limits(Limits {
-                plan: inner.account.as_ref().and_then(|a| a.subscription_type.clone()),
-                usage: Some(usage),
-                resets_at: resets,
-            })) {
+            if !push(
+                emit,
+                Update::Limits(Limits {
+                    plan: inner.account.as_ref().and_then(|a| a.subscription_type.clone()),
+                    usage: Some(usage),
+                    resets_at: resets,
+                }),
+            ) {
                 return false;
             }
-            if !push(emit, Update::Session(session_facts(session_id, inner.init.as_ref(), inner.account.as_ref(), inner.overage))) {
+            if !push(
+                emit,
+                Update::Session(session_facts(
+                    session_id,
+                    inner.init.as_ref(),
+                    inner.account.as_ref(),
+                    inner.overage,
+                )),
+            ) {
                 return false;
             }
             true
@@ -419,22 +457,23 @@ fn process_line(
             }
             push(emit, Update::Tasks(inner.tasks_list()))
         }
-        Line::ApiRetry(retry) => {
-            push(
-                emit,
-                Update::Trouble(Some(Trouble {
-                    kind: "api".into(),
-                    text: retry.error.clone().unwrap_or_else(|| "the api is retrying".into()),
-                    status: "retrying".into(),
-                    retry: Some(kampr_core::conversation::facts::Retry {
-                        attempt: retry.attempt.unwrap_or(1) as u32,
-                        of: retry.max_retries.unwrap_or(3) as u32,
-                        in_ms: retry.retry_delay_ms.unwrap_or(0),
-                    }),
-                    fix: None,
-                })),
-            )
-        }
+        Line::ApiRetry(retry) => push(
+            emit,
+            Update::Trouble(Some(Trouble {
+                kind: "api".into(),
+                text: retry
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "the api is retrying".into()),
+                status: "retrying".into(),
+                retry: Some(kampr_core::conversation::facts::Retry {
+                    attempt: retry.attempt.unwrap_or(1) as u32,
+                    of: retry.max_retries.unwrap_or(3) as u32,
+                    in_ms: retry.retry_delay_ms.unwrap_or(0),
+                }),
+                fix: None,
+            })),
+        ),
         Line::ControlRequest(request) => {
             // A `can_use_tool` standing in the middle of a turn: an ask the pane answers.
             inner.pending_ask = Some(request.request_id.clone());
@@ -443,7 +482,13 @@ fn process_line(
         Line::ControlResponse(response) => {
             // Guard 3: the answer to `initialize` names how the session would be paid for.
             if response.request_id == "k1" {
-                let account = Account::from(&response.body.get("account").cloned().unwrap_or(serde_json::Value::Null));
+                let account = Account::from(
+                    &response
+                        .body
+                        .get("account")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                );
                 match account_allowed(policy, &account) {
                     Ok(()) => inner.preflight = Preflight::Allowed,
                     Err(trouble) => {
@@ -452,7 +497,15 @@ fn process_line(
                     }
                 }
                 inner.account = Some(account);
-                if !push(emit, Update::Session(session_facts(session_id, inner.init.as_ref(), inner.account.as_ref(), inner.overage))) {
+                if !push(
+                    emit,
+                    Update::Session(session_facts(
+                        session_id,
+                        inner.init.as_ref(),
+                        inner.account.as_ref(),
+                        inner.overage,
+                    )),
+                ) {
                     return false;
                 }
             }
@@ -498,7 +551,13 @@ fn assistant_updates(a: Assistant, emit: &mut Emit) -> bool {
 
 fn stream_event_updates(e: StreamEvent, emit: &mut Emit) -> bool {
     match e {
-        StreamEvent::TextDelta { text } => push(emit, Update::Live(Live { text, ..Live::default() })),
+        StreamEvent::TextDelta { text } => push(
+            emit,
+            Update::Live(Live {
+                text,
+                ..Live::default()
+            }),
+        ),
         StreamEvent::ThinkingDelta { .. } => push(emit, Update::Live(Live::default())),
         StreamEvent::InputJsonDelta { partial_json } => push(
             emit,
@@ -512,7 +571,10 @@ fn stream_event_updates(e: StreamEvent, emit: &mut Emit) -> bool {
                 ..Live::default()
             }),
         ),
-        StreamEvent::BlockStart { block: BlockStart::ToolUse { id, name }, .. } => push(
+        StreamEvent::BlockStart {
+            block: BlockStart::ToolUse { id, name },
+            ..
+        } => push(
             emit,
             Update::Live(Live {
                 tools: vec![LiveTool {
@@ -530,7 +592,13 @@ fn stream_event_updates(e: StreamEvent, emit: &mut Emit) -> bool {
 
 /// A command from the pane, mapped to a line to the child's stdin. A command the source has no
 /// word for is dropped.
-fn dispatch_command(command: Command, inner: &mut Inner, session: &SessionDir, emit: &mut Emit, policy: Policy) {
+fn dispatch_command(
+    command: Command,
+    inner: &mut Inner,
+    session: &SessionDir,
+    emit: &mut Emit,
+    policy: Policy,
+) {
     match command {
         Command::Input { text, images, .. } => {
             // No word is sent until guard 3 has allowed the account.
@@ -539,7 +607,10 @@ fn dispatch_command(command: Command, inner: &mut Inner, session: &SessionDir, e
             }
             let images: Vec<wire::Image> = images
                 .into_iter()
-                .map(|i| wire::Image { mime: i.mime, data: i.data })
+                .map(|i| wire::Image {
+                    mime: i.mime,
+                    data: i.data,
+                })
                 .collect();
             let _ = write(session, &wire::user_message(&text, &images));
         }
@@ -560,7 +631,10 @@ fn dispatch_command(command: Command, inner: &mut Inner, session: &SessionDir, e
             let (subtype, body) = match control.as_str() {
                 "model" => ("set_model", serde_json::json!({ "model": value })),
                 "mode" => ("set_permission_mode", serde_json::json!({ "mode": value })),
-                "fast" => ("set_fast_mode", serde_json::json!({ "enabled": value.as_bool().unwrap_or(false) })),
+                "fast" => (
+                    "set_fast_mode",
+                    serde_json::json!({ "enabled": value.as_bool().unwrap_or(false) }),
+                ),
                 _ => return,
             };
             let _ = write(session, &wire::control_request(&id, subtype, body));
@@ -574,7 +648,11 @@ fn dispatch_command(command: Command, inner: &mut Inner, session: &SessionDir, e
             let rid = inner.next_request();
             let _ = write(
                 session,
-                &wire::control_request(&rid, "get_task_output", serde_json::json!({ "task_id": id, "from": from })),
+                &wire::control_request(
+                    &rid,
+                    "get_task_output",
+                    serde_json::json!({ "task_id": id, "from": from }),
+                ),
             );
         }
         Command::Unfollow { id } => {
@@ -617,7 +695,12 @@ fn inner_transcript_page(_session: &SessionDir, _before: Option<String>) -> Opti
     None
 }
 
-fn session_facts(session_id: &str, init: Option<&wire::Init>, account: Option<&Account>, overage: bool) -> SessionFacts {
+fn session_facts(
+    session_id: &str,
+    init: Option<&wire::Init>,
+    account: Option<&Account>,
+    overage: bool,
+) -> SessionFacts {
     SessionFacts {
         id: session_id.to_string(),
         cwd: init.and_then(|i| i.cwd.clone()),
@@ -643,20 +726,16 @@ fn ask_of(request: &wire::ControlRequest) -> Ask {
             .unwrap_or_else(|| "allow this tool?".into()),
         multi: false,
         context: None,
-        options: [
-            ("1", "Allow"),
-            ("2", "Always allow"),
-            ("3", "Deny"),
-        ]
-        .into_iter()
-        .map(|(key, label)| AskOption {
-            key: key.into(),
-            label: label.into(),
-            detail: None,
-            chosen: false,
-            text: false,
-        })
-        .collect(),
+        options: [("1", "Allow"), ("2", "Always allow"), ("3", "Deny")]
+            .into_iter()
+            .map(|(key, label)| AskOption {
+                key: key.into(),
+                label: label.into(),
+                detail: None,
+                chosen: false,
+                text: false,
+            })
+            .collect(),
     }
 }
 
@@ -670,8 +749,20 @@ fn overage_ask() -> Ask {
         multi: false,
         context: None,
         options: vec![
-            AskOption { key: "1".into(), label: "Allow".into(), detail: None, chosen: false, text: false },
-            AskOption { key: "2".into(), label: "Stop".into(), detail: None, chosen: false, text: false },
+            AskOption {
+                key: "1".into(),
+                label: "Allow".into(),
+                detail: None,
+                chosen: false,
+                text: false,
+            },
+            AskOption {
+                key: "2".into(),
+                label: "Stop".into(),
+                detail: None,
+                chosen: false,
+                text: false,
+            },
         ],
     }
 }
@@ -685,7 +776,9 @@ fn guard4_trouble(emit: &mut Emit, source: &str) -> bool {
         emit,
         Update::Trouble(Some(Trouble {
             kind: "billing".into(),
-            text: format!("this turn is paid by a key in the environment ({source}); the policy is plan-only"),
+            text: format!(
+                "this turn is paid by a key in the environment ({source}); the policy is plan-only"
+            ),
             status: "stopped".into(),
             retry: None,
             fix: Some(Fix::Billing),
@@ -735,7 +828,9 @@ fn billing_trouble(emit: &mut Emit, text: String) -> bool {
 fn api_trouble(error: &Option<String>, terminal_reason: Option<&str>) -> Trouble {
     Trouble {
         kind: "api".into(),
-        text: error.clone().unwrap_or_else(|| terminal_reason.unwrap_or("the turn failed").to_string()),
+        text: error
+            .clone()
+            .unwrap_or_else(|| terminal_reason.unwrap_or("the turn failed").to_string()),
         status: "error".into(),
         retry: None,
         fix: None,
@@ -757,7 +852,17 @@ mod tests {
             true
         });
         for line in lines {
-            if !process_line(line, &mut inner, &session, &mut emit, &Config::default(), policy, overage, cap, "s1") {
+            if !process_line(
+                line,
+                &mut inner,
+                &session,
+                &mut emit,
+                &Config::default(),
+                policy,
+                overage,
+                cap,
+                "s1",
+            ) {
                 break;
             }
         }
@@ -807,8 +912,16 @@ mod tests {
         assert!(billing_trouble(&refused).is_some(), "{refused:?}");
 
         let asked = speak(&[overage], Policy::Plan, Overage::Ask, 20);
-        assert!(billing_trouble(&asked).is_none(), "ask holds, it does not refuse: {asked:?}");
-        assert!(asked.iter().any(|u| matches!(u, Update::Asks(a) if !a.is_empty())), "{asked:?}");
+        assert!(
+            billing_trouble(&asked).is_none(),
+            "ask holds, it does not refuse: {asked:?}"
+        );
+        assert!(
+            asked
+                .iter()
+                .any(|u| matches!(u, Update::Asks(a) if !a.is_empty())),
+            "{asked:?}"
+        );
 
         let allowed = speak(&[overage], Policy::Plan, Overage::Allow, 20);
         assert!(billing_trouble(&allowed).is_none(), "{allowed:?}");
@@ -818,7 +931,8 @@ mod tests {
     #[test]
     fn guard7_the_unattended_cap_pauses_the_session() {
         let task = r#"{"type":"result","subtype":"success","is_error":false,"origin":"task_notification","total_cost_usd":0.01}"#;
-        let user = r#"{"type":"result","subtype":"success","is_error":false,"origin":"user","total_cost_usd":0.01}"#;
+        let user =
+            r#"{"type":"result","subtype":"success","is_error":false,"origin":"user","total_cost_usd":0.01}"#;
         // one more self-started turn than the cap.
         let lines = vec![task, task, task];
         let updates = speak(&lines, Policy::Plan, Overage::Refuse, 2);
@@ -862,26 +976,48 @@ mod tests {
     #[test]
     fn guard8_a_money_control_carries_a_confirmation() {
         let updates = speak(&[INIT_PLAN], Policy::Plan, Overage::Refuse, 20);
-        let controls = updates.iter().find_map(|u| match u {
-            Update::Controls(c) => Some(c),
-            _ => None,
-        })
-        .expect("controls");
-        let fast = controls.iter().find(|c| c.id == "fast").expect("a fast mode control");
+        let controls = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Controls(c) => Some(c),
+                _ => None,
+            })
+            .expect("controls");
+        let fast = controls
+            .iter()
+            .find(|c| c.id == "fast")
+            .expect("a fast mode control");
         assert!(fast.confirm.is_some(), "{fast:?}");
         let mode = controls.iter().find(|c| c.id == "mode").expect("a mode control");
-        assert!(mode.confirm.is_none(), "the mode control is not a money control: {mode:?}");
+        assert!(
+            mode.confirm.is_none(),
+            "the mode control is not a money control: {mode:?}"
+        );
     }
 
     // the live edge: an assistant text and a result produce a Live, a Cost, and an idle State.
     #[test]
     fn the_live_edge_maps_an_assistant_and_a_result() {
-        let assistant = r#"{"type":"assistant","message":{"model":"sonnet","content":[{"type":"text","text":"hello"}]}}"#;
+        let assistant =
+            r#"{"type":"assistant","message":{"model":"sonnet","content":[{"type":"text","text":"hello"}]}}"#;
         let result = r#"{"type":"result","subtype":"success","is_error":false,"origin":"user","total_cost_usd":0.012,"usage":{"input_tokens":10,"output_tokens":5}}"#;
         let updates = speak(&[assistant, result], Policy::Any, Overage::Refuse, 20);
-        assert!(updates.iter().any(|u| matches!(u, Update::Live(l) if l.text == "hello")), "{updates:?}");
-        assert!(updates.iter().any(|u| matches!(u, Update::Cost(c) if (c.usd - 0.012).abs() < 1e-9)), "{updates:?}");
-        assert!(updates.iter().any(|u| matches!(u, Update::State(RunState::Idle))), "{updates:?}");
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, Update::Live(l) if l.text == "hello")),
+            "{updates:?}"
+        );
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, Update::Cost(c) if (c.usd - 0.012).abs() < 1e-9)),
+            "{updates:?}"
+        );
+        assert!(
+            updates.iter().any(|u| matches!(u, Update::State(RunState::Idle))),
+            "{updates:?}"
+        );
     }
 
     // a failing turn's result says success; the assistant's own error is what the pane is told.
@@ -889,6 +1025,11 @@ mod tests {
     fn a_failing_turn_is_a_trouble_not_an_answer() {
         let failed = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"error":"API Error: 401 authentication_error"}"#;
         let updates = speak(&[failed], Policy::Any, Overage::Refuse, 20);
-        assert!(updates.iter().any(|u| matches!(u, Update::Trouble(Some(t)) if t.kind == "api")), "{updates:?}");
+        assert!(
+            updates
+                .iter()
+                .any(|u| matches!(u, Update::Trouble(Some(t)) if t.kind == "api")),
+            "{updates:?}"
+        );
     }
 }

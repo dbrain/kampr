@@ -90,9 +90,7 @@ pub fn speaks(record: &Record) -> bool {
     };
     match content {
         Content::Text(text) => !text.is_empty(),
-        Content::Blocks(blocks) => blocks
-            .iter()
-            .any(|b| matches!(b, ContentBlock::Text { .. })),
+        Content::Blocks(blocks) => blocks.iter().any(|b| matches!(b, ContentBlock::Text { .. })),
     }
 }
 

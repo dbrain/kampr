@@ -115,7 +115,10 @@ pub fn write(session: &SessionDir, line: &str) -> io::Result<()> {
         ));
     }
     if line.len() > MAX_REQUEST - "write \n".len() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "a written line is too long"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a written line is too long",
+        ));
     }
     let stream = request(session, &format!("write {line}\n"))?;
     let mut reply = String::new();

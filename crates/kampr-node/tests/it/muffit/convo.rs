@@ -55,7 +55,9 @@ async fn the_daemons_facts_ride_the_new_frames() {
     );
 
     let abilities = client
-        .frame("convo.abilities", |f| f["t"] == "convo.abilities" && f["pane"] == id)
+        .frame("convo.abilities", |f| {
+            f["t"] == "convo.abilities" && f["pane"] == id
+        })
         .await;
     let steer = &abilities["abilities"]["steer"];
     for s in ["interrupt", "continue", "pause", "resume", "stop", "compact"] {
@@ -86,25 +88,32 @@ async fn the_daemons_facts_ride_the_new_frames() {
     assert_eq!(tasks["tasks"][0]["backgrounded"], true, "{tasks}");
 
     let controls = client
-        .frame(
-            "convo.controls with the model's options",
-            |f| f["t"] == "convo.controls" && f["pane"] == id
-                && control(&f["controls"], "model")["options"].as_array().is_some_and(|o| {
-                    o.len() == 2 && o[0]["value"] == "mock" && o[1]["value"] == "mock2"
-                }),
-        )
+        .frame("convo.controls with the model's options", |f| {
+            f["t"] == "convo.controls"
+                && f["pane"] == id
+                && control(&f["controls"], "model")["options"]
+                    .as_array()
+                    .is_some_and(|o| o.len() == 2 && o[0]["value"] == "mock" && o[1]["value"] == "mock2")
+        })
         .await;
-    assert_eq!(control(&controls["controls"], "model")["value"], "mock", "{controls}");
     assert_eq!(
-        control(&controls["controls"], "thinking")["value"], "low",
+        control(&controls["controls"], "model")["value"],
+        "mock",
         "{controls}"
     );
     assert_eq!(
-        control(&controls["controls"], "mode")["value"], true,
+        control(&controls["controls"], "thinking")["value"],
+        "low",
         "{controls}"
     );
     assert_eq!(
-        control(&controls["controls"], "permissions")["value"], "auto",
+        control(&controls["controls"], "mode")["value"],
+        true,
+        "{controls}"
+    );
+    assert_eq!(
+        control(&controls["controls"], "permissions")["value"],
+        "auto",
         "{controls}"
     );
 
@@ -155,13 +164,11 @@ async fn the_pane_drives_the_session_over_the_new_verbs() {
     client
         .send(json!({ "t": "convo.set", "pane": id, "control": "model", "value": "mock2" }))
         .await;
-    let swap = super::eventually(
-        "the model swap reached the daemon",
-        || fake
-            .attach_frames("control")
+    let swap = super::eventually("the model swap reached the daemon", || {
+        fake.attach_frames("control")
             .into_iter()
-            .find(|f| f["verb"] == "model.swap"),
-    )
+            .find(|f| f["verb"] == "model.swap")
+    })
     .await;
     assert_eq!(swap["args"], json!({ "spec": "mock2" }), "{swap}");
     let acted = client
@@ -174,29 +181,25 @@ async fn the_pane_drives_the_session_over_the_new_verbs() {
     client
         .send(json!({ "t": "convo.steer", "pane": id, "steer": "interrupt" }))
         .await;
-    super::eventually(
-        "the interrupt reached the daemon",
-        || fake.attach_frames("interrupt").first().cloned(),
-    )
+    super::eventually("the interrupt reached the daemon", || {
+        fake.attach_frames("interrupt").first().cloned()
+    })
     .await;
 
     client
         .send(json!({ "t": "convo.act", "pane": id, "action": "compact", "args": {} }))
         .await;
-    let compact = super::eventually(
-        "the compact reached the daemon",
-        || fake
-            .attach_frames("control")
+    let compact = super::eventually("the compact reached the daemon", || {
+        fake.attach_frames("control")
             .into_iter()
-            .find(|f| f["verb"] == "context.compact"),
-    )
+            .find(|f| f["verb"] == "context.compact")
+    })
     .await;
     assert_eq!(compact["args"], json!({}), "{compact}");
     client
-        .frame(
-            "convo.acted for the compact",
-            |f| f["t"] == "convo.acted" && f["pane"] == id && f["action"] == "context.compact",
-        )
+        .frame("convo.acted for the compact", |f| {
+            f["t"] == "convo.acted" && f["pane"] == id && f["action"] == "context.compact"
+        })
         .await;
 
     client
@@ -222,8 +225,7 @@ async fn the_pane_drives_the_session_over_the_new_verbs() {
         .await;
     assert_eq!(ended["ended"]["ok"], true, "{ended}");
     assert_eq!(
-        ended["ended"]["summary"],
-        "The worker completed the task.",
+        ended["ended"]["summary"], "The worker completed the task.",
         "{ended}"
     );
     super::asked(&fake);
@@ -267,10 +269,16 @@ async fn the_widened_answer_names_the_reply_and_the_old_shape_still_decodes() {
     client
         .send(json!({ "t": "answer", "pane": id, "key": "3" }))
         .await;
-    until_posted(&mut client, &fake, "the second answer posted", |posts| posts.len() >= 2).await;
+    until_posted(&mut client, &fake, "the second answer posted", |posts| {
+        posts.len() >= 2
+    })
+    .await;
     assert_eq!(
         fake.posts("/sessions/s1/permission"),
-        [json!({ "id": 1, "answer": "always" }), json!({ "id": 2, "answer": "deny" })],
+        [
+            json!({ "id": 1, "answer": "always" }),
+            json!({ "id": 2, "answer": "deny" })
+        ],
         "a key-only answer, the old shape, still reaches the daemon"
     );
     tokio::time::sleep(Duration::from_millis(100)).await;

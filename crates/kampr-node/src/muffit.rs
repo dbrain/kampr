@@ -26,9 +26,7 @@ pub fn answer_for(key: &str) -> Option<Answer> {
 /// The pane's answer key for a seam reply: muffit's prompt is allow, always, deny.
 pub fn key_of(reply: &Reply) -> Option<&'static str> {
     match reply {
-        Reply::Allow {
-            remember: true, ..
-        } => Some("2"),
+        Reply::Allow { remember: true, .. } => Some("2"),
         Reply::Allow { .. } => Some("1"),
         Reply::Deny { .. } => Some("3"),
         _ => None,

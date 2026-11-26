@@ -52,13 +52,7 @@ fn api_error(uuid: &str, parent: &str, attempt: u32, of: u32, in_ms: u64, status
     })
 }
 
-fn api_message(
-    uuid: &str,
-    parent: &str,
-    kind: &str,
-    status: Option<u16>,
-    text: &str,
-) -> serde_json::Value {
+fn api_message(uuid: &str, parent: &str, kind: &str, status: Option<u16>, text: &str) -> serde_json::Value {
     let mut record = json!({
         "type": "assistant",
         "uuid": uuid,
@@ -100,7 +94,10 @@ fn result_line(
 fn a_retry_is_trouble_with_its_attempt_and_delay() {
     let mut scratch = scratch_claude(
         "trouble-retry",
-        &[prompt("u0", "root", "try again"), api_error("s1", "u0", 1, 2, 8000, 529)],
+        &[
+            prompt("u0", "root", "try again"),
+            api_error("s1", "u0", 1, 2, 8000, 529),
+        ],
     );
     let turns = scratch.turns();
     assert_eq!(ids(&turns), ["u0"], "a retry carries no turn");
@@ -110,7 +107,11 @@ fn a_retry_is_trouble_with_its_attempt_and_delay() {
             kind: "overloaded".into(),
             text: "API Error: 529".into(),
             status: Some(529),
-            retry: Some(Retry { attempt: 1, of: 2, in_ms: 8000 }),
+            retry: Some(Retry {
+                attempt: 1,
+                of: 2,
+                in_ms: 8000
+            }),
         })]
     );
 }
@@ -144,7 +145,13 @@ fn a_logged_out_turn_is_named_not_logged_in() {
         "trouble-logout",
         &[
             prompt("u0", "root", "hi"),
-            api_message("a1", "u0", "authentication_failed", None, "Not logged in · Please run /login"),
+            api_message(
+                "a1",
+                "u0",
+                "authentication_failed",
+                None,
+                "Not logged in · Please run /login",
+            ),
         ],
     );
     let turns = scratch.turns();
@@ -211,7 +218,8 @@ fn a_refused_turn_is_trouble_from_its_result_line() {
         scratch.journal.take_trouble(),
         vec![TroubleNews::Trouble(Trouble {
             kind: "api-error".into(),
-            text: "Claude Code can't use your Claude subscription, usually because a payment is past due".into(),
+            text: "Claude Code can't use your Claude subscription, usually because a payment is past due"
+                .into(),
             status: None,
             retry: None,
         })]
@@ -250,7 +258,11 @@ fn a_new_prompt_clears_the_trouble_before_it() {
                 kind: "overloaded".into(),
                 text: "API Error: 529".into(),
                 status: Some(529),
-                retry: Some(Retry { attempt: 1, of: 2, in_ms: 8000 }),
+                retry: Some(Retry {
+                    attempt: 1,
+                    of: 2,
+                    in_ms: 8000
+                }),
             }),
             TroubleNews::Clear,
         ]
@@ -297,7 +309,10 @@ fn trouble_is_taken_once() {
     );
     scratch.turns();
     assert!(!scratch.journal.take_trouble().is_empty());
-    assert!(scratch.journal.take_trouble().is_empty(), "a second take has nothing");
+    assert!(
+        scratch.journal.take_trouble().is_empty(),
+        "a second take has nothing"
+    );
 }
 
 #[test]

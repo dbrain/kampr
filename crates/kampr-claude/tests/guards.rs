@@ -26,7 +26,10 @@ struct Mock {
 
 impl Mock {
     fn start() -> Self {
-        let dir = tempfile::tempdir().expect("a mock control dir").path().to_path_buf();
+        let dir = tempfile::tempdir()
+            .expect("a mock control dir")
+            .path()
+            .to_path_buf();
         let port = free_port();
         let child = StdCommand::new("python3")
             .args([MOCK, &port.to_string(), &dir.display().to_string()])
@@ -146,9 +149,11 @@ impl Harness {
             .expect("the prompt to be queued");
         let deadline = Instant::now() + Duration::from_secs(45);
         loop {
-            let done = updates.lock().unwrap().iter().any(|u| {
-                matches!(u, Update::Cost(_)) || matches!(u, Update::Trouble(Some(_)))
-            });
+            let done = updates
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|u| matches!(u, Update::Cost(_)) || matches!(u, Update::Trouble(Some(_))));
             if done {
                 break;
             }
@@ -177,7 +182,12 @@ fn set_env(pairs: &[(&str, &str)]) {
 }
 
 fn clear_env() {
-    for k in ["KAMPR_TEST", "KAMPR_KEEP_LAUNCH", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY"] {
+    for k in [
+        "KAMPR_TEST",
+        "KAMPR_KEEP_LAUNCH",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+    ] {
         unsafe { std::env::remove_var(k) };
     }
 }
@@ -209,11 +219,19 @@ fn the_billing_guards_against_the_mock() {
         let pane = h.create();
         let updates = h.turn(&format!("c:{pane}"), "say hello");
         assert!(
-            updates.iter().any(|u| matches!(u, Update::Live(l) if !l.text.is_empty())),
+            updates
+                .iter()
+                .any(|u| matches!(u, Update::Live(l) if !l.text.is_empty())),
             "no live text: {updates:?}"
         );
-        assert!(updates.iter().any(|u| matches!(u, Update::Cost(_))), "no cost: {updates:?}");
-        assert!(billing_trouble(&updates).is_none(), "an unexpected billing trouble: {updates:?}");
+        assert!(
+            updates.iter().any(|u| matches!(u, Update::Cost(_))),
+            "no cost: {updates:?}"
+        );
+        assert!(
+            billing_trouble(&updates).is_none(),
+            "an unexpected billing trouble: {updates:?}"
+        );
         let _ = block_on(h.source.end(&format!("c:{pane}"), Ending::End));
     }
 
@@ -224,7 +242,9 @@ fn the_billing_guards_against_the_mock() {
         let pane = h.create();
         let updates = h.turn(&format!("c:{pane}"), "say hello");
         assert!(
-            updates.iter().any(|u| matches!(u, Update::Trouble(Some(t)) if t.kind == "api")),
+            updates
+                .iter()
+                .any(|u| matches!(u, Update::Trouble(Some(t)) if t.kind == "api")),
             "no api trouble: {updates:?}"
         );
         let _ = block_on(h.source.end(&format!("c:{pane}"), Ending::End));
@@ -263,7 +283,10 @@ fn the_billing_guards_against_the_mock() {
             cwd: Some(config_dir.clone()),
             prompt: None,
         }));
-        assert!(result.is_err(), "the launcher must refuse under test without a mock");
+        assert!(
+            result.is_err(),
+            "the launcher must refuse under test without a mock"
+        );
         clear_env();
     }
 }

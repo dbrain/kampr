@@ -79,9 +79,7 @@ impl SessionNode {
         let herdr = Herdr::new(&sockets.herdr);
         let native = primary.then(|| native_provider(config, &sockets.hooks)).flatten();
         let muffit = primary.then(|| muffit_provider(config)).flatten();
-        let (claude, claude_provider) = primary
-            .then(|| claude_source(config))
-            .unwrap_or_default();
+        let (claude, claude_provider) = primary.then(|| claude_source(config)).unwrap_or_default();
         let machine_muffit = muffit.clone().or(machine_muffit);
         let desk = native.clone().or(desk);
         let provider = Arc::new(HerdrProvider::spawn(
@@ -329,7 +327,10 @@ fn muffit_provider(config: &Config) -> Option<Arc<MuffitProvider>> {
 /// 5). They share a `Herd`, so a create the source makes is a pane the herd lists.
 fn claude_source(
     config: &Config,
-) -> (Option<Arc<kampr_claude::ClaudeSource>>, Option<Arc<kampr_claude::ClaudeProvider>>) {
+) -> (
+    Option<Arc<kampr_claude::ClaudeSource>>,
+    Option<Arc<kampr_claude::ClaudeProvider>>,
+) {
     let root = match kampr_keep::root() {
         Ok(root) => root,
         Err(e) => {

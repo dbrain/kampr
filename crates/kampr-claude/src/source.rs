@@ -4,19 +4,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use kampr_core::conversation::{
-    Conversation, Ending, NewSession, Refusal, Source, Stored,
-};
+use kampr_core::conversation::{Conversation, Ending, NewSession, Refusal, Source, Stored};
 use kampr_keep::{Launch, SessionDir, close};
 
+use crate::config::Config;
 use crate::conversation::ClaudeConversation;
 use crate::launch::{self, Plan};
 use crate::provider::{self, Herd};
-use crate::config::Config;
 
 fn new_id() -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let t = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     format!("c{:x}-{}", t, COUNTER.fetch_add(1, Ordering::Relaxed))
 }
 
@@ -159,14 +160,19 @@ impl Source for ClaudeSource {
         entries
             .flatten()
             .filter_map(|entry| match std::fs::read_dir(entry.path()) {
-                Ok(inner) => Some(inner.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "jsonl")).filter_map(|e| {
-                    let id = e.file_name().to_str()?.to_string();
-                    Some(Stored {
-                        id,
-                        cwd: None,
-                        title: None,
-                    })
-                })),
+                Ok(inner) => Some(
+                    inner
+                        .flatten()
+                        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+                        .filter_map(|e| {
+                            let id = e.file_name().to_str()?.to_string();
+                            Some(Stored {
+                                id,
+                                cwd: None,
+                                title: None,
+                            })
+                        }),
+                ),
                 Err(_) => None,
             })
             .flatten()

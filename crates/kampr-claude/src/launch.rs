@@ -104,8 +104,7 @@ pub fn env(plan: &Plan, inherited: impl IntoIterator<Item = (String, String)>) -
     // `KAMPR_TEST`), so a stray base URL does not reach a production plan child.
     if plan.policy == Policy::Plan {
         for (k, _) in inherited.into_iter() {
-            if k.starts_with("ANTHROPIC_")
-                && (k != "ANTHROPIC_BASE_URL" || plan.base_url.is_none())
+            if k.starts_with("ANTHROPIC_") && (k != "ANTHROPIC_BASE_URL" || plan.base_url.is_none())
                 || k.starts_with("AWS_")
                 || k.starts_with("GOOGLE_")
                 || k.starts_with("CLAUDE_CODE_USE_")
@@ -151,8 +150,7 @@ pub fn spawn(
     exe: &Path,
 ) -> Result<kampr_keep::SessionDir, LaunchError> {
     let spec = spec(plan, inherited)?;
-    kampr_keep::spawn(root, spec, launch, exe)
-        .map_err(|e| LaunchError::Spawn(e.to_string()))
+    kampr_keep::spawn(root, spec, launch, exe).map_err(|e| LaunchError::Spawn(e.to_string()))
 }
 
 #[cfg(test)]
@@ -174,24 +172,30 @@ mod tests {
     }
 
     fn vars(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     // guard 2: only the allow-list crosses under plan; a provider key does not.
     #[test]
     fn the_scrubbed_env_keeps_only_the_allow_list_under_plan() {
         let plan = plan();
-        let env = env(&plan, vars(&[
-            ("HOME", "/home/u"),
-            ("PATH", "/usr/bin"),
-            ("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"),
-            ("AWS_SECRET", "nope"),
-            ("GOOGLE_APPLICATION_CREDENTIALS", "nope"),
-            ("CLAUDE_CODE_USE_BEDROCK", "1"),
-            ("XDG_CONFIG_HOME", "/home/u/.config"),
-            ("SSH_AUTH_SOCK", "/tmp/sock"),
-            ("OTHER", "x"),
-        ]));
+        let env = env(
+            &plan,
+            vars(&[
+                ("HOME", "/home/u"),
+                ("PATH", "/usr/bin"),
+                ("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"),
+                ("AWS_SECRET", "nope"),
+                ("GOOGLE_APPLICATION_CREDENTIALS", "nope"),
+                ("CLAUDE_CODE_USE_BEDROCK", "1"),
+                ("XDG_CONFIG_HOME", "/home/u/.config"),
+                ("SSH_AUTH_SOCK", "/tmp/sock"),
+                ("OTHER", "x"),
+            ]),
+        );
         let keys: Vec<(&str, &str)> = env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
         let value = |k: &str| keys.iter().find(|(name, _)| *name == k).map(|(_, v)| *v);
         assert!(value("HOME").is_some());
@@ -205,7 +209,11 @@ mod tests {
         assert_eq!(value("GOOGLE_APPLICATION_CREDENTIALS"), Some(""), "{keys:?}");
         assert_eq!(value("CLAUDE_CODE_USE_BEDROCK"), Some(""), "{keys:?}");
         assert_eq!(value("OTHER"), None, "{keys:?}");
-        assert_eq!(value("CLAUDE_CONFIG_DIR"), None, "no config dir was configured: {keys:?}");
+        assert_eq!(
+            value("CLAUDE_CONFIG_DIR"),
+            None,
+            "no config dir was configured: {keys:?}"
+        );
     }
 
     // guard 2, the other way: an operator who chose api billing lets the provider keys cross.
@@ -213,7 +221,10 @@ mod tests {
     fn a_provider_key_crosses_under_api_billing() {
         let mut plan = plan();
         plan.policy = Policy::Api;
-        let env = env(&plan, vars(&[("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"), ("HOME", "/h")]));
+        let env = env(
+            &plan,
+            vars(&[("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"), ("HOME", "/h")]),
+        );
         let keys: Vec<&str> = env.iter().map(|(k, _)| k.as_str()).collect();
         assert!(keys.contains(&"ANTHROPIC_API_KEY"), "{keys:?}");
     }
@@ -224,7 +235,10 @@ mod tests {
         let mut plan = plan();
         plan.config_dir = Some("/tmp/claude".into());
         let env = env(&plan, vars(&[("CLAUDE_CONFIG_DIR", "/should-not-cross")]));
-        let value = env.iter().find(|(k, _)| k == "CLAUDE_CONFIG_DIR").map(|(_, v)| v.as_str());
+        let value = env
+            .iter()
+            .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+            .map(|(_, v)| v.as_str());
         assert_eq!(value, Some("/tmp/claude"));
     }
 
@@ -271,8 +285,14 @@ mod tests {
         let mut plan = plan();
         plan.policy = Policy::Any;
         plan.base_url = Some("http://127.0.0.1:18080".into());
-        let env = env(&plan, vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]));
-        let url = env.iter().find(|(k, _)| k == "ANTHROPIC_BASE_URL").map(|(_, v)| v.as_str());
+        let env = env(
+            &plan,
+            vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]),
+        );
+        let url = env
+            .iter()
+            .find(|(k, _)| k == "ANTHROPIC_BASE_URL")
+            .map(|(_, v)| v.as_str());
         assert_eq!(url, Some("http://127.0.0.1:18080"));
     }
 
@@ -281,9 +301,19 @@ mod tests {
     #[test]
     fn a_stray_base_url_is_blanked_under_plan_without_a_mock() {
         let plan = plan();
-        let env = env(&plan, vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]));
-        let url = env.iter().find(|(k, _)| k == "ANTHROPIC_BASE_URL").map(|(_, v)| v.as_str());
-        assert_eq!(url, Some(""), "a production plan child must not inherit a base URL");
+        let env = env(
+            &plan,
+            vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]),
+        );
+        let url = env
+            .iter()
+            .find(|(k, _)| k == "ANTHROPIC_BASE_URL")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            url,
+            Some(""),
+            "a production plan child must not inherit a base URL"
+        );
     }
 
     // guard 2, the test half: a mock address is only ever present under KAMPR_TEST, and while it
@@ -292,8 +322,18 @@ mod tests {
     fn the_mock_address_crosses_under_plan_while_a_mock_is_set() {
         let mut plan = plan();
         plan.base_url = Some("http://127.0.0.1:18080".into());
-        let env = env(&plan, vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]));
-        let url = env.iter().find(|(k, _)| k == "ANTHROPIC_BASE_URL").map(|(_, v)| v.as_str());
-        assert_eq!(url, Some("http://127.0.0.1:18080"), "the mock, not a stray URL: {env:?}");
+        let env = env(
+            &plan,
+            vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]),
+        );
+        let url = env
+            .iter()
+            .find(|(k, _)| k == "ANTHROPIC_BASE_URL")
+            .map(|(_, v)| v.as_str());
+        assert_eq!(
+            url,
+            Some("http://127.0.0.1:18080"),
+            "the mock, not a stray URL: {env:?}"
+        );
     }
 }

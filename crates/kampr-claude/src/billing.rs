@@ -47,7 +47,11 @@ pub fn classify(account: &Account) -> Kind {
     if account.token_source.as_deref() == Some("none") {
         return Kind::NoLogin;
     }
-    if account.api_provider.as_deref().is_some_and(|p| !p.is_empty() && p != "firstParty") {
+    if account
+        .api_provider
+        .as_deref()
+        .is_some_and(|p| !p.is_empty() && p != "firstParty")
+    {
         return Kind::ThirdParty(account.api_provider.clone().unwrap_or_default());
     }
     Kind::NoLogin
@@ -145,7 +149,10 @@ pub fn billing_of(account: &Account, overage: bool) -> Billing {
             .subscription_type
             .clone()
             .or_else(|| account.api_provider.clone()),
-        key: account.api_key_source.clone().filter(|s| !s.is_empty() && s != "none"),
+        key: account
+            .api_key_source
+            .clone()
+            .filter(|s| !s.is_empty() && s != "none"),
         rate_limited: overage,
     }
 }
@@ -163,7 +170,9 @@ mod tests {
         account(json!({"subscriptionType": "Claude Max", "apiProvider": "firstParty"}))
     }
     fn key() -> Account {
-        account(json!({"tokenSource": "claude.ai", "apiKeySource": "ANTHROPIC_API_KEY", "apiProvider": "firstParty"}))
+        account(
+            json!({"tokenSource": "claude.ai", "apiKeySource": "ANTHROPIC_API_KEY", "apiProvider": "firstParty"}),
+        )
     }
     fn logged_out() -> Account {
         account(json!({"tokenSource": "none", "apiProvider": "firstParty"}))
@@ -219,7 +228,10 @@ mod tests {
         assert_eq!(overage_decision(Overage::Refuse, true), OverageDecision::Refuse);
         assert_eq!(overage_decision(Overage::Ask, true), OverageDecision::Ask);
         assert_eq!(overage_decision(Overage::Allow, true), OverageDecision::Continue);
-        assert_eq!(overage_decision(Overage::Refuse, false), OverageDecision::Continue);
+        assert_eq!(
+            overage_decision(Overage::Refuse, false),
+            OverageDecision::Continue
+        );
     }
 
     // guard 7: a task or schedule origin is self-started; an operator prompt is not.

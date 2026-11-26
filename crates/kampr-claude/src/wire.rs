@@ -109,7 +109,11 @@ impl Init {
             agents: v
                 .get("agents")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|c| c.get("name").and_then(Value::as_str).map(str::to_string)).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|c| c.get("name").and_then(Value::as_str).map(str::to_string))
+                        .collect()
+                })
                 .unwrap_or_default(),
             version: Line::str_of(v, "version"),
         }
@@ -168,12 +172,7 @@ fn task_info(v: &Value) -> TaskInfo {
 fn background_tasks(v: &Value) -> Vec<TaskInfo> {
     v.get("tasks")
         .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .map(task_info)
-                .filter(|t| t.task_id.is_some())
-                .collect()
-        })
+        .map(|a| a.iter().map(task_info).filter(|t| t.task_id.is_some()).collect())
         .unwrap_or_default()
 }
 
@@ -263,19 +262,35 @@ fn stream_event(v: &Value) -> StreamEvent {
             let delta = e.get("delta").unwrap_or(e);
             match delta.get("type").and_then(Value::as_str) {
                 Some("text_delta") => StreamEvent::TextDelta {
-                    text: delta.get("text").and_then(Value::as_str).unwrap_or("").to_string(),
+                    text: delta
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 },
                 Some("thinking_delta") => StreamEvent::ThinkingDelta {
-                    thinking: delta.get("thinking").and_then(Value::as_str).unwrap_or("").to_string(),
+                    thinking: delta
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 },
                 Some("input_json_delta") => StreamEvent::InputJsonDelta {
-                    partial_json: delta.get("partial_json").and_then(Value::as_str).unwrap_or("").to_string(),
+                    partial_json: delta
+                        .get("partial_json")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string(),
                 },
                 _ => StreamEvent::Other,
             }
         }
         Some("message_delta") => StreamEvent::MessageDelta {
-            stop_reason: e.get("delta").and_then(|d| d.get("stop_reason")).and_then(Value::as_str).map(str::to_string),
+            stop_reason: e
+                .get("delta")
+                .and_then(|d| d.get("stop_reason"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
         },
         _ => StreamEvent::Other,
     }
@@ -316,7 +331,10 @@ fn assistant(v: &Value) -> Assistant {
         model: Line::str_of(message, "model"),
         content,
         error: v.get("error").and_then(Value::as_str).map(str::to_string),
-        is_api_error_message: v.get("is_api_error_message").and_then(Value::as_bool).unwrap_or(false),
+        is_api_error_message: v
+            .get("is_api_error_message")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         parent_tool_use_id: Line::str_of(v, "parent_tool_use_id"),
         session_id: Line::str_of(v, "session_id"),
     }
@@ -341,7 +359,11 @@ fn content_block(v: &Value) -> Option<ContentBlock> {
             input: v.get("input").cloned().unwrap_or(Value::Null),
         }),
         "thinking" => Some(ContentBlock::Thinking {
-            thinking: v.get("thinking").and_then(Value::as_str).unwrap_or("").to_string(),
+            thinking: v
+                .get("thinking")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
         }),
         _ => None,
     }
@@ -418,7 +440,10 @@ fn usage(v: &Value) -> Usage {
             .get("cache_creation_input_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0),
-        cache_read_tokens: v.get("cache_read_input_tokens").and_then(Value::as_u64).unwrap_or(0),
+        cache_read_tokens: v
+            .get("cache_read_input_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
     }
 }
 
@@ -440,14 +465,16 @@ pub struct Window {
 fn rate_limit(v: &Value) -> RateLimit {
     let v = v.get("rate_limit_event").unwrap_or(v);
     let window = |v: &Value, key: &str| {
-        v.get(key)
-            .map(|w| Window {
-                utilization: w.get("utilization").and_then(Value::as_f64).unwrap_or(0.0),
-                resets_at: w.get("resets_at").and_then(Value::as_str).map(str::to_string),
-            })
+        v.get(key).map(|w| Window {
+            utilization: w.get("utilization").and_then(Value::as_f64).unwrap_or(0.0),
+            resets_at: w.get("resets_at").and_then(Value::as_str).map(str::to_string),
+        })
     };
     RateLimit {
-        is_using_overage: v.get("is_using_overage").and_then(Value::as_bool).unwrap_or(false),
+        is_using_overage: v
+            .get("is_using_overage")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         overage_status: Line::str_of(v, "overage_status"),
         five_hour: window(v, "five_hour"),
         seven_day: window(v, "seven_day"),
@@ -468,7 +495,10 @@ fn parse_control_request(v: &Value) -> ControlRequest {
     let request = v.get("request").unwrap_or(v);
     ControlRequest {
         request_id: Line::str_of(v, "request_id").unwrap_or_default(),
-        tool_name: request.get("tool_name").and_then(Value::as_str).map(str::to_string),
+        tool_name: request
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         input: request.get("input").cloned().unwrap_or(Value::Null),
         permission_suggestions: request
             .get("permission_suggestions")
@@ -653,7 +683,10 @@ mod tests {
             r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hm"}}}"#,
         )
         .unwrap();
-        assert!(matches!(thinking, Line::StreamEvent(StreamEvent::ThinkingDelta { .. })));
+        assert!(matches!(
+            thinking,
+            Line::StreamEvent(StreamEvent::ThinkingDelta { .. })
+        ));
         let block = Line::parse(
             r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t1","name":"Bash"}}}"#,
         )
@@ -692,9 +725,15 @@ mod tests {
 
     #[test]
     fn an_unknown_line_is_other_not_an_error() {
-        assert!(matches!(Line::parse(r#"{"type":"something_new"}"#), Some(Line::Other)));
+        assert!(matches!(
+            Line::parse(r#"{"type":"something_new"}"#),
+            Some(Line::Other)
+        ));
         assert!(Line::parse("not json at all").is_none());
-        assert!(matches!(Line::parse(r#"{"type":"system","subtype":"a_new_subtype"}"#), Some(Line::Other)));
+        assert!(matches!(
+            Line::parse(r#"{"type":"system","subtype":"a_new_subtype"}"#),
+            Some(Line::Other)
+        ));
     }
 
     #[test]

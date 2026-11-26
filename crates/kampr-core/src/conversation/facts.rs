@@ -63,9 +63,7 @@ pub struct Retry {
 #[serde(rename_all = "lowercase")]
 pub enum Fix {
     Login,
-    Wait {
-        until: String,
-    },
+    Wait { until: String },
     Billing,
 }
 

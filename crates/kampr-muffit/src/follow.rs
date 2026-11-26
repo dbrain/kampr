@@ -3,8 +3,8 @@ use crate::live::Live;
 use crate::mapper::{self, Workers};
 use crate::wire::{Image, PermissionPrompt, ServerFrame, StatusSnapshot, TranscriptEntry, TranscriptPage};
 use kampr_core::conversation::{
-    Action, ArgSpec, ContextUse, Cost, Control, ControlKind, ControlOption, Live as SeamLive,
-    LiveTool, RunState, SessionFacts, Steer, Task, TaskEnd, TaskState, Trouble,
+    Action, ArgSpec, ContextUse, Control, ControlKind, ControlOption, Cost, Live as SeamLive, LiveTool,
+    RunState, SessionFacts, Steer, Task, TaskEnd, TaskState, Trouble,
 };
 use kampr_journal::facet::{Running, Title, TitleSource};
 use kampr_journal::{ConvoFound, Facets, Page, Turn};
@@ -77,9 +77,18 @@ pub enum Update {
     Older(Page),
     Facets(Facets),
     Pending(Option<PermissionPrompt>),
-    Found { query: String, found: ConvoFound },
-    SubPage { id: String, page: Page },
-    SubTurns { id: String, turns: Vec<Turn> },
+    Found {
+        query: String,
+        found: ConvoFound,
+    },
+    SubPage {
+        id: String,
+        page: Page,
+    },
+    SubTurns {
+        id: String,
+        turns: Vec<Turn>,
+    },
     State(RunState),
     Tasks(Vec<Task>),
     TaskOutput {
@@ -391,8 +400,11 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
             &json!({ "type": "subscribe", "events_after": cursor }),
         )
         .await?;
-        client::send(&mut socket, &json!({ "type": "control", "verb": "models.list", "args": {} }))
-            .await?;
+        client::send(
+            &mut socket,
+            &json!({ "type": "control", "verb": "models.list", "args": {} }),
+        )
+        .await?;
         Ok(Some(socket))
     }
 
@@ -464,11 +476,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                     }),
                 }
             }
-            crate::wire::ContentBlock::ToolOutputChunk {
-                call_id,
-                text,
-                seq,
-            } => {
+            crate::wire::ContentBlock::ToolOutputChunk { call_id, text, seq } => {
                 if let Some((id, last)) = &mut self.followed {
                     if call_id == id && *seq >= *last {
                         *last = *seq;
@@ -487,12 +495,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 exit_status,
                 ..
             } => {
-                if let Some((id, at)) = self
-                    .followed
-                    .as_ref()
-                    .filter(|(id, _)| id == call_id)
-                    .cloned()
-                {
+                if let Some((id, at)) = self.followed.as_ref().filter(|(id, _)| id == call_id).cloned() {
                     self.followed = None;
                     (self.emit)(Update::TaskOutput {
                         id,
@@ -716,7 +719,9 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     fn withdraw_live(&mut self) -> bool {
         let had_live = !self.seam_live.text.is_empty() || !self.seam_live.tools.is_empty();
         self.seam_live = SeamLive::default();
-        let cleared = had_live.then(|| (self.emit)(Update::Live(SeamLive::default()))).unwrap_or(true);
+        let cleared = had_live
+            .then(|| (self.emit)(Update::Live(SeamLive::default())))
+            .unwrap_or(true);
         match self.live.reset() {
             Some(withdrawn) => cleared && (self.emit)(Update::Turns(vec![withdrawn])),
             None => cleared,
@@ -788,7 +793,11 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 true
             }
             Command::Unfollow { id } => {
-                if self.followed.as_ref().is_some_and(|(followed, _)| followed == &id) {
+                if self
+                    .followed
+                    .as_ref()
+                    .is_some_and(|(followed, _)| followed == &id)
+                {
                     self.followed = None;
                 }
                 true
@@ -832,7 +841,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                     action: format!("{kind:?}").to_lowercase(),
                     ok: false,
                     text: Some("muffit has no such steer".into()),
-                })
+                });
             }
         };
         self.control_verb(verb, json!({}), socket).await
@@ -842,8 +851,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     /// REST when there is no socket.
     async fn control_verb(&mut self, verb: &str, args: Value, socket: &mut Option<Socket>) -> bool {
         if let Some(socket) = socket.as_mut() {
-            match client::send(socket, &json!({ "type": "control", "verb": verb, "args": args })).await
-            {
+            match client::send(socket, &json!({ "type": "control", "verb": verb, "args": args })).await {
                 Ok(()) => return true,
                 Err(e) => {
                     debug!(session = %self.session, verb, error = %format!("{e:#}"), "control verb over the socket");

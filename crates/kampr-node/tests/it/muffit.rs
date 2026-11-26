@@ -11,10 +11,10 @@ use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
+mod convo;
 mod fake;
 mod linked;
 mod live;
-mod convo;
 
 use fake::{Daemon, Fake, TOKEN, finished, session, text};
 

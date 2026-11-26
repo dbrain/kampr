@@ -1,7 +1,7 @@
 use tokio::sync::mpsc;
 
-pub mod ask;
 pub mod abilities;
+pub mod ask;
 pub mod command;
 pub mod composer;
 pub mod control;
@@ -16,13 +16,13 @@ pub use control::*;
 pub use facts::*;
 pub use update::*;
 
+pub use kampr_journal::facet::Running;
 /// The turn, block and facet vocabulary a conversation speaks. It is defined in `kampr-journal`,
 /// which keeps the parsers that fill it; this is where the seam names it.
 pub use kampr_journal::{
-    Attachment, Block, CodeRole, ConvoFound, ConvoHit, Facets, Page, Role, Title, TitleSource,
-    ToolState, Turn, TurnKind,
+    Attachment, Block, CodeRole, ConvoFound, ConvoHit, Facets, Page, Role, Title, TitleSource, ToolState,
+    Turn, TurnKind,
 };
-pub use kampr_journal::facet::Running;
 
 /// What a conversation sends the pane: one value in, one `bool` out, and `false` ends it.
 pub type Emit = Box<dyn FnMut(update::Update) -> bool + Send>;

@@ -1,5 +1,5 @@
-use crate::model::{Retry, Trouble};
 use super::record::{Content, ContentBlock, Record};
+use crate::model::{Retry, Trouble};
 use serde_json::Value;
 
 /// The six words a terminal Claude's failures come in, from the kinds the SDK names and the
@@ -42,13 +42,11 @@ pub fn from_retry(record: &Record) -> Option<Trouble> {
         kind: classify(None, status, text).to_string(),
         text: text.to_string(),
         status,
-        retry: record
-            .retry_attempt
-            .map(|attempt| Retry {
-                attempt,
-                of: record.max_retries.unwrap_or(0),
-                in_ms: record.retry_in_ms.unwrap_or(0),
-            }),
+        retry: record.retry_attempt.map(|attempt| Retry {
+            attempt,
+            of: record.max_retries.unwrap_or(0),
+            in_ms: record.retry_in_ms.unwrap_or(0),
+        }),
     })
 }
 
@@ -64,12 +62,10 @@ pub fn from_api_message(record: &Record) -> Option<Trouble> {
         .and_then(|m| m.content.as_ref())
         .and_then(|content| match content {
             Content::Text(text) => Some(text.as_str()),
-            Content::Blocks(blocks) => blocks
-                .iter()
-                .find_map(|b| match b {
-                    ContentBlock::Text { text } => Some(text.as_str()),
-                    _ => None,
-                }),
+            Content::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            }),
         })
         .unwrap_or_default();
     Some(Trouble {
@@ -109,12 +105,38 @@ mod tests {
 
     #[test]
     fn the_kinds_follow_the_word_the_sdk_says() {
-        assert_eq!(classify(Some("authentication_failed"), None, "Not logged in · Please run /login"), "not-logged-in");
-        assert_eq!(classify(Some("authentication_failed"), Some(401), "Failed to authenticate."), "login-expired");
-        assert_eq!(classify(Some("overloaded"), Some(529), "API Error: 529"), "overloaded");
-        assert_eq!(classify(Some("server_error"), Some(500), "API Error: 500"), "server-error");
-        assert_eq!(classify(Some("rate_limit"), Some(429), "API Error: 429"), "rate-limit");
-        assert_eq!(classify(Some("billing_error"), None, "payment is past due"), "api-error");
+        assert_eq!(
+            classify(
+                Some("authentication_failed"),
+                None,
+                "Not logged in · Please run /login"
+            ),
+            "not-logged-in"
+        );
+        assert_eq!(
+            classify(
+                Some("authentication_failed"),
+                Some(401),
+                "Failed to authenticate."
+            ),
+            "login-expired"
+        );
+        assert_eq!(
+            classify(Some("overloaded"), Some(529), "API Error: 529"),
+            "overloaded"
+        );
+        assert_eq!(
+            classify(Some("server_error"), Some(500), "API Error: 500"),
+            "server-error"
+        );
+        assert_eq!(
+            classify(Some("rate_limit"), Some(429), "API Error: 429"),
+            "rate-limit"
+        );
+        assert_eq!(
+            classify(Some("billing_error"), None, "payment is past due"),
+            "api-error"
+        );
     }
 
     #[test]
@@ -143,7 +165,11 @@ mod tests {
                 kind: "overloaded".into(),
                 text: "API Error: 529 Overloaded".into(),
                 status: Some(529),
-                retry: Some(Retry { attempt: 3, of: 10, in_ms: 8192 }),
+                retry: Some(Retry {
+                    attempt: 3,
+                    of: 10,
+                    in_ms: 8192
+                }),
             })
         );
     }
