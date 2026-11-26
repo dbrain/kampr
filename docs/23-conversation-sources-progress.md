@@ -52,12 +52,15 @@ launching. Now in flight:
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
-  row** for the 2.1.326 no-turn `initialize` (63-command list) the table rests on, and coverage holes
-  (the `Files` input ability, the 4 terminal command names, the pane-pieces list shows 10 of 12).
-  Fix in flight (s16).
-- **s16 — docs/22 fixes** (from s4's 11 findings): correct the citations / mark not-probed with the
-  doc's idiom, append the 2.1.326 initialize row if genuinely absent (zero-cost no-turn probe only),
-  add the `Files`-ability row. Docs + one probe-log row; no Rust. Queued for a worker slot.
+  row** for the 2.1.326 no-turn `initialize` (63-command list), and coverage holes (the `Files` input
+  ability, the 4 terminal command names, the pane-pieces list 10-of-12). **Fixed by s16.**
+- **s16 — docs/22 fixes: DONE** (c365d408, docs only) — all 11 fixed; the 63-command list was
+  genuinely absent so it re-ran the zero-cost no-turn `initialize` and **appended probe row #672**
+  (63/63 names verified); `kampr-testkit` probe-log guard green (1..672, no gaps, all `#N` resolve).
+  **docs/22 review loop CLOSED.**
+- **s17 — Phase 6 review**: verify 18c61685 (trouble 6-kind classify, 14 hooks, fork-aware read,
+  live shell/subagent) — the measured red tests genuinely fail without the fix, no wire/client edits,
+  and the one `live::reopening` failure is pre-existing. In a worktree.
 - **s15 — Phase 5 (kampr-claude, the headless source)**: a new `kampr-claude` crate — the
   stream-json reader/writer, `launch.rs` (scrubbed env + billing guards 1–5), `ClaudeSource`
   (create/resume/end/hand-to-terminal) + `ClaudeConversation` (lines→`Update`s, `Command`s→lines,
