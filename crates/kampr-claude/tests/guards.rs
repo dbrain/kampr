@@ -74,6 +74,7 @@ struct Harness {
     mock: Mock,
     config_dir: PathBuf,
     _keep: tempfile::TempDir,
+    _keep_root: tempfile::TempDir,
     source: ClaudeSource,
 }
 
@@ -81,12 +82,14 @@ impl Harness {
     fn start(billing: Billing) -> Self {
         let mock = Mock::start();
         let keep = tempfile::tempdir().expect("a throwaway CLAUDE_CONFIG_DIR");
+        let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
         let config_dir = keep.path().to_path_buf();
         set_env(&[
             ("KAMPR_TEST", "1"),
             ("KAMPR_KEEP_LAUNCH", "detached"),
             ("ANTHROPIC_BASE_URL", &mock.url()),
             ("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"),
+            ("KAMPR_KEEP_ROOT", keep_root.path().display().to_string().as_str()),
         ]);
         let (herd, _rx) = kampr_claude::Herd::new();
         let config = Config {
@@ -98,13 +101,14 @@ impl Harness {
         let source = ClaudeSource::new(
             config,
             Arc::new(herd),
-            kampr_keep::root().expect("the keeper root"),
+            keep_root.path().to_path_buf(),
             kampr_testkit::keeper(),
         );
         Harness {
             mock,
             config_dir,
             _keep: keep,
+            _keep_root: keep_root,
             source,
         }
     }
@@ -187,6 +191,7 @@ fn clear_env() {
         "KAMPR_KEEP_LAUNCH",
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_API_KEY",
+        "KAMPR_KEEP_ROOT",
     ] {
         unsafe { std::env::remove_var(k) };
     }
@@ -266,6 +271,7 @@ fn the_billing_guards_against_the_mock() {
     {
         set_env(&[("KAMPR_TEST", "1"), ("KAMPR_KEEP_LAUNCH", "detached")]);
         let config_dir = tempfile::tempdir().expect("a config dir").path().to_path_buf();
+        let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
         let (herd, _rx) = kampr_claude::Herd::new();
         let config = Config {
             billing: Billing::Any,
@@ -276,7 +282,7 @@ fn the_billing_guards_against_the_mock() {
         let source = ClaudeSource::new(
             config,
             Arc::new(herd),
-            kampr_keep::root().expect("the keeper root"),
+            keep_root.path().to_path_buf(),
             kampr_testkit::keeper(),
         );
         let result = block_on(source.create(NewSession {

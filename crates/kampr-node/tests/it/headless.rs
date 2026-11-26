@@ -94,6 +94,7 @@ fn errors(client: &Client) -> Vec<serde_json::Value> {
 async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_terminal() {
     let mock = Mock::start();
     let keep = tempfile::tempdir().expect("a throwaway CLAUDE_CONFIG_DIR");
+    let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
     for (k, v) in [
         ("KAMPR_TEST", "1"),
         ("KAMPR_KEEP_LAUNCH", "detached"),
@@ -102,6 +103,10 @@ async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_
         (
             "KAMPR_KEEP_EXE",
             kampr_testkit::keeper().display().to_string().as_str(),
+        ),
+        (
+            "KAMPR_KEEP_ROOT",
+            keep_root.path().display().to_string().as_str(),
         ),
     ] {
         unsafe { std::env::set_var(k, v) };
@@ -196,6 +201,7 @@ async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_API_KEY",
         "KAMPR_KEEP_EXE",
+        "KAMPR_KEEP_ROOT",
     ] {
         unsafe { std::env::remove_var(k) };
     }
