@@ -82,12 +82,22 @@ launching. Now in flight:
   reaches Anthropic (guard 11), the guard-2 scrub-blanking is sound (stray key doesn't cross under
   `plan`, mock preserved, keys cross under `api`), guards 3/4/6/7/8/9 red-verified, guard 5 never
   `--bare`, lenient reader, node wiring, and no wire/client/journal/keep edits.
-- **s14 — Phase 2b (the client learns the vocabulary, Kotlin)**: mirror the 13 `convo.*`
-  `ServerMsg` + 5 `ClientMsg` + widened `answer` in `client/shared/.../wire/`, and build the pane
-  pieces in `client/conversation/` (controls sheet, actions palette, task panel, trouble banner,
-  billing/limits in the header, composer send/queue/send-now) + the `kampr-tui` mirror. Nothing the
-  source doesn't declare is drawn (no empty rows, no disabled controls, no gaps). Client-only
-  checks (not the full Rust gate, which s11 is churning).
+- **s14 — Phase 2b (the client learns the vocabulary, Kotlin): DONE** — committed `80fe0d2a`
+  (13 files, +2457/−242, `client/` only). Wire mirror (`Protocol.kt`/`Codec.kt`/`Serializers.kt`):
+  all 13 `convo.*` `ServerMsg` + 5 `ClientMsg` + widened `Answer.reply`, field-for-field vs the Rust
+  `wire.rs`; hand-written `ReplySerializer`/`TroubleFixSerializer` fixed two real wire-spelling
+  mismatches (kotlinx 1.12 `type` discriminator vs the node's serde `{"allow":{…}}`; serde unit
+  variants as bare strings). Pane (`ConvoPieces.kt`): trouble banner+fix, task panel (agent→live
+  subagent, shell→live-output sheet), session sheet (controls w/ confirm-sentences, actions palette,
+  search), facts line (model·context·plan/resets·billed-by), `/`+`@` completion, running-turn stop
+  bar, composer send-now/queue. **Every piece early-returns with no room when the source declared
+  nothing.** `make check-client` green, 16 codec round-trip tests, screenshots `seam-floor-390.png`
+  + `seam-rich-1440.png`. **Deferral:** `kampr-tui` (a Rust crate) not mirrored — the task forbade
+  `crates/` while s11 churned it; now unblocked, to do after the reviews. Review in flight (s21).
+- **s21 — Phase 2b review**: in a worktree — field-for-field wire parity vs the Rust `wire.rs`
+  (the 13+5 frames + widened `Reply` + `TroubleFix`), additive wire both ways (unknown `t`→null, old
+  node unaffected by the widened `answer`), the pane draws only what the source declares (the two
+  artboards), the confirm-sentence rule, and client-only (kampr-tui the only Rust gap).
 - **s8 — Phase 3 (muffit widened)**: the seven capabilities in the **muffit repo** (ask tool, live
   child + answered prompts, shell tasks, tool-arg deltas/unqueue/clear/fork/rename, the
   control-and-action listing verb tested against muffit's own TUI, provider/billing + rate-limit
@@ -180,7 +190,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
   falls through to the REST path instead of erroring "the conversation closed" — the daemon
   still answers, and the tests do not reach the race.
 
-## Phase 2 — the wire and the client learn the new vocabulary — 2a COMMITTED (be4c2a9d, +1862/−74; 2089 passed); review in flight (s13); 2b (Kotlin) + 5 after
+## Phase 2 — the wire and the client learn the new vocabulary — **2a COMMITTED** (be4c2a9d, +1862/−74; 2089 passed; review s13 = SOUND). **2b COMMITTED** (80fe0d2a, client only; wire mirror field-for-field + pane pieces; `make check-client` green; review s21 in flight). **Deferral:** `kampr-tui` mirror (Rust crate) not done — to do after the reviews.
 
 ## Phase 3 — muffit widened (muffit repo) — IN FLIGHT (s8)
 
