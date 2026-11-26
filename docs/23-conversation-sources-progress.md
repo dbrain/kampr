@@ -58,9 +58,15 @@ launching. Now in flight:
   genuinely absent so it re-ran the zero-cost no-turn `initialize` and **appended probe row #672**
   (63/63 names verified); `kampr-testkit` probe-log guard green (1..672, no gaps, all `#N` resolve).
   **docs/22 review loop CLOSED.**
-- **s17 — Phase 6 review**: verify 18c61685 (trouble 6-kind classify, 14 hooks, fork-aware read,
-  live shell/subagent) — the measured red tests genuinely fail without the fix, no wire/client edits,
-  and the one `live::reopening` failure is pre-existing. In a worktree.
+- **s17 — Phase 6 review: DEFECTS FOUND** — trouble (6-kind classify, `from_result` on
+  `is_error`+`terminal_reason`), 14 hooks, fork-aware read, and no-wire-edits all **CONFIRMED**; red
+  tests re-verified (8/11 trouble, 2/3 fork, both hooks fail without the fix); the `live::reopening`
+  flake is **pre-existing** (fails in the full suite on base `207ebe80` too, passes in isolation).
+  **One blocking defect:** `tasks_tick` scans the wrong dir for live shell output
+  (`~/.claude/projects/<slug>/<session>/tasks/` vs the real `/tmp/claude-<uid>/<cwd-slug>/<session>/tasks/`
+  per #649/#310) — and its test writes to the code's own path so it **passes with the defect**
+  (rule-#2 violation). Fix in flight (s18): real dir + `bind()` `facts.bg` exclusion + test rewritten
+  to the real path + probe row.
 - **s15 — Phase 5 (kampr-claude, the headless source)**: a new `kampr-claude` crate — the
   stream-json reader/writer, `launch.rs` (scrubbed env + billing guards 1–5), `ClaudeSource`
   (create/resume/end/hand-to-terminal) + `ClaudeConversation` (lines→`Update`s, `Command`s→lines,
@@ -175,7 +181,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 5 — Claude with no terminal — IN FLIGHT (s15, Rust, worktree): the `kampr-claude` crate (stream-json reader/writer, `launch.rs` scrubbed env + billing guards 1–5, `ClaudeSource` + `ClaudeConversation` guards 6–9), node wiring, mock endpoint (no test reaches Anthropic).
 
-## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). Review queued (s17). Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.
+## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). **Review s17: DEFECTS FOUND** — 1 blocking (`tasks_tick` scans the wrong shell-task dir; its test passes with the defect); trouble/hooks/fork all confirmed sound. **Fix in flight (s18).** Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.
 
 ## Phase 7 — the pane pump behind the trait — not started
 
