@@ -709,8 +709,8 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 }
                 _ => {}
             }
-            // The shells the pane's agent runs write their output to the transcript's `tasks/`
-            // directory, and a watched one is read for whatever it has grown by.
+            // The shells the agent runs write their output to the per-user tmp task directory,
+            // not beside the transcript (#649), and a watched one is read for its growth.
             if let Some(path) = opened.clone() {
                 if !tasks_tick(&path, &hooks, &herd_pane, &global, &wire, &mut task_files).await {
                     return;
@@ -1674,10 +1674,12 @@ struct TaskTick {
     tool: Option<String>,
 }
 
-/// The shells the pane's agent runs write their output to the transcript's `tasks/` directory,
-/// and a watched one is read for whatever it has grown by. A file is taken up for the one tool
-/// in flight it was written after (#649), or for the shell Claude's own `Stop` names it by, and
-/// it is let go when that tool comes back.
+/// The shells the pane's agent runs write their output to the harness's per-user tmp task
+/// directory, `<tmp>/claude-<uid>/<cwd-slug>/<session>/tasks` — never beside the transcript,
+/// which Claude writes no task file to (#649, #310) — where the transcript's parent name is the
+/// `<cwd-slug>` and its file stem the `<session>`, and a watched one is read for whatever it
+/// has grown by. A file is taken up for the one tool in flight it was written after (#649), or
+/// for the shell Claude's own `Stop` names it by, and it is let go when that tool comes back.
 async fn tasks_tick(
     transcript: &Path,
     hooks: &crate::hooks::Hooks,
@@ -1686,7 +1688,11 @@ async fn tasks_tick(
     wire: &Wire,
     files: &mut std::collections::HashMap<String, (PathBuf, u64, Option<String>)>,
 ) -> bool {
-    let dir = transcript.with_extension("").join("tasks");
+    let dir = std::env::temp_dir()
+        .join(format!("claude-{}", rustix::process::getuid().as_raw()))
+        .join(transcript.parent().and_then(Path::file_name).unwrap_or_default())
+        .join(transcript.file_stem().unwrap_or_default())
+        .join("tasks");
     let facts = hooks.facts(pane).unwrap_or_default();
     let known: Vec<(String, u64, Option<String>)> = files
         .iter()
@@ -1808,13 +1814,17 @@ async fn tasks_tick(
 
 /// A file the pump has not taken up, bound to the tool it was written for: the one tool in
 /// flight, where the file postdates it — or, where it does not, where it is the newest file not
-/// already followed (#649).
+/// already followed (#649). A shell Claude's own `Stop` names by id is never bound: it has no
+/// tool call, and binding it would end the shell under the tool's id.
 fn bind(
     stem: &str,
     mtime: Option<&SystemTime>,
     newest: Option<&str>,
     facts: &crate::hooks::Facts,
 ) -> Option<String> {
+    if facts.bg.iter().any(|b| b.id == stem) {
+        return None;
+    }
     let mut in_flight: Vec<String> = facts.tools.keys().cloned().collect();
     in_flight.sort();
     if in_flight.len() != 1 {

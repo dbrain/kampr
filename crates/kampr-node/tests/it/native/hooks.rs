@@ -1928,6 +1928,17 @@ fn session_dir(c: &Hooked) -> PathBuf {
         .join(SESSION)
 }
 
+/// The harness's own task directory for this session: the running user's tmp, never beside the
+/// transcript (#649, #673).
+fn task_dir(c: &Hooked) -> PathBuf {
+    let cwd = std::fs::canonicalize(c.h.work()).unwrap();
+    std::env::temp_dir()
+        .join(format!("claude-{}", unsafe { libc::getuid() }))
+        .join(cwd.to_string_lossy().replace('/', "-"))
+        .join(SESSION)
+        .join("tasks")
+}
+
 /// #652: the `StopFailure` hook carries the error kind and the sentence, and a turn that failed
 /// is one the conversation says so.
 #[tokio::test]
@@ -2024,14 +2035,15 @@ async fn what_is_still_running_is_claudes_own_list_when_the_turn_stops() {
 }
 
 /// A foreground `Bash`'s output file is named by a task id no transcript record carries (#649),
-/// so the `PreToolUse` that starts it is the key: the newest file in `tasks` after it is the one.
+/// and it lives in the harness's per-user tmp, not beside the transcript (#673): the
+/// `PreToolUse` that starts it is the key, and the newest file in `tasks` after it is the one.
 /// The pane's stream is the file's, under the call's own id.
 #[tokio::test]
 async fn a_foreground_shells_output_is_streamed_from_its_task_file() {
     use std::io::Write;
     let mut c = Hooked::start().await;
     c.watch(true).await;
-    let tasks = session_dir(&c).join("tasks");
+    let tasks = task_dir(&c);
     std::fs::create_dir_all(&tasks).unwrap();
 
     c.fire(json!({
@@ -2090,6 +2102,69 @@ async fn a_foreground_shells_output_is_streamed_from_its_task_file() {
         )
         .await;
     assert_eq!(ended["ended"]["ok"], json!(true));
+}
+
+/// A shell Claude's own `Stop` names by id has no tool call, so its file is never bound to the
+/// tool that happens to be in flight: it keeps its own id, and the tool's coming back ends
+/// nothing of it (#649).
+#[tokio::test]
+async fn a_shell_named_by_stops_background_tasks_keeps_its_own_id() {
+    use std::io::Write;
+    let mut c = Hooked::start().await;
+    c.watch(true).await;
+    let tasks = task_dir(&c);
+    std::fs::create_dir_all(&tasks).unwrap();
+
+    let stop = c.fire(json!({
+        "hook_event_name": "Stop",
+        "background_tasks": [
+            { "id": "b1", "type": "shell", "status": "running", "description": "sleep 4; echo shell-finished" },
+        ],
+    }));
+    c.ran(&stop).await;
+    let pre = c.fire(json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": "sleep 30" },
+        "tool_use_id": "t-shell-1",
+    }));
+    c.ran(&pre).await;
+    let out = tasks.join("b1.output");
+    std::fs::write(&out, "from b1\n").unwrap();
+
+    c.client
+        .until(
+            "the background shell under its own id",
+            |c| {
+                c.others
+                    .iter()
+                    .position(|v| v["t"] == "convo.task" && v["id"] == "b1" && v["text"] == "from b1\n")
+                    .map(|at| c.others.remove(at))
+            },
+        )
+        .await;
+
+    let post = c.fire(json!({
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_use_id": "t-shell-1",
+        "tool_response": { "stdout": "" },
+    }));
+    c.ran(&post).await;
+    let mut f = std::fs::OpenOptions::new().append(true).open(&out).unwrap();
+    f.write_all(b"still b1\n").unwrap();
+    f.flush().unwrap();
+    c.client
+        .until(
+            "the background shell goes on after the tool came back",
+            |c| {
+                c.others
+                    .iter()
+                    .any(|v| v["t"] == "convo.task" && v["id"] == "b1" && v["text"] == "still b1\n" && v["ended"].is_null())
+                    .then_some(())
+            },
+        )
+        .await;
 }
 
 /// A subagent's conversation is followed live from the strip: what the client opens by the
