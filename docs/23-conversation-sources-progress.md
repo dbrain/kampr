@@ -172,7 +172,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 5 — Claude with no terminal — IN FLIGHT (s15, Rust, worktree): the `kampr-claude` crate (stream-json reader/writer, `launch.rs` scrubbed env + billing guards 1–5, `ClaudeSource` + `ClaudeConversation` guards 6–9), node wiring, mock endpoint (no test reaches Anthropic).
 
-## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685): trouble parsing (`system/api_error`, `isApiErrorMessage`, `StopFailure.error`), the unused hooks (`PreToolUse`/`SubagentStart`/`SubagentStop`/`Stop.background_tasks`), fork-aware transcript read, live shell/subagent data — in `kampr-journal` + `kampr-node`. Review pending.
+## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). Review queued (s17). Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.
 
 ## Phase 7 — the pane pump behind the trait — not started
 
