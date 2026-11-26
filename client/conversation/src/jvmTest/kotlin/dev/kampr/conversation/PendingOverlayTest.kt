@@ -31,6 +31,7 @@ import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PendingOption
+import dev.kampr.shared.wire.Reply
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.Turn
 import dev.kampr.shared.wire.Wire
@@ -148,7 +149,7 @@ class PendingOverlayTest {
         onNodeWithContentDescription("Answer 2, Yes, and do not ask again for this file").performClick()
         waitForIdle()
         assertEquals(
-            listOf(ClientMsg.Answer(PANE_ID, "2")),
+            listOf(ClientMsg.Answer(PANE_ID, "2", reply = Reply.Allow(remember = true))),
             RecordingIo.sent.toList(),
             "the chip was pressed and the answer never left the client",
         )
@@ -161,8 +162,8 @@ class PendingOverlayTest {
     fun anAnswerCarriesTheIdOfTheQuestionItWasPressedOn() {
         val multi = ASKED.copy(multi = true, options = ASKED.options.map { it.copy(chosen = true) })
         val cases = listOf(
-            Triple(ASKED.copy(id = "q7", source = "hook"), "Answer 2, Yes, and do not ask again for this file", ClientMsg.Answer(PANE_ID, "2", "q7")),
-            Triple(ASKED, "Answer 2, Yes, and do not ask again for this file", ClientMsg.Answer(PANE_ID, "2")),
+            Triple(ASKED.copy(id = "q7", source = "hook"), "Answer 2, Yes, and do not ask again for this file", ClientMsg.Answer(PANE_ID, "2", "q7", reply = Reply.Allow(remember = true))),
+            Triple(ASKED, "Answer 2, Yes, and do not ask again for this file", ClientMsg.Answer(PANE_ID, "2", reply = Reply.Allow(remember = true))),
             Triple(multi.copy(id = "q8", source = "hook"), "Send 3 answers", ClientMsg.AnswerSubmit(PANE_ID, "q8")),
             Triple(multi, "Send 3 answers", ClientMsg.AnswerSubmit(PANE_ID)),
         )

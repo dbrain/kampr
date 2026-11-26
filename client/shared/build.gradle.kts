@@ -50,7 +50,9 @@ kotlin {
             implementation(libs.compose.navigationevent)
             implementation(libs.compose.components.resources)
             implementation(libs.kotlinx.coroutines.core)
-            implementation(libs.kotlinx.serialization.json)
+            // `api` because the wire's public types name `JsonElement` in their signatures
+            // (`Control.value`, `Reply.Form.values`), and a module that sees Protocol sees it too.
+            api(libs.kotlinx.serialization.json)
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.websockets)
             implementation(libs.ktor.client.content.negotiation)

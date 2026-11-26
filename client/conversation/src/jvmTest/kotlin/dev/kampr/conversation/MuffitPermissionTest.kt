@@ -20,6 +20,7 @@ import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.Reply
 import dev.kampr.shared.wire.Wire
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -74,7 +75,7 @@ class MuffitPermissionTest {
         )
         onNodeWithContentDescription("Answer 1, Allow").performClick()
         waitForIdle()
-        assertEquals(listOf<ClientMsg>(ClientMsg.Answer(MUFFIT, "1")), RecordingIo.sent.filterIsInstance<ClientMsg.Answer>())
+        assertEquals(listOf<ClientMsg>(ClientMsg.Answer(MUFFIT, "1", reply = Reply.Allow())), RecordingIo.sent.filterIsInstance<ClientMsg.Answer>())
     }
 
     // Its adapter is muffit itself, so a node that has not yet said it converses has still not

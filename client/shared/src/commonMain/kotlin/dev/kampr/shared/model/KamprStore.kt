@@ -335,6 +335,36 @@ class KamprStore {
 
             is ServerMsg.ConvoComposer -> pane(msg.pane).applyComposer(msg)
 
+            // The conversation seam's own frames: each one lands on the pane it names and bumps
+            // that pane's revision, so the view that draws them recomposes. A frame for a pane
+            // nobody has open creates its state for the reason `grid.reset` does: the pane is
+            // about to be opened, and the state is what the opening sees.
+            is ServerMsg.ConvoAbilities -> pane(msg.pane).applyAbilities(msg)
+
+            is ServerMsg.ConvoLive -> pane(msg.pane).applyLive(msg)
+
+            is ServerMsg.ConvoTasks -> pane(msg.pane).applyTasks(msg)
+
+            is ServerMsg.ConvoTask -> pane(msg.pane).applyTaskOutput(msg)
+
+            is ServerMsg.ConvoState -> pane(msg.pane).applyState(msg)
+
+            is ServerMsg.ConvoTrouble -> pane(msg.pane).applyTrouble(msg)
+
+            is ServerMsg.ConvoSession -> pane(msg.pane).applySession(msg)
+
+            is ServerMsg.ConvoControls -> pane(msg.pane).applyControls(msg)
+
+            is ServerMsg.ConvoActions -> pane(msg.pane).applyActions(msg)
+
+            is ServerMsg.ConvoLimits -> pane(msg.pane).applyLimits(msg)
+
+            is ServerMsg.ConvoContext -> pane(msg.pane).applyContext(msg)
+
+            is ServerMsg.ConvoSuggested -> pane(msg.pane).applySuggested(msg)
+
+            is ServerMsg.ConvoActed -> pane(msg.pane).applyActed(msg)
+
             is ServerMsg.Pending -> pane(msg.pane).pending = msg.takeIf { it.question != null }
 
             is ServerMsg.Prefs -> _prefs.value = _prefs.value + msg.panes

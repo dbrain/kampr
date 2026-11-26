@@ -101,6 +101,13 @@ fun Composer(
     edits: List<BoxEdit> = emptyList(),
     onEdit: (BoxEdit) -> Unit = {},
     onLabelGone: (String) -> Unit = {},
+    // Offered only where the source declared `send_now` and a turn is running: the line goes in
+    // now, steering the running turn, rather than waiting for it. The box clears itself, the
+    // same way a send does, because the words have gone.
+    onSendNow: ((String) -> Unit)? = null,
+    // The word the send button says. A turn running and a source that queues makes a send a
+    // queue, and a button that says "send" while it queues is the label lying about what it does.
+    sendLabel: String? = null,
 ) {
     val tokens = Kampr.tokens
     // The last bar on the pane whenever the conversation is showing, and the pane is the one screen
@@ -205,6 +212,13 @@ fun Composer(
     fun submit() {
         if (!ready) return
         onSend(typed.trimEnd())
+        value.clearText()
+        onDraft("")
+    }
+
+    fun submitNow() {
+        if (!ready || onSendNow == null) return
+        onSendNow(typed.trimEnd())
         value.clearText()
         onDraft("")
     }
@@ -355,7 +369,28 @@ fun Composer(
                 )
             }
             val pillShape = RoundedCornerShape(tokens.radii.pill)
-            val sending = "Send this reply to ${agent ?: "the agent"}"
+            val sending = sendLabel ?: "Send this reply to ${agent ?: "the agent"}"
+            // Send-now stands beside the send only while it is on offer: a turn is running and the
+            // source said it can be steered. It is the urgent action, so it takes the accent and
+            // the send beside it becomes the queue.
+            if (onSendNow != null) {
+                Box(
+                    Modifier
+                        .size(TOUCH)
+                        .background(if (ready) tokens.color.blocked else tokens.color.raise, pillShape)
+                        .action(
+                            "Send this reply now, steering the running turn",
+                            { submitNow() },
+                            pillShape,
+                            enabled = ready,
+                            state = if (enabled) answering.note else null,
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    IconGlyph(ConversationIcons.play, 16.dp, if (ready) tokens.color.onAccent else tokens.color.mute)
+                    Hint("Send now")
+                }
+            }
             Box(
                 Modifier
                     .size(TOUCH)

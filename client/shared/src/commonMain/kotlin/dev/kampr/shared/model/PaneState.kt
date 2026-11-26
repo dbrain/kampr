@@ -6,12 +6,23 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.kampr.shared.wire.Abilities
+import dev.kampr.shared.wire.Action
+import dev.kampr.shared.wire.ContextUse
+import dev.kampr.shared.wire.Control
 import dev.kampr.shared.wire.Cursor
 import dev.kampr.shared.wire.EditKeys
 import dev.kampr.shared.wire.Facets
+import dev.kampr.shared.wire.Limits
+import dev.kampr.shared.wire.LiveTurn
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.RowDiff
 import dev.kampr.shared.wire.ServerMsg
+import dev.kampr.shared.wire.SessionFacts
+import dev.kampr.shared.wire.Suggestion
+import dev.kampr.shared.wire.Task
+import dev.kampr.shared.wire.TaskEnd
+import dev.kampr.shared.wire.Trouble
 import dev.kampr.shared.wire.Turn
 
 // What the pane's own composer holds, and the keystroke measured to empty it. `clear` is null for
@@ -544,6 +555,144 @@ class PaneState(val id: String, val styles: StyleTable) {
         refusal = null
     }
 
+    // --- The conversation seam's own state (docs/21 Phase 2a).
+    //
+    // Every one of these is drawn only where `abilities` and a frame say there is something to
+    // draw: a source that declares nothing leaves every one of them empty, and an empty one takes
+    // no room. That is the rule the pane is judged on.
+
+    // What the source can do, as it said it. Kept across a dropped socket for the reason
+    // `facets` is: it describes the source, and a reconnect republishes it.
+    var abilities by mutableStateOf(Abilities())
+        internal set
+
+    // The message being written, as the source streams it. **Not** a turn in `turns`: it is
+    // withdrawn and re-sent with every revision, and the recorded turn that replaces it arrives
+    // through `convo.turn`. Cleared on a dropped socket, where the turn it was previewing may
+    // have finished.
+    var live by mutableStateOf<LiveTurn?>(null)
+        internal set
+
+    // The tasks the source is running, newest frame is the whole of it: the node republishes the
+    // list, so a frame replaces rather than merges, for the reason `facets` replaces.
+    val tasks = mutableStateListOf<Task>()
+
+    // A watched task's output, keyed by task id and held for the life of the pane: the follow is
+    // per-socket, and the output is what a reader opened it to read.
+    val taskOutput = mutableStateMapOf<String, TaskOutput>()
+
+    // The seam's word for what the pane is doing: `idle`, `running`, `waiting`, `paused`,
+    // `ended`. A running turn may have finished while the socket was down, so this is cleared on
+    // a drop and re-said by the node's next `convo.state`.
+    var runState by mutableStateOf<String?>(null)
+        internal set
+
+    // What is wrong with the pane right now, in the source's words. Cleared on a drop for the
+    // reason `pending` is: a trouble that retried itself to death while the socket was down would
+    // stand on screen saying it was still retrying.
+    var trouble by mutableStateOf<Trouble?>(null)
+        internal set
+
+    // What the harness wrote down about the session: who pays, which model, which mode. Kept
+    // across a dropped socket for the reason `facets` is.
+    var session by mutableStateOf<SessionFacts?>(null)
+        internal set
+
+    // The settings and verbs the source listed, and the plan's usage. Kept across a dropped
+    // socket for the reason `facets` is: they describe the pane and a reconnect republishes them.
+    var controls by mutableStateOf<List<Control>>(emptyList())
+        internal set
+    var actions by mutableStateOf<List<Action>>(emptyList())
+        internal set
+    var limits by mutableStateOf<Limits?>(null)
+        internal set
+    var context by mutableStateOf<ContextUse?>(null)
+        internal set
+
+    // What the source suggested for the prefix the operator is typing. Transient: it is an answer
+    // to a line that is about to change, and a suggestion list for a word nobody is typing any
+    // more is chrome with nothing to point at.
+    var suggested by mutableStateOf<List<Suggestion>>(emptyList())
+        internal set
+    var suggestedKind by mutableStateOf("")
+        internal set
+    var suggestedQuery by mutableStateOf("")
+        internal set
+
+    // What an action the client sent did, and what it said back. Transient for the same reason.
+    var acted by mutableStateOf<ServerMsg.ConvoActed?>(null)
+        internal set
+
+    fun applyAbilities(msg: ServerMsg.ConvoAbilities) {
+        abilities = msg.abilities
+        revision++
+    }
+
+    fun applyLive(msg: ServerMsg.ConvoLive) {
+        // An empty live is the turn being withdrawn, the same shape `ConvoComposer` uses for an
+        // emptied box.
+        live = if (msg.live.text.isEmpty() && msg.live.tools.isEmpty()) null else msg.live
+        revision++
+    }
+
+    fun applyTasks(msg: ServerMsg.ConvoTasks) {
+        tasks.clear()
+        tasks += msg.tasks
+        revision++
+    }
+
+    fun applyTaskOutput(msg: ServerMsg.ConvoTask) {
+        taskOutput.getOrPut(msg.id) { TaskOutput(msg.id) }.apply(msg)
+        revision++
+    }
+
+    fun applyState(msg: ServerMsg.ConvoState) {
+        runState = msg.state
+        revision++
+    }
+
+    fun applyTrouble(msg: ServerMsg.ConvoTrouble) {
+        trouble = msg.trouble
+        revision++
+    }
+
+    fun applySession(msg: ServerMsg.ConvoSession) {
+        session = msg.facts
+        revision++
+    }
+
+    fun applyControls(msg: ServerMsg.ConvoControls) {
+        controls = msg.controls
+        revision++
+    }
+
+    fun applyActions(msg: ServerMsg.ConvoActions) {
+        actions = msg.actions
+        revision++
+    }
+
+    fun applyLimits(msg: ServerMsg.ConvoLimits) {
+        limits = msg.limits
+        revision++
+    }
+
+    fun applyContext(msg: ServerMsg.ConvoContext) {
+        context = msg.context
+        revision++
+    }
+
+    fun applySuggested(msg: ServerMsg.ConvoSuggested) {
+        suggested = msg.items
+        suggestedKind = msg.kind
+        suggestedQuery = msg.query
+        revision++
+    }
+
+    fun applyActed(msg: ServerMsg.ConvoActed) {
+        acted = msg
+        revision++
+    }
+
     fun markStale() {
         refusal = null
         if (painted) stale = true
@@ -554,5 +703,32 @@ class PaneState(val id: String, val styles: StyleTable) {
         // answer it into a pane with nothing matching to answer.
         pending = null
         hooks.dropped()
+        // The seam's live edges go with the socket: a turn may have finished, a trouble may have
+        // cleared, and a suggestion list is an answer to a line that is about to change. The
+        // pane's descriptions (abilities, tasks, session, controls, actions, limits, context)
+        // are kept for the reason `facets` is, and a reconnect republishes them.
+        live = null
+        runState = null
+        trouble = null
+        taskOutput.clear()
+        suggested = emptyList()
+        suggestedKind = ""
+        suggestedQuery = ""
+        acted = null
+    }
+}
+
+// A watched task's output as this client holds it: the lines followed so far and the end, once
+// it arrives. `convo.follow` starts at a line number the node owns, so what is held here is
+// exactly what was asked for and nothing the client guessed at.
+class TaskOutput(val id: String) {
+    val lines = mutableListOf<String>()
+    var ended: TaskEnd? = null
+    var lastAt: Long = 0
+
+    fun apply(msg: ServerMsg.ConvoTask) {
+        lines += msg.text
+        lastAt = msg.at
+        msg.ended?.let { ended = it }
     }
 }

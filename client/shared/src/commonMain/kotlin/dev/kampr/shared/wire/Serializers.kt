@@ -11,9 +11,11 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
@@ -163,6 +165,129 @@ object BlockSerializer : KSerializer<Block> {
                 }
 
                 is Block.Unknown -> buildJsonObject { put("b", value.kind) }
+            },
+        )
+    }
+}
+
+// serde spells the seam's answer the way it spells every externally tagged enum: a struct
+// variant is {"allow": {...}}, and a unit variant is the bare word. The sealed hierarchy's own
+// tags are a class discriminator in this library's version, which the node's serde does not
+// decode, so the two sides are met in the middle here.
+object ReplySerializer : KSerializer<Reply> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("kampr.Reply")
+
+    override fun deserialize(decoder: Decoder): Reply {
+        val el = (decoder as JsonDecoder).decodeJsonElement()
+        val obj = el as? JsonObject ?: throw kotlinx.serialization.SerializationException("Unreadable reply $el")
+        val entry = obj.entries.firstOrNull() ?: throw kotlinx.serialization.SerializationException("Empty reply")
+        val body = entry.value as? JsonObject
+        return when (entry.key) {
+            "allow" -> Reply.Allow(
+                input = body?.get("input"),
+                remember = body?.get("remember")?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false,
+            )
+
+            "deny" -> Reply.Deny(body?.get("message")?.jsonPrimitive?.contentOrNull)
+
+            "choose" -> Reply.Choose((body?.get("answers") as? JsonArray)?.map { it.jsonPrimitive.content } ?: emptyList())
+
+            "plan" -> {
+                val o = body ?: throw kotlinx.serialization.SerializationException("Unreadable reply plan")
+                Reply.Plan(
+                    approve = o["approve"]?.jsonPrimitive?.contentOrNull?.toBoolean() ?: false,
+                    mode = o["mode"]?.jsonPrimitive?.contentOrNull,
+                    feedback = o["feedback"]?.jsonPrimitive?.contentOrNull,
+                )
+            }
+
+            "form" -> Reply.Form(body?.get("values") ?: throw kotlinx.serialization.SerializationException("A reply form has no values"))
+
+            else -> throw kotlinx.serialization.SerializationException("Unknown reply ${entry.key}")
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: Reply) {
+        val out = encoder as JsonEncoder
+        out.encodeJsonElement(
+            when (value) {
+                is Reply.Allow -> buildJsonObject {
+                    put(
+                        "allow",
+                        buildJsonObject {
+                            value.input?.let { put("input", it) }
+                            put("remember", value.remember)
+                        },
+                    )
+                }
+
+                is Reply.Deny -> buildJsonObject {
+                    put("deny", buildJsonObject { value.message?.let { put("message", it) } })
+                }
+
+                is Reply.Choose -> buildJsonObject {
+                    put(
+                        "choose",
+                        buildJsonObject {
+                            put("answers", buildJsonArray { value.answers.forEach { add(JsonPrimitive(it)) } })
+                        },
+                    )
+                }
+
+                is Reply.Plan -> buildJsonObject {
+                    put(
+                        "plan",
+                        buildJsonObject {
+                            put("approve", value.approve)
+                            value.mode?.let { put("mode", it) }
+                            value.feedback?.let { put("feedback", it) }
+                        },
+                    )
+                }
+
+                is Reply.Form -> buildJsonObject {
+                    put("form", buildJsonObject { put("values", value.values) })
+                }
+
+                is Reply.Dismiss -> JsonPrimitive("dismiss")
+            },
+        )
+    }
+}
+
+// serde spells a unit variant as the bare string and a struct variant as the tagged object, so
+// `login` goes out and comes back as "login" while `wait` arrives as {"wait":{"until":...}}. The
+// sealed hierarchy's own tags would say {"login":null} for the units, which the node's serde does
+// not decode, so the two sides are met in the middle here.
+object TroubleFixSerializer : KSerializer<TroubleFix> {
+    override val descriptor: SerialDescriptor = buildClassSerialDescriptor("kampr.TroubleFix")
+
+    override fun deserialize(decoder: Decoder): TroubleFix {
+        val el = (decoder as JsonDecoder).decodeJsonElement()
+        return when {
+            el is JsonPrimitive && el.isString -> when (el.content) {
+                "login" -> TroubleFix.Login
+                "billing" -> TroubleFix.Billing
+                else -> throw kotlinx.serialization.SerializationException("Unknown trouble fix ${el.content}")
+            }
+
+            el is JsonObject -> {
+                val entry = el.entries.firstOrNull() ?: throw kotlinx.serialization.SerializationException("Empty trouble fix")
+                if (entry.key != "wait") throw kotlinx.serialization.SerializationException("Unknown trouble fix ${entry.key}")
+                TroubleFix.Wait(entry.value?.jsonObject?.get("until")?.jsonPrimitive?.contentOrNull.orEmpty())
+            }
+
+            else -> throw kotlinx.serialization.SerializationException("Unreadable trouble fix $el")
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: TroubleFix) {
+        val out = encoder as JsonEncoder
+        out.encodeJsonElement(
+            when (value) {
+                is TroubleFix.Login -> JsonPrimitive("login")
+                is TroubleFix.Billing -> JsonPrimitive("billing")
+                is TroubleFix.Wait -> buildJsonObject { put("wait", buildJsonObject { put("until", value.until) }) }
             },
         )
     }

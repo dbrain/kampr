@@ -2,6 +2,7 @@ package dev.kampr.shared.wire
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 @Serializable(with = ColorSpecSerializer::class)
@@ -448,6 +449,194 @@ data class SessionInfo(
     val served: Boolean = true,
 )
 
+// The conversation seam's own vocabulary (docs/21, Phase 2a): the words a source uses to say
+// what it can do, and the shapes its frames carry. Every list is an open set of words, and a
+// client draws only what the source declared — a piece with nothing to show takes no room.
+//
+// `BTreeSet` on the Rust side, so the order is the sorted one; the lists here are read as sets
+// in practice (`"queue_next" in abilities.input`) and are never indexed by position.
+@Serializable
+data class Abilities(
+    val input: List<String> = emptyList(),
+    val steer: List<String> = emptyList(),
+    val asks: List<String> = emptyList(),
+    val streams: List<String> = emptyList(),
+    val facts: List<String> = emptyList(),
+    val lifecycle: List<String> = emptyList(),
+)
+
+val Abilities.canQueue: Boolean get() = "queue_next" in input
+val Abilities.canSendNow: Boolean get() = "send_now" in input
+val Abilities.canSlash: Boolean get() = "slash" in input
+val Abilities.canMention: Boolean get() = "mention" in input
+val Abilities.canInterrupt: Boolean get() = "interrupt" in steer
+
+object AbilityWords {
+    // The facts a pane's header details can draw from. A source that declares none of these has
+    // nothing to show there, and a line with nothing to show takes no room.
+    val FACTS_DRAWN: Set<String> = setOf("account", "billing", "limits", "context")
+}
+
+// The turn as it is being written: the text so far and the tool calls as their arguments
+// arrive. Sent on the streaming edge while a turn runs and withdrawn by the recorded turn, so a
+// client holds it and re-holds it with every revision rather than appending it.
+@Serializable
+data class LiveTurn(val text: String = "", val thinking: Long? = null, val tools: List<LiveTool> = emptyList())
+
+@Serializable
+data class LiveTool(val id: String, val tool: String, val args: String = "", val state: String = "")
+
+// A task the source is running. `kind` is an open string for the reason a mode is: `agent`,
+// `shell` and `monitor` are what the sources launch, and a client draws the word it is given.
+// `parent` names the task a subagent's own shell runs under, and `backgrounded` says the source
+// set it aside rather than the operator.
+@Serializable
+data class Task(
+    val id: String,
+    val kind: String = "",
+    val call: String? = null,
+    val parent: String? = null,
+    val title: String? = null,
+    val since: String? = null,
+    val backgrounded: Boolean = false,
+    val state: String = "running",
+)
+
+// How a watched task ended, with the summary it gave. Arrives once, on the `convo.task` frame
+// that carries it.
+@Serializable
+data class TaskEnd(val ok: Boolean, val summary: String? = null)
+
+// What is wrong with the pane right now, in the source's words. `null` is how a trouble clears,
+// so the frame is sent with an explicit null rather than omitted. `status` is the source's own
+// word for where the trouble stands (retrying, held, ended).
+@Serializable
+data class Trouble(
+    val kind: String = "",
+    val text: String = "",
+    val status: String = "",
+    val retry: TroubleRetry? = null,
+    val fix: TroubleFix? = null,
+)
+
+@Serializable
+data class TroubleRetry(val attempt: Int, val of: Int, @SerialName("in_ms") val inMs: Long)
+
+// What the operator can do about a trouble. serde's own spelling, carried through by
+// `TroubleFixSerializer`: a unit fix is the bare word ("login") and a waiting one is the tagged
+// object {"wait":{"until":...}}.
+@Serializable(with = TroubleFixSerializer::class)
+sealed interface TroubleFix {
+    @Serializable
+    @SerialName("login")
+    data object Login : TroubleFix
+
+    @Serializable
+    @SerialName("wait")
+    data class Wait(val until: String) : TroubleFix
+
+    @Serializable
+    @SerialName("billing")
+    data object Billing : TroubleFix
+}
+
+// What the harness wrote down about the *session* rather than about any one turn. `billing` is
+// always present: where this session's usage is billed is what the safeguards guard, and a
+// client that draws a session without saying who pays is the surprise the whole feature exists
+// to prevent.
+@Serializable
+data class SessionFacts(
+    val id: String,
+    val cwd: String? = null,
+    val title: String? = null,
+    val model: String? = null,
+    val mode: String? = null,
+    val version: String? = null,
+    val account: String? = null,
+    val billing: Billing = Billing(),
+    val started: String? = null,
+)
+
+@Serializable
+data class Billing(val provider: String? = null, val key: String? = null, @SerialName("rate_limited") val rateLimited: Boolean = false)
+
+// The plan's usage as the provider reports it. `usage` is an open JSON value on purpose: each
+// provider counts its limits in its own units, and a client that guessed a shape would be wrong
+// the first time a provider grew one. The pane draws what it can say about it and no more.
+@Serializable
+data class Limits(val plan: String? = null, val usage: JsonElement? = null, @SerialName("resets_at") val resetsAt: String? = null)
+
+@Serializable
+data class ContextUse(val used: Long, val total: Long)
+
+// A setting the source listed: the pane draws it from the description and never learns its
+// name. `value` is open JSON — a choice is its current word, a toggle a boolean, a number a
+// number — and `confirm` is the sentence shown before a change that costs money, which a client
+// must show rather than skip.
+@Serializable
+data class Control(
+    val id: String,
+    val label: String,
+    val kind: String,
+    val value: JsonElement? = null,
+    val options: List<ControlOption> = emptyList(),
+    val group: String? = null,
+    val confirm: String? = null,
+)
+
+@Serializable
+data class ControlOption(val value: String, val label: String, val detail: String? = null)
+
+// A verb the source listed, described: adding something is an action with described
+// arguments. `confirm` carries the same sentence it does on a control.
+@Serializable
+data class Action(
+    val id: String,
+    val label: String,
+    val detail: String? = null,
+    val args: List<ArgSpec> = emptyList(),
+    val group: String? = null,
+    val confirm: String? = null,
+)
+
+@Serializable
+data class ArgSpec(val name: String, val label: String, val required: Boolean, val options: List<String> = emptyList())
+
+// What the source suggests for a prefix: a command after `/`, a file after `@`.
+@Serializable
+data class Suggestion(val id: String, val label: String, val detail: String? = null)
+
+// The seam's own answer, where a source takes more than a key and a line: a plan approved, a
+// form filled, a question chosen. Externally tagged on the wire (`{"allow": {...}}`), and the
+// widened `answer`'s `reply` field — absent is what every answer carried before this, and a
+// node that has never heard of the field decodes exactly the frame it decoded before.
+@Serializable(with = ReplySerializer::class)
+sealed interface Reply {
+    @Serializable
+    @SerialName("allow")
+    data class Allow(val input: JsonElement? = null, val remember: Boolean = false) : Reply
+
+    @Serializable
+    @SerialName("deny")
+    data class Deny(val message: String? = null) : Reply
+
+    @Serializable
+    @SerialName("choose")
+    data class Choose(val answers: List<String> = emptyList()) : Reply
+
+    @Serializable
+    @SerialName("plan")
+    data class Plan(val approve: Boolean, val mode: String? = null, val feedback: String? = null) : Reply
+
+    @Serializable
+    @SerialName("form")
+    data class Form(val values: JsonElement) : Reply
+
+    @Serializable
+    @SerialName("dismiss")
+    data object Dismiss : Reply
+}
+
 sealed interface ServerMsg {
     data class Hello(
         val protocol: Int,
@@ -684,6 +873,64 @@ sealed interface ServerMsg {
     ) : ServerMsg
 
     data class Pong(val n: Int) : ServerMsg
+
+    // --- The conversation seam's frames (docs/21 Phase 2a). All additive: a node that never
+    // sends them leaves a client exactly where it was, and a client that ignores them (this one
+    // before this build) keeps working against a node that does.
+
+    // What a conversation can do, as the source says it: a control the client does not draw is
+    // an ability the source does not declare.
+    data class ConvoAbilities(val pane: String, val abilities: Abilities) : ServerMsg
+
+    // The turn as it is being written: the text so far and the tool calls as their arguments
+    // arrive. Sent on the streaming edge while a turn runs and withdrawn by the recorded turn.
+    data class ConvoLive(val pane: String, val live: LiveTurn) : ServerMsg
+
+    data class ConvoTasks(val pane: String, val tasks: List<Task>) : ServerMsg
+
+    // A watched task's output, as it arrives. `ended` is null while it runs and names the end
+    // once, with the summary the task gave.
+    data class ConvoTask(
+        val pane: String,
+        val id: String,
+        val at: Long,
+        val text: String,
+        val ended: TaskEnd? = null,
+    ) : ServerMsg
+
+    // The seam's own word for what the pane is doing: `idle`, `running`, `waiting`, `paused`,
+    // `ended`. An open string on the wire, for the reason a mode is.
+    data class ConvoState(val pane: String, val state: String) : ServerMsg
+
+    // `trouble == null` is how a trouble clears.
+    data class ConvoTrouble(val pane: String, val trouble: Trouble?) : ServerMsg
+
+    data class ConvoSession(val pane: String, val facts: SessionFacts) : ServerMsg
+
+    data class ConvoControls(val pane: String, val controls: List<Control>) : ServerMsg
+
+    data class ConvoActions(val pane: String, val actions: List<Action>) : ServerMsg
+
+    data class ConvoLimits(val pane: String, val limits: Limits) : ServerMsg
+
+    data class ConvoContext(val pane: String, val context: ContextUse) : ServerMsg
+
+    // What the source suggests for a prefix a client is typing: `kind` is `commands` for a `/`
+    // and `files` for a `@`.
+    data class ConvoSuggested(
+        val pane: String,
+        val kind: String,
+        val query: String,
+        val items: List<Suggestion>,
+    ) : ServerMsg
+
+    // What an action the client sent did, and what it said back.
+    data class ConvoActed(
+        val pane: String,
+        val action: String,
+        val ok: Boolean,
+        val text: String? = null,
+    ) : ServerMsg
 }
 
 @Serializable
@@ -727,7 +974,7 @@ sealed interface ClientMsg {
 
     data class InputKeys(val pane: String, val keys: List<String>, val typed: Boolean = false) : ClientMsg
 
-    data class Answer(val pane: String, val key: String, val id: String? = null, val text: String? = null) : ClientMsg
+    data class Answer(val pane: String, val key: String, val id: String? = null, val text: String? = null, val reply: Reply? = null) : ClientMsg
 
     // Commits a question that takes several answers, once the ones wanted are ticked. A frame of
     // its own rather than a flag on `answer`, because `answer`'s key is required and reinterpreting
@@ -762,6 +1009,22 @@ sealed interface ClientMsg {
     // back: it is minted by the node that served the turn and proved against that pane's own
     // session tree, so a client that built one would be asking for a file it cannot name.
     data class ConvoSub(val pane: String, val id: String, val before: String? = null) : ClientMsg
+
+    // Steer the running turn, with the words to steer it by. The words are the seam's
+    // `Command::Steer` second arm, and a steer with none is the plain nudge.
+    data class ConvoSteer(val pane: String, val steer: String, val text: String? = null) : ClientMsg
+
+    // Set a control the source listed, by the id `convo.controls` gave it.
+    data class ConvoSet(val pane: String, val control: String, val value: JsonElement) : ClientMsg
+
+    // Run an action the source listed, by the id `convo.actions` gave it, with its arguments.
+    data class ConvoAct(val pane: String, val action: String, val args: JsonElement) : ClientMsg
+
+    // Watch a task's output live. `from` is the line to start at; absent is the first.
+    data class ConvoFollow(val pane: String, val id: String, val from: Long = 0) : ClientMsg
+
+    // Ask the source for its suggestions of a kind, for a prefix.
+    data class ConvoSuggest(val pane: String, val kind: String, val query: String) : ClientMsg
 
     // Bytes for the agent to work on. The node writes them to a file on the pane's own machine
     // and types the path in, because an agent reached over ssh reads a local path perfectly well

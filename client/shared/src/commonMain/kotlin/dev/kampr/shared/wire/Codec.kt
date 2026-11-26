@@ -10,8 +10,10 @@ import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.decodeFromJsonElement
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 
 object Wire {
@@ -203,6 +205,81 @@ object Wire {
 
             "pong" -> ServerMsg.Pong(obj.int("n") ?: 0)
 
+            // --- The conversation seam's frames. A node that predates them never sends them, and
+            // a `t` this build does not know decodes to null: the additive rule in both directions.
+
+            "convo.abilities" -> ServerMsg.ConvoAbilities(
+                pane = obj.str("pane") ?: return null,
+                abilities = obj.decode<Abilities>("abilities") ?: Abilities(),
+            )
+
+            "convo.live" -> ServerMsg.ConvoLive(
+                pane = obj.str("pane") ?: return null,
+                live = obj.decode<LiveTurn>("live") ?: LiveTurn(),
+            )
+
+            "convo.tasks" -> ServerMsg.ConvoTasks(
+                pane = obj.str("pane") ?: return null,
+                tasks = obj.decodeList<Task>("tasks"),
+            )
+
+            "convo.task" -> ServerMsg.ConvoTask(
+                pane = obj.str("pane") ?: return null,
+                id = obj.str("id") ?: return null,
+                at = obj.long("at") ?: 0,
+                text = obj.str("text").orEmpty(),
+                ended = obj.decode<TaskEnd>("ended"),
+            )
+
+            "convo.state" -> ServerMsg.ConvoState(
+                pane = obj.str("pane") ?: return null,
+                state = obj.str("state") ?: "idle",
+            )
+
+            "convo.trouble" -> ServerMsg.ConvoTrouble(
+                pane = obj.str("pane") ?: return null,
+                trouble = obj.decode<Trouble>("trouble"),
+            )
+
+            "convo.session" -> ServerMsg.ConvoSession(
+                pane = obj.str("pane") ?: return null,
+                facts = obj.decode<SessionFacts>("facts") ?: return null,
+            )
+
+            "convo.controls" -> ServerMsg.ConvoControls(
+                pane = obj.str("pane") ?: return null,
+                controls = obj.decodeList<Control>("controls"),
+            )
+
+            "convo.actions" -> ServerMsg.ConvoActions(
+                pane = obj.str("pane") ?: return null,
+                actions = obj.decodeList<Action>("actions"),
+            )
+
+            "convo.limits" -> ServerMsg.ConvoLimits(
+                pane = obj.str("pane") ?: return null,
+                limits = obj.decode<Limits>("limits") ?: Limits(),
+            )
+
+            "convo.context" -> ServerMsg.ConvoContext(
+                pane = obj.str("pane") ?: return null,
+                context = obj.decode<ContextUse>("context") ?: return null,
+            )
+
+            "convo.suggested" -> ServerMsg.ConvoSuggested(
+                pane = obj.str("pane") ?: return null,
+                kind = obj.str("kind") ?: "commands",
+                query = obj.str("query").orEmpty(),
+                items = obj.decodeList<Suggestion>("items"),
+            )
+
+            "convo.acted" -> ServerMsg.ConvoActed(
+                pane = obj.str("pane") ?: return null,
+                action = obj.str("action").orEmpty(),
+                ok = obj.bool("ok") ?: false,
+                text = obj.str("text"),
+            )
+
             else -> null
         }
     }
@@ -250,6 +327,10 @@ object Wire {
             put("key", msg.key)
             msg.id?.let { put("id", it) }
             msg.text?.let { put("text", it) }
+            // The seam's own answer, where the source takes more than a key and a line. Absent is
+            // what every answer carried before this, and a node that has never heard of the
+            // field decodes exactly the frame it decoded before.
+            msg.reply?.let { put("reply", json.encodeToJsonElement(it)) }
         }
 
         is ClientMsg.AnswerSubmit -> buildJsonObject {
@@ -292,6 +373,41 @@ object Wire {
             msg.before?.let { put("before", it) }
         }
 
+        is ClientMsg.ConvoSteer -> buildJsonObject {
+            put("t", "convo.steer")
+            put("pane", msg.pane)
+            put("steer", msg.steer)
+            msg.text?.let { put("text", it) }
+        }
+
+        is ClientMsg.ConvoSet -> buildJsonObject {
+            put("t", "convo.set")
+            put("pane", msg.pane)
+            put("control", msg.control)
+            put("value", msg.value)
+        }
+
+        is ClientMsg.ConvoAct -> buildJsonObject {
+            put("t", "convo.act")
+            put("pane", msg.pane)
+            put("action", msg.action)
+            put("args", msg.args)
+        }
+
+        is ClientMsg.ConvoFollow -> buildJsonObject {
+            put("t", "convo.follow")
+            put("pane", msg.pane)
+            put("id", msg.id)
+            put("from", msg.from)
+        }
+
+        is ClientMsg.ConvoSuggest -> buildJsonObject {
+            put("t", "convo.suggest")
+            put("pane", msg.pane)
+            put("kind", msg.kind)
+            put("query", msg.query)
+        }
+
         is ClientMsg.Paste -> buildJsonObject {
             put("t", "paste")
             put("pane", msg.pane)
@@ -329,6 +445,8 @@ object Wire {
     private fun JsonObject.str(key: String): String? = prim(key)?.contentOrNull
 
     private fun JsonObject.int(key: String): Int? = prim(key)?.intOrNull
+
+    private fun JsonObject.long(key: String): Long? = prim(key)?.longOrNull
 
     private fun JsonObject.bool(key: String): Boolean? = prim(key)?.booleanOrNull
 
