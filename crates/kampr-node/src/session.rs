@@ -121,11 +121,12 @@ const SUB_PAGE: usize = 200;
 /// reached by a narrower query rather than by a longer frame.
 const CONVO_MATCHES: usize = 50;
 
-const CLIENT_VERBS: [&str; 18] = [
+const CLIENT_VERBS: [&str; 19] = [
     "watch",
     "unwatch",
     "answer.submit",
     "input",
+    "input.unqueue",
     "paste",
     "answer",
     "convo.load",
@@ -848,10 +849,13 @@ impl Session {
                 typed,
                 paste,
                 from,
+                id,
+                when,
             } => {
-                self.input(&pane, text, b64, keys, Typing { typed, paste }, from)
+                self.input(&pane, text, b64, keys, Typing { typed, paste }, from, id, when)
                     .await;
             }
+            ClientMsg::InputUnqueue { pane, id } => self.input_unqueue(&pane, &id),
             ClientMsg::Paste {
                 pane,
                 b64,
@@ -1355,6 +1359,20 @@ impl Session {
         }
     }
 
+    fn input_unqueue(&self, pane: &str, id: &str) {
+        if self.node.resolve(pane).is_none() {
+            let via = self.relayed_as(pane);
+            self.relay_to_peer(pane, json!({ "t": "input.unqueue", "pane": via, "id": id }));
+            return;
+        }
+        self.convo_command(
+            pane,
+            kampr_core::conversation::Command::Unqueue {
+                msg_id: id.to_string(),
+            },
+        );
+    }
+
     fn convo_steer(&self, pane: &str, steer: Steer, text: Option<String>) {
         if self.node.resolve(pane).is_none() {
             let via = self.relayed_as(pane);
@@ -1681,6 +1699,8 @@ impl Session {
         keys: Option<Vec<String>>,
         Typing { typed, paste }: Typing,
         from: Option<String>,
+        id: Option<String>,
+        when: Option<String>,
     ) -> bool {
         if !self.may_write("input", Some(pane)) {
             return false;
@@ -1692,7 +1712,7 @@ impl Session {
                 pane,
                 json!({
                     "t": "input", "pane": pane, "text": text, "b64": b64, "keys": keys,
-                    "typed": typed, "paste": paste, "from": from,
+                    "typed": typed, "paste": paste, "from": from, "id": id, "when": when,
                 }),
             );
             return true;
@@ -1781,14 +1801,34 @@ impl Session {
                 Input::Paste(text) => text.clone(),
                 Input::Keys(keys) => keys.join(" "),
             };
+            // A paste the composer held is a path in the text: the image becomes a content
+            // block, and what is left is a file the agent reads by its @-ref.
+            let (text, images) = crate::paste::lift_images(&self.node.state_dir, &text);
+            let files = crate::paste::paste_files(&self.node.state_dir, &text);
             self.convo_command(
                 pane,
                 kampr_core::conversation::Command::Input {
                     text,
-                    msg_id: ulid::Ulid::generate().to_string(),
-                    images: vec![],
-                    files: vec![],
-                    when: kampr_core::conversation::When::Idle,
+                    // The id the client minted is the one an `input.unqueue` can name.
+                    msg_id: id.unwrap_or_else(|| ulid::Ulid::generate().to_string()),
+                    images: images
+                        .into_iter()
+                        .map(|image| kampr_core::conversation::Image {
+                            mime: image.mime,
+                            data: image.data,
+                        })
+                        .collect(),
+                    files: files
+                        .into_iter()
+                        .map(|path| kampr_core::conversation::FileRef {
+                            path: path.into(),
+                        })
+                        .collect(),
+                    when: match when.as_deref() {
+                        Some("now") => kampr_core::conversation::When::Now,
+                        Some("next") => kampr_core::conversation::When::Next,
+                        _ => kampr_core::conversation::When::Idle,
+                    },
                 },
             );
             return true;
@@ -2055,7 +2095,7 @@ impl Session {
         };
         if typed
             && !self
-                .input(pane, Some(text.clone()), None, None, Typing::default(), None)
+                .input(pane, Some(text.clone()), None, None, Typing::default(), None, None, None)
                 .await
         {
             if answered {
@@ -4308,6 +4348,36 @@ mod tests {
                 .to_string();
         let listed: Vec<String> = error.split('`').skip(3).step_by(2).map(str::to_string).collect();
         assert_eq!(listed, CLIENT_VERBS, "{error}");
+    }
+
+    /// The queue words on `input` and `input.unqueue` are additive: a frame minted before them
+    /// decodes to the words it always had, and a newer frame keeps the old fields intact.
+    #[test]
+    fn the_input_queue_words_are_additive_on_the_wire() {
+        let old: ClientMsg = serde_json::from_value(serde_json::json!({
+            "t": "input", "pane": "c:1", "text": "go",
+        }))
+        .expect("an input frame without the queue words");
+        let ClientMsg::Input { id, when, .. } = old else {
+            panic!("wanted input");
+        };
+        assert!(id.is_none() && when.is_none());
+
+        let new: ClientMsg = serde_json::from_value(serde_json::json!({
+            "t": "input", "pane": "c:1", "text": "go", "id": "m1", "when": "now",
+        }))
+        .expect("an input frame with the queue words");
+        let ClientMsg::Input { text, id, when, .. } = new else {
+            panic!("wanted input");
+        };
+        assert_eq!(text.as_deref(), Some("go"));
+        assert_eq!(id.as_deref(), Some("m1"));
+        assert_eq!(when.as_deref(), Some("now"));
+
+        let unqueue: ClientMsg =
+            serde_json::from_value(serde_json::json!({ "t": "input.unqueue", "pane": "c:1", "id": "m1" }))
+                .expect("an unqueue frame");
+        assert!(matches!(unqueue, ClientMsg::InputUnqueue { .. }));
     }
 
     #[test]

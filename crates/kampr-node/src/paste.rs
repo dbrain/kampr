@@ -83,6 +83,32 @@ pub fn lift_images(state_dir: &Path, text: &str) -> (String, Vec<kampr_muffit::w
     (text, images)
 }
 
+/// The paste paths that stand in the text once `lift_images` has taken its pictures: the files
+/// a conversation receives as @-refs, each one a path the agent can read.
+pub fn paste_files(state_dir: &Path, text: &str) -> Vec<String> {
+    let prefix = format!("{}/", state_dir.join("pastes").display());
+    let mut files = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(&prefix) {
+        let word = &rest[at..];
+        let word = &word[..word.find(char::is_whitespace).unwrap_or(word.len())];
+        let end = (0..=word.len())
+            .rev()
+            .filter(|&end| word.is_char_boundary(end) && end > prefix.len())
+            .take_while(|&end| end == word.len() || !word[end..].starts_with(char::is_alphanumeric))
+            .find(|&end| {
+                let path = Path::new(&word[..end]);
+                path.is_file() && !is_image(path)
+            })
+            .unwrap_or(0);
+        if end > prefix.len() {
+            files.push(word[..end].to_string());
+        }
+        rest = &rest[at + word.len()..];
+    }
+    files
+}
+
 pub fn is_image(path: &Path) -> bool {
     image_mime(path).is_some()
 }
@@ -251,6 +277,22 @@ mod tests {
             typed(Path::new("/var/kampr/pastes/shot-1.png")),
             "/var/kampr/pastes/shot-1.png ",
         );
+    }
+
+    #[test]
+    fn the_paths_left_after_the_images_are_lifted_are_the_files() {
+        let dir = scratch("files");
+        let png = b"\x89PNG\r\n\x1a\n\x00a picture";
+        let picture = write(&dir, png, Some("picture.png")).expect("a picture");
+        let notes = write(&dir, b"the notes", Some("notes.txt")).expect("the notes");
+
+        let text = format!("look at {} and {}", picture.display(), notes.display());
+        let (lifted, images) = lift_images(&dir, &text);
+        assert_eq!(images.len(), 1, "the picture is lifted: {lifted}");
+
+        let files = paste_files(&dir, &lifted);
+        assert_eq!(files, vec![notes.display().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     fn scratch(tag: &str) -> PathBuf {

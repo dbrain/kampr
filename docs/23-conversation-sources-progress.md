@@ -69,6 +69,10 @@ outlived its conversation and pinned the runtime's shutdown (the reason the test
 **7f531e53** fixed a regression the first cut introduced: a muffit *session* pane is also
 terminal-less, so `!terminal` alone stole the muffit session's send/answer from its REST path — the
 `c:` pane id is the discriminator. `make test-fast` green (2151 passed).
+**Leak fix (6216d8f5):** the guards and headless tests created keeper-backed Claude sessions under
+the shared keeper root, so their state dirs accumulated in `/run/user/1000/kampr/s/` and the node's
+`ClaudeProvider` listed them as panes in the operator's client. Both tests now set `KAMPR_KEEP_ROOT`
+to a per-test tempdir so sessions live and die with the test.
 **Next: Phase 5b-2 (source completeness: interrupt, context usage, completion, queue/send-now,
 files), 5b-3 (subagent-live + search/older), Phase 9 (Codex third source), the muffit gate, and
 screenshots.**

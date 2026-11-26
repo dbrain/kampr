@@ -90,6 +90,30 @@ fn errors(client: &Client) -> Vec<serde_json::Value> {
         .collect()
 }
 
+/// What the conversation wrote to the child's stdin, from the keeper's pipe log: the only
+/// record of the control requests and user lines it sent.
+fn pipe_writes(keep_root: &std::path::Path, session_id: &str) -> Vec<String> {
+    let dir = keep_root.join(session_id);
+    let mut lines = Vec::new();
+    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.strip_prefix("log.").is_some_and(|rest| rest.chars().all(|c| c.is_ascii_digit()))
+        {
+            if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                for line in content.lines() {
+                    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                        continue;
+                    };
+                    if v["d"] == "in" {
+                        lines.push(v["l"].as_str().unwrap_or_default().to_string());
+                    }
+                }
+            }
+        }
+    }
+    lines
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_terminal() {
     let mock = Mock::start();
@@ -205,4 +229,247 @@ async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_
     ] {
         unsafe { std::env::remove_var(k) };
     }
+}
+
+/// The headless pane carries the seam's full control surface (docs/21 Phase 5b-2): the
+/// abilities frame declares what the pane draws, and each declared word reaches the `claude -p`
+/// child — the interrupt, the context reads, the completions, the queue and the files.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_headless_pane_carries_the_seams_full_control_surface() {
+    let mock = Mock::start();
+    let keep = tempfile::tempdir().expect("a throwaway CLAUDE_CONFIG_DIR");
+    let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
+    for (k, v) in [
+        ("KAMPR_TEST", "1"),
+        ("KAMPR_KEEP_LAUNCH", "detached"),
+        ("ANTHROPIC_BASE_URL", mock.url().as_str()),
+        ("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"),
+        (
+            "KAMPR_KEEP_EXE",
+            kampr_testkit::keeper().display().to_string().as_str(),
+        ),
+        (
+            "KAMPR_KEEP_ROOT",
+            keep_root.path().display().to_string().as_str(),
+        ),
+    ] {
+        unsafe { std::env::set_var(k, v) };
+    }
+    // Under the api policy the key the mock expects may cross to the child; under the plan
+    // default it is scrubbed and the binary has nothing to start with.
+    let _h = Harness::start_with("headless-controls", |config| {
+        config.claude.binary = CLAUDE.into();
+        config.claude.config_dir = keep.path().display().to_string();
+        config.claude.mode = "default".into();
+        config.claude.billing = kampr_claude::config::Billing::Api;
+    })
+    .await;
+
+    let source = _h
+        .node
+        .sessions
+        .claude_source()
+        .expect("the node's headless Claude source");
+    let session_id = source
+        .create(NewSession {
+            cwd: Some(keep.path().to_path_buf()),
+            prompt: None,
+        })
+        .await
+        .expect("the headless session to start");
+    let pane = format!("{}/c:{session_id}", _h.node.node_id());
+    eventually("the herd lists the headless pane", || {
+        _h.node.herd().pane(&pane).is_some()
+    })
+    .await;
+
+    let token = _h.token(Role::Full).await;
+    let socket = _h.connect(&token).await;
+    let mut client = Client::over(socket, token);
+
+    client
+        .send(json!({ "t": "watch", "pane": pane, "conversation": true }))
+        .await;
+    let abilities = client
+        .until("the conversation to open", |c| {
+            c.others
+                .iter()
+                .find(|m| m["t"].as_str() == Some("convo.abilities"))
+                .cloned()
+        })
+        .await;
+    // What the pane draws is what the source declared: the stop control, the completions, the
+    // queue words and the context bar.
+    let declared = &abilities["abilities"];
+    for word in ["interrupt"] {
+        assert!(
+            declared["steer"].as_array().is_some_and(|s| s.iter().any(|w| w == word)),
+            "steer declares {word}: {declared}"
+        );
+    }
+    for word in ["slash", "mention", "queuenext", "sendnow", "unqueue", "files", "images"] {
+        assert!(
+            declared["input"]
+                .as_array()
+                .is_some_and(|s| s.iter().any(|w| w == word)),
+            "input declares {word}: {declared}"
+        );
+    }
+    assert!(
+        declared["facts"]
+            .as_array()
+            .is_some_and(|s| s.iter().any(|w| w == "context")),
+        "facts declare context: {declared}"
+    );
+
+    // Completion: the slash catalog the session listed, and the binary's own file list. The
+// catalog arrives with the session's init, so the actions frame is what makes the query answerable.
+    client
+        .until("the session to list its commands", |c| {
+            c.others
+                .iter()
+                .find(|m| m["t"].as_str() == Some("convo.actions"))
+                .cloned()
+        })
+        .await;
+    client
+        .send(json!({ "t": "convo.suggest", "pane": pane, "kind": "commands", "query": "" }))
+        .await;
+    let commands = client
+        .until("the command suggestions to arrive", |c| {
+            c.others
+                .iter()
+                .find(|m| m["t"].as_str() == Some("convo.suggested") && m["kind"] == "commands")
+                .cloned()
+        })
+        .await;
+    assert!(
+        commands["items"].as_array().is_some_and(|i| !i.is_empty()),
+        "the pane is given the session's slash commands: {commands}"
+    );
+    client
+        .send(json!({ "t": "convo.suggest", "pane": pane, "kind": "files", "query": "mock" }))
+        .await;
+    client
+        .until("the file suggestions to arrive", |c| {
+            c.others
+                .iter()
+                .find(|m| m["t"].as_str() == Some("convo.suggested") && m["kind"] == "files")
+                .cloned()
+        })
+        .await;
+
+    // Interrupt: the stop control is the binary's own `interrupt` control request.
+    client
+        .send(json!({ "t": "convo.steer", "pane": pane, "steer": "interrupt" }))
+        .await;
+    eventually("the interrupt to reach the child", || {
+        pipe_writes(keep_root.path(), &session_id)
+            .iter()
+            .any(|l| l.contains("\"interrupt\"") && l.contains("control_request"))
+    })
+    .await;
+    client.pump(Duration::from_millis(500)).await;
+    assert!(
+        errors(&client).is_empty(),
+        "the interrupt came back as a refusal: {:?}",
+        errors(&client)
+    );
+
+    // A turn: the composer send, and the context read that follows the turn's result.
+    client
+        .send(json!({ "t": "input", "pane": pane, "text": "say hello" }))
+        .await;
+    client
+        .until("the context read after the turn to arrive", |c| {
+            c.others
+                .iter()
+                .find(|m| m["t"].as_str() == Some("convo.context"))
+                .cloned()
+        })
+        .await;
+
+    // Queue and unqueue: the when the composer chose rides on the user line, and the unqueue is
+    // the binary's own cancel.
+    client
+        .send(json!({
+            "t": "input", "pane": pane, "text": "queued", "id": "m-queue", "when": "next"
+        }))
+        .await;
+    eventually("the queued line to reach the child", || {
+        pipe_writes(keep_root.path(), &session_id)
+            .iter()
+            .any(|l| l.contains("\"m-queue\"") && l.contains("\"next\""))
+    })
+    .await;
+    client
+        .send(json!({ "t": "input.unqueue", "pane": pane, "id": "m-queue" }))
+        .await;
+    eventually("the cancel to reach the child", || {
+        pipe_writes(keep_root.path(), &session_id)
+            .iter()
+            .any(|l| l.contains("cancel_async_message") && l.contains("m-queue"))
+    })
+    .await;
+    client.pump(Duration::from_millis(500)).await;
+    assert!(
+        errors(&client).is_empty(),
+        "the queue words came back as refusals: {:?}",
+        errors(&client)
+    );
+
+    // Files: a paste the composer held is a file the agent reads by its @-ref.
+    let body = base64_encode(b"the notes");
+    client
+        .send(json!({
+            "t": "paste", "pane": pane, "b64": body, "name": "notes.txt", "typed": false
+        }))
+        .await;
+    let pasted = client
+        .until("the paste to land", |c| {
+            c.others
+                .iter()
+                .find(|m| m["t"].as_str() == Some("pasted"))
+                .cloned()
+        })
+        .await;
+    let path = pasted["path"].as_str().expect("the paste's path").to_string();
+    client
+        .send(json!({ "t": "input", "pane": pane, "text": path }))
+        .await;
+    eventually("the file's @-ref to reach the child", || {
+        pipe_writes(keep_root.path(), &session_id)
+            .iter()
+            .any(|l| l.contains(&format!("@{path}")))
+    })
+    .await;
+    client.pump(Duration::from_millis(500)).await;
+    assert!(
+        errors(&client).is_empty(),
+        "the file came back as a refusal: {:?}",
+        errors(&client)
+    );
+
+    // Close the socket, then end the conversation: the keeper kills the `claude -p` process, so
+    // the node's teardown does not wait on a conversation task that is still reading the pipe-log.
+    drop(client);
+    let _ = source
+        .end(&format!("c:{session_id}"), kampr_core::conversation::Ending::End)
+        .await;
+
+    for k in [
+        "KAMPR_TEST",
+        "KAMPR_KEEP_LAUNCH",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "KAMPR_KEEP_EXE",
+        "KAMPR_KEEP_ROOT",
+    ] {
+        unsafe { std::env::remove_var(k) };
+    }
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
 }

@@ -7,7 +7,9 @@ use kampr_core::conversation::abilities::{
 };
 use kampr_core::conversation::control::{Action, Control, ControlKind};
 use kampr_core::conversation::facts::{Cost, Fix, Limits, RunState, SessionFacts, Task, TaskState, Trouble};
-use kampr_core::conversation::{Ask, AskOption, Command, Conversation, Emit, Live, LiveTool, Reply, Update};
+use kampr_core::conversation::{
+    Ask, AskOption, Command, Conversation, Emit, Live, LiveTool, Reply, SuggestKind, Update, When,
+};
 use kampr_journal::Journal;
 use kampr_keep::{PipeDir, PipeRead, SeqReader, SessionDir, write};
 use tokio::sync::mpsc;
@@ -54,6 +56,7 @@ impl ClaudeConversation {
         abilities.input.insert(InputAbility::Images);
         abilities.input.insert(InputAbility::Files);
         abilities.input.insert(InputAbility::Slash);
+        abilities.input.insert(InputAbility::Mention);
         abilities.input.insert(InputAbility::QueueNext);
         abilities.input.insert(InputAbility::SendNow);
         abilities.input.insert(InputAbility::Unqueue);
@@ -149,6 +152,10 @@ struct Inner {
     tasks: HashMap<String, Task>,
     followed: HashSet<String>,
     pending_ask: Option<String>,
+    /// The id of the `get_context_usage` in flight, if one is.
+    context_request: Option<String>,
+    /// The id and query of the `file_suggestions` in flight, if one is.
+    suggest_request: Option<(String, String)>,
     requests: u64,
     holding: bool,
 }
@@ -164,6 +171,8 @@ impl Inner {
             tasks: HashMap::new(),
             followed: HashSet::new(),
             pending_ask: None,
+            context_request: None,
+            suggest_request: None,
             requests: 0,
             holding: false,
         }
@@ -280,17 +289,18 @@ impl Conversation for ClaudeConversation {
             }
         });
 
+        let mut write_line = |line: &str| write(&session, line);
         loop {
             tokio::select! {
                 line = line_rx.recv() => {
                     let Some(line) = line else { break; };
-                    if !process_line(&line, &mut inner, &session, &mut emit, &config, policy, overage_policy, unattended_cap, &session_id) {
+                    if !process_line(&line, &mut inner, &mut write_line, &mut emit, &config, policy, overage_policy, unattended_cap, &session_id) {
                         break;
                     }
                 }
                 command = commands.recv() => {
                     let Some(command) = command else { continue; };
-                    dispatch_command(command, &mut inner, &session, &mut emit, policy);
+                    dispatch_command(command, &mut inner, &mut write_line, &mut emit, policy);
                 }
             }
         }
@@ -304,12 +314,12 @@ impl Conversation for ClaudeConversation {
 
 /// One line of the child's stdout, mapped to seam `Update`s with the per-turn guards applied.
 /// Returns `false` when a guard has ended the session.
-// too_many_arguments: session and config are reserved for guard wiring; a params struct would hide what the line handler reads
+// too_many_arguments: write_line and config are reserved for guard wiring; a params struct would hide what the line handler reads
 #[allow(clippy::too_many_arguments)]
 fn process_line(
     line: &str,
     inner: &mut Inner,
-    _session: &SessionDir,
+    write_line: &mut dyn FnMut(&str) -> std::io::Result<()>,
     emit: &mut Emit,
     _config: &Config,
     policy: Policy,
@@ -388,6 +398,8 @@ fn process_line(
                     ))),
                 );
             }
+            // The turn changed what the window holds: the pane's bar follows it.
+            fetch_context(inner, write_line);
             push(emit, Update::State(RunState::Idle))
         }
         Line::RateLimit(limit) => {
@@ -515,11 +527,110 @@ fn process_line(
                 ) {
                     return false;
                 }
+                // The session is open: the pane's context bar starts from a read, not a guess.
+                fetch_context(inner, write_line);
+                true
+            } else if inner
+                .context_request
+                .as_deref()
+                .is_some_and(|id| id == response.request_id)
+            {
+                inner.context_request = None;
+                if response.ok
+                    && let Some(ctx) = context_use(&response.body)
+                    && !push(emit, Update::Context(ctx))
+                {
+                    return false;
+                }
+                true
+            } else if inner
+                .suggest_request
+                .as_ref()
+                .is_some_and(|(id, _)| id == &response.request_id)
+            {
+                let (_, query) = inner.suggest_request.take().expect("just matched");
+                if response.ok
+                    && !push(
+                        emit,
+                        Update::Suggested {
+                            kind: SuggestKind::Files,
+                            query,
+                            items: file_suggestions(&response.body),
+                        },
+                    )
+                {
+                    return false;
+                }
+                true
+            } else {
+                true
             }
-            true
         }
         Line::User(_) | Line::ThinkingTokens { .. } | Line::Other => true,
     }
+}
+
+/// A context read in flight: the pane's bar is what it answers with.
+fn fetch_context(inner: &mut Inner, write_line: &mut dyn FnMut(&str) -> std::io::Result<()>) {
+    let id = inner.next_request();
+    inner.context_request = Some(id.clone());
+    let _ = write_line(&wire::control_request(&id, "get_context_usage", serde_json::json!({})));
+}
+
+/// The `get_context_usage` answer, in the shape the binary sends it: `totalTokens` against
+/// `maxTokens`, or the older binary's `context_breakdown` (probe #668).
+fn context_use(body: &serde_json::Value) -> Option<kampr_core::conversation::ContextUse> {
+    let breakdown = body.get("context_breakdown");
+    let total = body
+        .get("maxTokens")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| breakdown.and_then(|b| b.get("max_tokens")).and_then(serde_json::Value::as_u64))?;
+    let used = body
+        .get("totalTokens")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            breakdown.and_then(|b| {
+                b.as_object().map(|fields| {
+                    fields.iter().fold(0u64, |sum, (key, value)| {
+                        sum + value
+                            .as_u64()
+                            .filter(|_| key.ends_with("tokens") && key != "max_tokens")
+                            .unwrap_or(0)
+                    })
+                })
+            })
+        })?;
+    Some(kampr_core::conversation::ContextUse { used, total })
+}
+
+/// The `file_suggestions` answer: the binary's own file list for the pane's @-completion.
+fn file_suggestions(body: &serde_json::Value) -> Vec<kampr_core::conversation::Suggestion> {
+    let items = body
+        .get("suggestions")
+        .or_else(|| body.get("results"))
+        .and_then(serde_json::Value::as_array);
+    items
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let label = item
+                        .as_str()
+                        .or_else(|| item.get("path").and_then(serde_json::Value::as_str))
+                        .or_else(|| item.get("name").and_then(serde_json::Value::as_str))?
+                        .to_string();
+                    Some(kampr_core::conversation::Suggestion {
+                        id: label.clone(),
+                        label,
+                        detail: item
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn assistant_updates(a: Assistant, emit: &mut Emit) -> bool {
@@ -602,12 +713,18 @@ fn stream_event_updates(e: StreamEvent, emit: &mut Emit) -> bool {
 fn dispatch_command(
     command: Command,
     inner: &mut Inner,
-    session: &SessionDir,
+    write_line: &mut dyn FnMut(&str) -> std::io::Result<()>,
     emit: &mut Emit,
     policy: Policy,
 ) {
     match command {
-        Command::Input { text, images, .. } => {
+        Command::Input {
+            text,
+            msg_id,
+            images,
+            files,
+            when,
+        } => {
             // No word is sent until guard 3 has allowed the account.
             if inner.preflight != Preflight::Allowed {
                 return;
@@ -619,7 +736,24 @@ fn dispatch_command(
                     data: i.data,
                 })
                 .collect();
-            let _ = write(session, &wire::user_message(&text, &images));
+            // What the composer held is @-refs the agent reads; the pane's queue word rides on
+            // the line the binary queues.
+            let text = if files.is_empty() {
+                text
+            } else {
+                let refs = files
+                    .iter()
+                    .map(|f| format!("@{}", f.path.display()))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{text} {refs}").trim().to_string()
+            };
+            let priority = match when {
+                When::Now => Some("now"),
+                When::Next => Some("next"),
+                When::Idle => None,
+            };
+            let _ = write_line(&wire::user_message(&text, &images, Some(&msg_id), priority));
         }
         Command::Answer { reply, .. } => {
             let Some(id) = inner.pending_ask.take() else {
@@ -630,7 +764,7 @@ fn dispatch_command(
                 Reply::Deny { .. } => ("deny", serde_json::Value::Null),
                 _ => ("deny", serde_json::Value::Null),
             };
-            let _ = write(session, &wire::control_response(&id, behavior, input));
+            let _ = write_line(&wire::control_response(&id, behavior, input));
             push(emit, Update::Asks(Vec::new()));
         }
         Command::Set { control, value } => {
@@ -644,17 +778,16 @@ fn dispatch_command(
                 ),
                 _ => return,
             };
-            let _ = write(session, &wire::control_request(&id, subtype, body));
+            let _ = write_line(&wire::control_request(&id, subtype, body));
         }
         Command::Act { action, args } => {
             let id = inner.next_request();
-            let _ = write(session, &wire::control_request(&id, &action, args));
+            let _ = write_line(&wire::control_request(&id, &action, args));
         }
         Command::Task { id, from } => {
             inner.followed.insert(id.clone());
             let rid = inner.next_request();
-            let _ = write(
-                session,
+            let _ = write_line(
                 &wire::control_request(
                     &rid,
                     "get_task_output",
@@ -667,16 +800,72 @@ fn dispatch_command(
         }
         Command::Steer(kind, text) => match kind {
             Steer::Interrupt => {
-                // A turn in flight is interrupted by closing its tool; the seam has no finer word.
-                push(emit, Update::State(RunState::Idle));
+                // The binary's own interrupt: it aborts the turn in flight, and the turn's
+                // result line is what reports the state back.
+                let id = inner.next_request();
+                let _ = write_line(&wire::control_request(&id, "interrupt", serde_json::json!({})));
             }
             Steer::Continue if inner.preflight == Preflight::Allowed => {
-                let _ = write(session, &wire::user_message(text.as_deref().unwrap_or(""), &[]));
+                let _ = write_line(&wire::user_message(
+                    text.as_deref().unwrap_or(""),
+                    &[],
+                    None,
+                    None,
+                ));
             }
             _ => {}
         },
+        Command::Unqueue { msg_id } => {
+            let id = inner.next_request();
+            let _ = write_line(&wire::control_request(
+                &id,
+                "cancel_async_message",
+                serde_json::json!({ "message_uuid": msg_id }),
+            ));
+        }
+        Command::Suggest { kind, query } => match kind {
+            SuggestKind::Commands => {
+                // The catalog the session listed at open: completion the pane can do itself.
+                let items = inner
+                    .init
+                    .as_ref()
+                    .map(|init| {
+                        init.slash_commands
+                            .iter()
+                            .filter(|c| {
+                                query.is_empty() || c.name.to_ascii_lowercase().contains(&query.to_ascii_lowercase())
+                            })
+                            .map(|c| kampr_core::conversation::Suggestion {
+                                id: c.name.clone(),
+                                label: c.name.clone(),
+                                detail: c.description.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                push(
+                    emit,
+                    Update::Suggested {
+                        kind: SuggestKind::Commands,
+                        query,
+                        items,
+                    },
+                );
+            }
+            SuggestKind::Files => {
+                let id = inner.next_request();
+                let _ = write_line(&wire::control_request(
+                    &id,
+                    "file_suggestions",
+                    serde_json::json!({ "query": query }),
+                ));
+                inner.suggest_request = Some((id, query));
+            }
+        },
+        Command::Refresh(Fact::Context) => fetch_context(inner, write_line),
+        Command::Refresh(_) => {},
         Command::Older { before } => {
-            if let Some(page) = inner_transcript_page(session, before) {
+            if let Some(page) = inner_transcript_page(before) {
                 push(emit, Update::Older(page));
             }
         }
@@ -696,7 +885,7 @@ fn history_page(path: &Path) -> Option<kampr_journal::Page> {
     Some(journal.page_before(None, 200))
 }
 
-fn inner_transcript_page(_session: &SessionDir, _before: Option<String>) -> Option<kampr_journal::Page> {
+fn inner_transcript_page(_before: Option<String>) -> Option<kampr_journal::Page> {
     None
 }
 
@@ -845,33 +1034,81 @@ fn api_trouble(error: &Option<String>, terminal_reason: Option<&str>) -> Trouble
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kampr_core::conversation::{FileRef, Suggestion, SuggestKind, When};
 
-    /// Feed lines straight through the seam's line processor and collect the `Update`s it speaks.
-    fn speak(lines: &[&str], policy: Policy, overage: Overage, cap: u32) -> Vec<Update> {
+    /// The seam's events in order: lines from the child, commands from the pane.
+    enum Event<'a> {
+        Line(&'a str),
+        Command(Command),
+    }
+
+    fn script(
+        events: &[Event<'_>],
+        policy: Policy,
+        overage: Overage,
+        cap: u32,
+    ) -> (Vec<String>, Vec<Update>) {
         let mut inner = Inner::new();
+        // The run loop spends `k1` on `initialize` before the first line; the harness mirrors
+        // it, so the ids the tests see are the ids the pane sees.
+        let _ = inner.next_request();
         let updates = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let session = SessionDir::at("/tmp");
+        let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let keep = updates.clone();
+        let keep_lines = written.clone();
         let mut emit: Emit = Box::new(move |update: Update| {
             keep.lock().unwrap().push(update);
             true
         });
-        for line in lines {
-            if !process_line(
-                line,
-                &mut inner,
-                &session,
-                &mut emit,
-                &Config::default(),
-                policy,
-                overage,
-                cap,
-                "s1",
-            ) {
-                break;
+        let mut write_line = |line: &str| {
+            keep_lines.lock().unwrap().push(line.to_string());
+            Ok(())
+        };
+        for event in events {
+            match event {
+                Event::Line(line) => {
+                    if !process_line(
+                        line,
+                        &mut inner,
+                        &mut write_line,
+                        &mut emit,
+                        &Config::default(),
+                        policy,
+                        overage,
+                        cap,
+                        "s1",
+                    ) {
+                        break;
+                    }
+                }
+                Event::Command(command) => {
+                    dispatch_command(command.clone(), &mut inner, &mut write_line, &mut emit, policy)
+                }
             }
         }
-        updates.lock().unwrap().clone()
+        (written.lock().unwrap().clone(), updates.lock().unwrap().clone())
+    }
+
+    /// Feed lines straight through the seam's line processor and collect the `Update`s it speaks
+    /// and the stdin lines it writes.
+    fn speak(
+        lines: &[&str],
+        policy: Policy,
+        overage: Overage,
+        cap: u32,
+    ) -> (Vec<String>, Vec<Update>) {
+        script(
+            &lines.iter().map(|l| Event::Line(*l)).collect::<Vec<_>>(),
+            policy,
+            overage,
+            cap,
+        )
+    }
+
+    /// Dispatch a command straight through the seam's command dispatcher and collect the stdin
+    /// lines it writes and the `Update`s it speaks.
+    fn dispatch(command: Command, policy: Policy) -> (Vec<String>, Vec<Update>) {
+        script(&[Event::Command(command)], policy, Overage::Refuse, 20)
     }
 
     fn billing_trouble(updates: &[Update]) -> Option<&String> {
@@ -887,11 +1124,11 @@ mod tests {
     // guard 4: a plan turn whose system/init names a key source is interrupted and ends.
     #[test]
     fn guard4_a_plan_turn_with_a_key_source_ends_the_session() {
-        let updates = speak(&[INIT_KEY], Policy::Plan, Overage::Refuse, 20);
+        let (_, updates) = speak(&[INIT_KEY], Policy::Plan, Overage::Refuse, 20);
         let trouble = billing_trouble(&updates).expect("a billing trouble");
         assert!(trouble.contains("key in the environment"), "{trouble}");
         // under api billing the same turn is allowed.
-        let ok = speak(&[INIT_KEY], Policy::Api, Overage::Refuse, 20);
+        let (_, ok) = speak(&[INIT_KEY], Policy::Api, Overage::Refuse, 20);
         assert!(billing_trouble(&ok).is_none(), "{ok:?}");
     }
 
@@ -899,12 +1136,12 @@ mod tests {
     #[test]
     fn guard3_an_initialize_that_names_a_key_refuses_under_plan() {
         let init = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k1","response":{"account":{"apiKeySource":"ANTHROPIC_API_KEY","tokenSource":"claude.ai"}}}}"#;
-        let updates = speak(&[init], Policy::Plan, Overage::Refuse, 20);
+        let (_, updates) = speak(&[init], Policy::Plan, Overage::Refuse, 20);
         let trouble = billing_trouble(&updates).expect("a billing trouble");
         assert!(trouble.contains("key in the environment"), "{trouble}");
 
         let plan = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k1","response":{"account":{"subscriptionType":"Claude Max"}}}}"#;
-        let allowed = speak(&[plan], Policy::Plan, Overage::Refuse, 20);
+        let (_, allowed) = speak(&[plan], Policy::Plan, Overage::Refuse, 20);
         assert!(billing_trouble(&allowed).is_none(), "{allowed:?}");
         assert!(allowed.iter().any(|u| matches!(u, Update::Session(_))));
     }
@@ -913,10 +1150,10 @@ mod tests {
     #[test]
     fn guard6_an_overage_is_refused_by_default() {
         let overage = r#"{"type":"rate_limit_event","rate_limit_event":{"is_using_overage":true,"overage_status":"active"}}"#;
-        let refused = speak(&[overage], Policy::Plan, Overage::Refuse, 20);
+        let (_, refused) = speak(&[overage], Policy::Plan, Overage::Refuse, 20);
         assert!(billing_trouble(&refused).is_some(), "{refused:?}");
 
-        let asked = speak(&[overage], Policy::Plan, Overage::Ask, 20);
+        let (_, asked) = speak(&[overage], Policy::Plan, Overage::Ask, 20);
         assert!(
             billing_trouble(&asked).is_none(),
             "ask holds, it does not refuse: {asked:?}"
@@ -928,7 +1165,7 @@ mod tests {
             "{asked:?}"
         );
 
-        let allowed = speak(&[overage], Policy::Plan, Overage::Allow, 20);
+        let (_, allowed) = speak(&[overage], Policy::Plan, Overage::Allow, 20);
         assert!(billing_trouble(&allowed).is_none(), "{allowed:?}");
     }
 
@@ -940,11 +1177,11 @@ mod tests {
             r#"{"type":"result","subtype":"success","is_error":false,"origin":"user","total_cost_usd":0.01}"#;
         // one more self-started turn than the cap.
         let lines = vec![task, task, task];
-        let updates = speak(&lines, Policy::Plan, Overage::Refuse, 2);
+        let (_, updates) = speak(&lines, Policy::Plan, Overage::Refuse, 2);
         let trouble = billing_trouble(&updates).expect("the cap trouble");
         assert!(trouble.contains("self-started"), "{trouble}");
         // an operator prompt resets the count, so the same cap is not hit.
-        let mixed = speak(&[task, user, task], Policy::Plan, Overage::Refuse, 2);
+        let (_, mixed) = speak(&[task, user, task], Policy::Plan, Overage::Refuse, 2);
         assert!(billing_trouble(&mixed).is_none(), "{mixed:?}");
     }
 
@@ -952,7 +1189,7 @@ mod tests {
     #[test]
     fn guard9_the_billing_is_on_the_screen() {
         let plan_account = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k1","response":{"account":{"subscriptionType":"Claude Max"}}}}"#;
-        let plan = speak(&[INIT_PLAN, plan_account], Policy::Plan, Overage::Refuse, 20);
+        let (_, plan) = speak(&[INIT_PLAN, plan_account], Policy::Plan, Overage::Refuse, 20);
         let session = plan
             .iter()
             .rev()
@@ -965,7 +1202,7 @@ mod tests {
         assert!(session.billing.key.is_none());
 
         let key_account = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k1","response":{"account":{"apiKeySource":"ANTHROPIC_API_KEY","tokenSource":"claude.ai"}}}}"#;
-        let key = speak(&[INIT_KEY, key_account], Policy::Any, Overage::Refuse, 20);
+        let (_, key) = speak(&[INIT_KEY, key_account], Policy::Any, Overage::Refuse, 20);
         let session = key
             .iter()
             .rev()
@@ -980,7 +1217,7 @@ mod tests {
     // guard 8: a money-costing control (fast mode) carries a confirmation.
     #[test]
     fn guard8_a_money_control_carries_a_confirmation() {
-        let updates = speak(&[INIT_PLAN], Policy::Plan, Overage::Refuse, 20);
+        let (_, updates) = speak(&[INIT_PLAN], Policy::Plan, Overage::Refuse, 20);
         let controls = updates
             .iter()
             .find_map(|u| match u {
@@ -1006,7 +1243,7 @@ mod tests {
         let assistant =
             r#"{"type":"assistant","message":{"model":"sonnet","content":[{"type":"text","text":"hello"}]}}"#;
         let result = r#"{"type":"result","subtype":"success","is_error":false,"origin":"user","total_cost_usd":0.012,"usage":{"input_tokens":10,"output_tokens":5}}"#;
-        let updates = speak(&[assistant, result], Policy::Any, Overage::Refuse, 20);
+        let (_, updates) = speak(&[assistant, result], Policy::Any, Overage::Refuse, 20);
         assert!(
             updates
                 .iter()
@@ -1025,11 +1262,251 @@ mod tests {
         );
     }
 
+    // The pane's interrupt is the binary's own `interrupt` control request: it is the word the
+    // child understands, and the turn's result line is what reports the state back.
+    #[test]
+    fn an_interrupt_steer_sends_the_interrupt_control_request() {
+        let (written, updates) = dispatch(Command::Steer(Steer::Interrupt, None), Policy::Any);
+        let line = written
+            .iter()
+            .find(|l| l.contains("control_request"))
+            .expect("an interrupt control request is written to the child");
+        let v: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
+        assert_eq!(v["request"]["subtype"], "interrupt", "{line}");
+        assert!(
+            !updates.iter().any(|u| matches!(u, Update::State(_))),
+            "the state comes from the turn's own result line, not a local flip: {updates:?}"
+        );
+    }
+
+    const INIT_ALLOWED: &str = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k1","response":{"account":{"subscriptionType":"Claude Max"}}}}"#;
+    const TURN_RESULT: &str = r#"{"type":"result","subtype":"success","is_error":false,"result":"hi","total_cost_usd":0.01,"usage":{"input_tokens":10,"output_tokens":5}}"#;
+
+    fn input(text: &str, when: When) -> Command {
+        Command::Input {
+            text: text.into(),
+            msg_id: "m1".into(),
+            images: Vec::new(),
+            files: Vec::new(),
+            when,
+        }
+    }
+
+    // Context usage is a zero-cost read: the pane is told it at open, and after every turn.
+    #[test]
+    fn the_context_usage_is_read_at_open_and_after_a_turn() {
+        let (written, _) = script(
+            &[Event::Line(INIT_ALLOWED), Event::Line(TURN_RESULT)],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let asks = written.iter().filter(|l| l.contains("get_context_usage")).count();
+        assert_eq!(asks, 2, "one at open, one after the turn: {written:?}");
+    }
+
+    #[test]
+    fn a_context_answer_reaches_the_pane() {
+        let answer = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k2","response":{"totalTokens":17172,"maxTokens":1000000}}}"#;
+        let (_, updates) = script(
+            &[Event::Line(INIT_ALLOWED), Event::Line(answer)],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let ctx = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Context(c) => Some(*c),
+                _ => None,
+            })
+            .expect("the pane is told the context use");
+        assert_eq!((ctx.used, ctx.total), (17172, 1000000));
+    }
+
+    // The pre-2.1.326 binary answers `get_context_usage` with a `context_breakdown`
+    // (probe #668); the pane is told the same use from it.
+    #[test]
+    fn a_context_answer_in_the_breakdown_shape_reaches_the_pane() {
+        let answer = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k2","response":{"context_breakdown":{"input_tokens":10,"output_tokens":5,"max_tokens":200000}}}}"#;
+        let (_, updates) = script(
+            &[Event::Line(INIT_ALLOWED), Event::Line(answer)],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let ctx = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Context(c) => Some(*c),
+                _ => None,
+            })
+            .expect("the pane is told the context use");
+        assert_eq!((ctx.used, ctx.total), (15, 200000));
+    }
+
+    #[test]
+    fn a_context_refresh_reads_again() {
+        let (written, _) = script(
+            &[
+                Event::Line(INIT_ALLOWED),
+                Event::Command(Command::Refresh(Fact::Context)),
+            ],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let asks = written.iter().filter(|l| l.contains("get_context_usage")).count();
+        assert_eq!(asks, 2, "the refresh is a new read: {written:?}");
+    }
+
+    // Slash completion is local: the catalog the session listed at open.
+    #[test]
+    fn a_commands_suggest_completes_from_the_init_catalog() {
+        let init = r#"{"type":"system","subtype":"init","session_id":"s1","apiKeySource":"none","slash_commands":[{"name":"/model","description":"pick a model"},{"name":"/compact","description":"shrink the context"}]}"#;
+        let (_, updates) = script(
+            &[
+                Event::Line(init),
+                Event::Command(Command::Suggest {
+                    kind: SuggestKind::Commands,
+                    query: "co".into(),
+                }),
+            ],
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        let items = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Suggested { items, .. } => Some(items),
+                _ => None,
+            })
+            .expect("the pane is given the suggestions");
+        assert_eq!(
+            items,
+            &[Suggestion {
+                id: "/compact".into(),
+                label: "/compact".into(),
+                detail: Some("shrink the context".into()),
+            }]
+        );
+    }
+
+    // File completion is the binary's: a zero-cost control request, its answer the pane's list.
+    #[test]
+    fn a_files_suggest_asks_the_binary_and_its_answer_reaches_the_pane() {
+        let answer = r#"{"type":"control_response","response":{"subtype":"success","request_id":"k2","response":{"suggestions":[{"path":"mock.py","name":"mock.py"}]}}}"#;
+        let (written, updates) = script(
+            &[
+                Event::Command(Command::Suggest {
+                    kind: SuggestKind::Files,
+                    query: "mock".into(),
+                }),
+                Event::Line(answer),
+            ],
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        let line = written
+            .iter()
+            .find(|l| l.contains("file_suggestions"))
+            .expect("a file_suggestions request is written to the child");
+        let v: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
+        assert_eq!(v["request"]["query"], "mock", "{line}");
+        let items = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Suggested { items, .. } => Some(items),
+                _ => None,
+            })
+            .expect("the pane is given the suggestions");
+        assert_eq!(items.first().map(|i| i.label.as_str()), Some("mock.py"));
+    }
+
+    // Queueing: the when the pane chose rides on the user line, and unqueue is the binary's
+    // own cancel.
+    #[test]
+    fn a_send_now_marks_the_user_line_now() {
+        let (written, _) = script(
+            &[Event::Line(INIT_ALLOWED), Event::Command(input("go", When::Now))],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        assert_eq!(v["priority"], "now", "{v}");
+        assert_eq!(v["uuid"], "m1", "{v}");
+    }
+
+    #[test]
+    fn a_queued_input_is_next_and_an_idle_one_is_plain() {
+        let (written, _) = script(
+            &[Event::Line(INIT_ALLOWED), Event::Command(input("go", When::Next))],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        assert_eq!(v["priority"], "next", "{v}");
+
+        let (written, _) = script(
+            &[Event::Line(INIT_ALLOWED), Event::Command(input("go", When::Idle))],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        assert!(v.get("priority").is_none(), "{v}");
+    }
+
+    #[test]
+    fn an_unqueue_cancels_the_queued_message() {
+        let (written, _) = script(
+            &[Event::Command(Command::Unqueue { msg_id: "m9".into() })],
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&written[0]).expect("a control request: {written:?}");
+        assert_eq!(v["request"]["subtype"], "cancel_async_message", "{v}");
+        assert_eq!(v["request"]["message_uuid"], "m9", "{v}");
+    }
+
+    // Files: what the composer held becomes @-refs the agent can read.
+    #[test]
+    fn input_files_become_at_refs_in_the_prompt() {
+        let command = Command::Input {
+            text: "read this".into(),
+            msg_id: "m1".into(),
+            images: Vec::new(),
+            files: vec![FileRef {
+                path: "/tmp/a.txt".into(),
+            }],
+            when: When::Idle,
+        };
+        let (written, _) = script(
+            &[Event::Line(INIT_ALLOWED), Event::Command(command)],
+            Policy::Plan,
+            Overage::Refuse,
+            20,
+        );
+        let v: serde_json::Value =
+            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        let text = v["message"]["content"].as_str().expect("a plain-text prompt");
+        assert!(text.contains("@/tmp/a.txt"), "{text}");
+    }
+
     // a failing turn's result says success; the assistant's own error is what the pane is told.
     #[test]
     fn a_failing_turn_is_a_trouble_not_an_answer() {
         let failed = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"error":"API Error: 401 authentication_error"}"#;
-        let updates = speak(&[failed], Policy::Any, Overage::Refuse, 20);
+        let (_, updates) = speak(&[failed], Policy::Any, Overage::Refuse, 20);
         assert!(
             updates
                 .iter()

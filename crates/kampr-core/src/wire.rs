@@ -1088,6 +1088,24 @@ pub enum ClientMsg {
         /// each one's composer text apart until its own carriage return (docs/18).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         from: Option<String>,
+        /// The message's own id, minted by the client that sends it: a conversation pane queues
+        /// under it and an `input.unqueue` names it. Absent is a client that mints none, and the
+        /// node mints one, which that client cannot name.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        /// The queue word the pane's composer chose: `now` preempts the turn in flight, `next`
+        /// waits behind it. Absent is the word the composer has never drawn, and the message goes
+        /// when the conversation is idle.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        when: Option<String>,
+    },
+    /// Drop a queued conversation message before it goes, by the id its `input` carried. A new
+    /// `t` rather than a flag on `input`: a node that has never heard of it ignores the frame,
+    /// which leaves the queue exactly where it was.
+    #[serde(rename = "input.unqueue")]
+    InputUnqueue {
+        pane: String,
+        id: String,
     },
     /// Bytes for the pane to work on, written to a file on the pane's own node and typed in as
     /// the path to it.

@@ -589,6 +589,8 @@ fn client() -> Vec<ClientMsg> {
             typed: true,
             paste: true,
             from: Some("01J".into()),
+            id: None,
+            when: None,
         },
         ClientMsg::Paste {
             pane: pane(),

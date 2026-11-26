@@ -537,8 +537,10 @@ fn parse_control_response(v: &Value) -> ControlResponse {
 // ── the writer: our lines to the binary's stdin ──────────────────────────────
 
 /// A `user` message: the prompt, with optional images. This is a word sent, and it is what the
-/// billing guards stand in front of.
-pub fn user_message(text: &str, images: &[Image]) -> String {
+/// billing guards stand in front of. `uuid` is the word's id — the handle a
+/// `cancel_async_message` names — and `priority` is the binary's queue priority: `now` preempts
+/// the turn in flight, `next` waits behind it.
+pub fn user_message(text: &str, images: &[Image], uuid: Option<&str>, priority: Option<&str>) -> String {
     let content = if images.is_empty() {
         Value::String(text.to_string())
     } else {
@@ -553,13 +555,19 @@ pub fn user_message(text: &str, images: &[Image]) -> String {
         }
         Value::Array(blocks)
     };
-    json!({
+    let mut line = json!({
         "type": "user",
         "message": { "role": "user", "content": content },
         "parent_tool_use_id": null,
         "session_id": "",
-    })
-    .to_string()
+    });
+    if let Some(uuid) = uuid {
+        line["uuid"] = Value::String(uuid.to_string());
+    }
+    if let Some(priority) = priority {
+        line["priority"] = Value::String(priority.to_string());
+    }
+    line.to_string()
 }
 
 fn json_text(text: &str) -> Value {
