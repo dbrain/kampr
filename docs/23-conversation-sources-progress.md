@@ -203,7 +203,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 2 — the wire and the client learn the new vocabulary — **2a COMMITTED** (be4c2a9d, +1862/−74; 2089 passed; review s13 = SOUND). **2b COMMITTED** (80fe0d2a, client only; wire mirror field-for-field + pane pieces; `make check-client` green; **review s21 = SOUND** — 13 frames + 6 verbs field-for-field against Rust, `Reply`'s 6 shapes exactly reproduced, additive both ways, board-7 floor + confirm-sentence verified, floor + rich screenshots). **Phase 2 review loop CLOSED.** **Deferral:** `kampr-tui` mirror (Rust crate) not done — to do after the reviews.
 
-## Phase 3 — muffit widened (muffit repo) — IN FLIGHT (s8)
+## Phase 3 — muffit widened (muffit repo) — DONE (6 commits on conv-sources, wire 3.7→3.09 additive, `cargo test --workspace` 2016 passed; all 7 items: ask tool, live worker, shell tasks, arg-deltas+steer, command catalog, billed-to+rate-limit, prompt-events+typed-REST; item-5 completeness test pins every TUI command in the server catalog). Review s23 in flight.
 
 ## Phase 4 — a keeper for a process that speaks lines — CLOSED (b3b5411c + 278e74b5 + 36622778; kampr-keep 48/48; two reviews passed). Note for Phase 5's pipe consumer: a `Truncated { oldest_seq }` does NOT deliver the `oldest_seq` entry itself — treat it as a hard gap boundary.
 
@@ -211,7 +211,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). **Review s17: DEFECTS FOUND** (1 blocking: `tasks_tick` wrong shell-task dir; its test passed with the defect) → **fixed 7c164f14** (real dir + `bind()` `facts.bg` exclusion + test to the real path + probe row 673) → **re-reviewed s20: FIXED** (both reds measured). **Phase 6 review loop CLOSED.** Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.
 
-## Phase 7 — the pane pump behind the trait — not started
+## Phase 7 — the pane pump behind the trait — IN FLIGHT (s24): `TerminalClaude: Conversation` in `convo.rs` (the pump's journal/preview/hooks → `Update`s), other harnesses (Codex/omp/pi/agy) wrapped with a smaller ability set; key-driven steering (interrupt/mode/background) NOT declared as abilities. **Hard constraint: the wire a client sees is unchanged for every existing harness** (internal refactor through the seam; existing frames byte-compatible).
 
 ## Phase 8 — nothing left that needs the terminal — not started
 
