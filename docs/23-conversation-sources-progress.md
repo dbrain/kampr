@@ -59,12 +59,16 @@ Both prior reviews (s19 money-safety, s25 wire-unchanged) had scopes that missed
 named the remaining headless gaps: interrupt (never sends the `interrupt` control request), context
 usage (never calls `get_context_usage`), `convo.suggest` (slash/@ completion not handled),
 queue/send-now/unqueue (node ignores `when`, never sends `cancel_async_message`), files (dropped on
-dispatch), and subagent-live + search/older (not handled). **Phase 5b-1 DONE (ed3751c6):** the node's
-`input`/`answer` handlers now route a headless Claude pane's verbs to its conversation (looked up by
-the `c:` pane id the provider uses) instead of the provider's `write_pane`, which bails for a pane
-with no PTY; the node's headless `ClaudeSource` is reachable from its sessions, and the new
-`tests/it/headless.rs` integration test proves a composer send and an ask-dock answer reach the
-conversation against the mock (a send that bailed to a terminal would come back as a wire error).
+dispatch), and subagent-live + search/older (not handled). **Phase 5b-1 DONE (ed3751c6, c2bf8799, 7f531e53):** the node's `input`/`answer` handlers now route
+a headless Claude pane's verbs to its conversation (looked up by the `c:` pane id) instead of the
+provider's `write_pane`, which bails for a pane with no PTY; the node's headless `ClaudeSource` is
+reachable from its sessions, and the new `tests/it/headless.rs` integration test proves a composer
+send and an ask-dock answer reach the conversation against the mock (a send that bailed to a
+terminal would come back as a wire error). **c2bf8799** (s30) fixed the pipe-log reader that
+outlived its conversation and pinned the runtime's shutdown (the reason the test sat after passing);
+**7f531e53** fixed a regression the first cut introduced: a muffit *session* pane is also
+terminal-less, so `!terminal` alone stole the muffit session's send/answer from its REST path — the
+`c:` pane id is the discriminator. `make test-fast` green (2151 passed).
 **Next: Phase 5b-2 (source completeness: interrupt, context usage, completion, queue/send-now,
 files), 5b-3 (subagent-live + search/older), Phase 9 (Codex third source), the muffit gate, and
 screenshots.**
