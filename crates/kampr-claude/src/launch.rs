@@ -100,11 +100,12 @@ pub fn env(plan: &Plan, inherited: impl IntoIterator<Item = (String, String)>) -
     }
     // The keeper layers `spec.env` over its own environment, so a provider key the node carries
     // is removed by blanking it here, not by omitting it. Under `plan` nothing provider-shaped
-    // may cross; the mock address is the one `ANTHROPIC_` name that is kept.
+    // may cross; `ANTHROPIC_BASE_URL` is kept only while a mock address is set (under
+    // `KAMPR_TEST`), so a stray base URL does not reach a production plan child.
     if plan.policy == Policy::Plan {
         for (k, _) in inherited.into_iter() {
             if k.starts_with("ANTHROPIC_")
-                && k != "ANTHROPIC_BASE_URL"
+                && (k != "ANTHROPIC_BASE_URL" || plan.base_url.is_none())
                 || k.starts_with("AWS_")
                 || k.starts_with("GOOGLE_")
                 || k.starts_with("CLAUDE_CODE_USE_")
@@ -273,5 +274,15 @@ mod tests {
         let env = env(&plan, vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]));
         let url = env.iter().find(|(k, _)| k == "ANTHROPIC_BASE_URL").map(|(_, v)| v.as_str());
         assert_eq!(url, Some("http://127.0.0.1:18080"));
+    }
+
+    // guard 2, the production half: with no mock address a stray base URL is blanked under plan,
+    // so it does not reach a production child (the mock address is the only case that is kept).
+    #[test]
+    fn a_stray_base_url_is_blanked_under_plan_without_a_mock() {
+        let plan = plan();
+        let env = env(&plan, vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]));
+        let url = env.iter().find(|(k, _)| k == "ANTHROPIC_BASE_URL").map(|(_, v)| v.as_str());
+        assert_eq!(url, Some(""), "a production plan child must not inherit a base URL");
     }
 }
