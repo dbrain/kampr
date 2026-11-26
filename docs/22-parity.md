@@ -8,18 +8,19 @@ walks this list and turns every row still blank into a control or an action, or 
 that a terminal is needed and why. The muffit half is the work list for Phase 3.
 
 The pane pieces a row can land in are the ones in
-[docs/21, "The pane"](./21-conversation-sources.md#the-pane): header, facts line, transcript,
-activity bar, tasks sheet, ask dock, trouble banner, session sheet, composer, copy.
+[docs/21, "The pane"](./21-conversation-sources.md#the-pane): header, sticky turn, facts line,
+transcript, activity bar, tasks sheet, ask dock, trouble banner, session sheet, composer, copy,
+wide screens.
 
 ## How this was read
 
 - **Claude, no terminal** and **Claude, in a terminal**: docs/21's "What each source fills",
   docs/20's measured findings, and the probe log, cited by row.
 - **The command list**: a no-turn `initialize` request (the shape of #668) against Claude
-  2.1.326 on the plan login in this project: **63 commands**. The list is state-dependent:
+  2.1.326 on the plan login in this project: **63 commands** (#672). The list is state-dependent:
   `login`, `add-dir`, `resume`, `btw`, `permissions`, `status` and `help` are not in this
-  login's list. `login` is expected to appear when a session is logged out (docs/20); the
-  rest is undetermined. The plan estimated 68; this probe is the count that stands.
+  login's list. `login` is expected to appear when a session is logged out; the rest is
+  undetermined. The plan estimated 68; this probe is the count that stands.
 - **muffit today** and **muffit, to add**: `docs/api/kampr.md` (wire 3.3) with its gaps list,
   and [docs/18](./18-muffit.md). Phase 3 items are numbered as in docs/21.
 - **Turns are blocked** (#670: the plan login refuses every prompt with a billing error).
@@ -36,13 +37,13 @@ the pane does instead.
 | Turns, older, search | `assistant`, `user`; transcript for older and search | Transcript | `content`, `history`, REST transcript | — | Transcript, always drawn; paging `convo.load`, search `convo.find` |
 | Text as written | `text_delta` (#644) | `MessageDisplay` paragraphs (#623) | `content` every 16 ms | — | Transcript; the live turn while it runs |
 | Tool arguments as written | `input_json_delta` (#644) | No | `tool_call` `started` then `running` | Argument deltas (item 4) | Transcript tool row, the argument |
-| Thinking | `thinking_tokens`; `set_max_thinking_tokens` (#644) | Transcript | `thinking` blocks | — | Transcript |
+| Thinking | `thinking_tokens` (#644); `set_max_thinking_tokens` in the types, not probed | Transcript | `thinking` blocks | — | Transcript |
 | Tool output live | `get_task_output` polled, or the task file (#647) | The task file, deleted on end (#649) | `tool_output_chunk` | — | Live tail under a shell row (Phase 2, `TaskOutput`) |
 | Subagent conversation, live | `parent_tool_use_id` lines, prose only under `--forward-subagent-text` (#650) | `subagents/agent-<id>.jsonl`, `SubagentStart`/`Stop` (#656) | REST transcript of the child; progress lines on the parent | A child that can be watched live (item 2) | Tasks sheet: select a subagent, its conversation live (Phase 2) |
 | Tasks, with parents | `task_started`, `task_updated`, `background_tasks_changed` | Transcript fold, `Stop.background_tasks`, `PreToolUse` (#656) | `snapshot.subagents`, tasks REST | Shell tasks in the snapshot (item 3) | Activity bar and tasks sheet (Phase 2) |
 | Diffs, images, files | Tool inputs and results | Transcript | `diff`, `image` | — | Transcript |
 | Hook activity | `hook_started`, `hook_response` (#644) | No | n/a | — | Transcript (Phase 5) |
-| Compaction, notices | `compact_boundary`, `informational`, `notification` (#644) | Transcript, `PreCompact`/`PostCompact` | `notice` | — | Transcript; compaction shows in the facts line |
+| Compaction, notices | `compact_boundary` as a transcript record (#259, #312); `informational`, `notification` in the types, not probed | Transcript, `PreCompact`/`PostCompact` | `notice` | — | Transcript; compaction shows in the facts line |
 
 ## Dialogs
 
@@ -60,6 +61,7 @@ the pane does instead.
 | TUI feature | Claude, no terminal | Claude, in a terminal | muffit today | muffit, to add (Phase 3) | Where the pane draws it / why not |
 |---|---|---|---|---|---|
 | Send, images | `user` line; images: probe: blocked | Keys, paste (#619, #620) | `input` with `images` | — | Composer send (Phase 2); attach for images |
+| Send, files | `user` line; file attachments over stdin: not probed (docs/20) | — | — | — | Composer send (Phase 2); attach for files — docs/21 draws the attach control for `Files`, on its own |
 | Queue, send now, unqueue | `priority`, `cancel_async_message`; probe: blocked | Keys | `input` steers a running turn | Unqueue (item 4) | Composer: while a turn runs the button queues, a second sends now (Phase 2, `QueueNext`/`SendNow`) |
 | Interrupt | `interrupt` (#646) | Esc (#610) | `interrupt` (WS and REST) | — | Composer's Stop, drawn when `Interrupt` is declared |
 | Continue, pause, resume, stop | Stop is ending the process | Keys | `continue`, `pause`, `resume`, `stop` | — | Session sheet actions (Phase 2) |
@@ -68,14 +70,14 @@ the pane does instead.
 | Rewind | `rewind_files` (#669) | Esc Esc; the menu is offered as a question (#563) | `revert`, `rewind`, `changesets` | — | Session sheet actions (Phase 2) |
 | Fork, rename | `--fork-session`; `rename_session` (#669) | Typed | No | Both (item 4) | Session sheet actions (Phase 2); a resume of a live id is refused (#655) |
 | An aside that stays out of the history | probe: blocked | `/btw` typed | `btw` | — | Session sheet actions (Phase 2) |
-| Model: list, switch | `list_models`, `set_model` (#646, #668) | `/model` typed | `models.list`, `model.swap` | Adding a provider's model from a client (item 5) | Controls sheet, a choice row (Phase 2); the model in the facts line |
-| Effort, thinking | `set_max_thinking_tokens`, `apply_flag_settings` | Typed | `thinking.set` | — | Controls sheet (Phase 2); effort in the facts line |
-| Permission mode, rules | `set_permission_mode` (#646, #669), `list_permission_rules` (#668), `update_settings` | shift+tab | `mode.set`, `permissions.set` | — | The mode as a tappable word in the composer (Phase 2); bypass is always on offer — every launch passes `--allow-dangerously-skip-permissions` |
+| Model: list, switch | `list_models` (#668), `set_model` (#669) | `/model` typed | `models.list`, `model.swap` | Adding a provider's model from a client (item 5) | Controls sheet, a choice row (Phase 2); the model in the facts line |
+| Effort, thinking | `set_max_thinking_tokens`, `apply_flag_settings`, both in the types, not probed | Typed | `thinking.set` | — | Controls sheet (Phase 2); effort in the facts line |
+| Permission mode, rules | `set_permission_mode` (#646, #669), `list_permission_rules` (#668), `update_settings` in the types, not probed | shift+tab | `mode.set`, `permissions.set` | — | The mode as a tappable word in the composer (Phase 2); bypass is always on offer — every launch passes `--allow-dangerously-skip-permissions` |
 | Directories | `register_repo_root` (#669; whether it is what `/add-dir` does: probe: blocked) | `/add-dir` | No | — | Session sheet actions (Phase 2) |
-| MCP servers | `mcp_status` (#668), `mcp_toggle`, `mcp_reconnect` (#669), `mcp_set_servers` | `/mcp` | `mcp.*` | — | Controls sheet (Phase 2) |
+| MCP servers | `mcp_status` (#668), `mcp_reconnect` (#669); `mcp_toggle`, `mcp_set_servers` in the types, not probed | `/mcp` | `mcp.*` | — | Controls sheet (Phase 2) |
 | Slash commands, with completion | `initialize.commands` (the list below) | Typed | No list | A command list (item 5) | Session sheet: the source's commands as a list; `/` completion in the composer (Phase 2) |
 | `@` file completion | `file_suggestions` (#668) | Keys | No | — | Composer's `@` (Phase 2) |
-| Enter submits the box | `user` line | A CR in the same write as the text does not submit (#79, #536); a CR milliseconds after a retake is kept as a newline, 300 ms later it submits (#619) | Text plus `"\r"` as one `input` (docs/18) | — | Composer send (Phase 2); for a terminal pane the CR timing is the pane's to get right (#619) |
+| Enter submits the box | `user` line | A CR in the same write as the text does not submit (#79); submits from 2.1.268 (#536); a CR milliseconds after a retake is kept as a newline, 300 ms later it submits (#619) | Text plus `"\r"` as one `input` (docs/18) | — | Composer send (Phase 2); for a terminal pane the CR timing is the pane's to get right (#619) |
 | Arrows and `\x7f` edit the box | n/a | One character at a time, across wrapped rows (#564) | Keys go to the TUI in its terminal; over the pane, everything but text and ctrl-c/esc is dropped (docs/18) | — | The composer is a native input; the mirror reads the box back (#558, #622, #663) |
 | Wheel scrolls the transcript | n/a | Past either end it does nothing (#613) | Keys go to the TUI | — | The transcript scrolls (Phase 2) |
 | Cursor keys recall prompt history | n/a | `ESC O A` puts the last prompt in the box (#613) | Keys go to the TUI | — | Composer history — not drawn today |
@@ -85,8 +87,10 @@ the pane does instead.
 
 ## Claude's slash commands
 
-The 63 commands in this login's `initialize` list (Claude 2.1.326, no turn sent). The four
-`terminal_slash_commands` are named by #644; Phase 8 writes them down as terminal-only.
+The 63 commands in this login's `initialize` list (Claude 2.1.326, no turn sent, #672).
+`initialize` carries a separate `terminal_slash_commands` field (#644) that names four of them;
+the four names themselves — `doctor`, `color`, `focus`, `reload-plugins` — have no log row.
+Phase 8 writes them down as terminal-only.
 Muffit has no command list at all (docs/21: "No list"); where a control verb is the closest
 thing it is named. The pane draws every non-terminal command in the session sheet's command
 list, sent as input (Phase 2).
@@ -157,9 +161,9 @@ list, sent as input (Phase 2).
 | `kampr-review` (project) | House style and review priorities for this repository | Session sheet action (Phase 2), sent as input |
 | `probe-herdr` (project) | Look up or establish a fact about herdr's behaviour | Session sheet action (Phase 2), sent as input |
 
-Not in this login's list, named in the plan: `login` (expected when logged out — docs/20; a
-headless session reports it and cannot fix it), `add-dir`, `resume`, `btw`, `permissions`,
-`status`, `help`. Which of these are state-dependent and which are absent is undetermined:
+Not in this login's list, named in the plan: `login` (a headless session reports that it is
+logged out and cannot fix it — docs/20; expected in the list when a session is logged out —
+undetermined), `add-dir`, `resume`, `btw`, `permissions`, `status`, `help`. Which of these are state-dependent and which are absent is undetermined:
 probe when the plan runs turns again (#670).
 
 ## Status and facts
@@ -170,7 +174,7 @@ probe when the plan runs turns again (#670).
 | Limits | `rate_limit_event`, `get_usage` (#658, #668) | Sibling (#658) | No | Provider rate-limit state (item 6) | Facts line: the five-hour and weekly limits (Phase 2) |
 | Context, cost | `get_context_usage`, `get_session_cost` (#668) | Transcript usage | `context`, `cost` | — | Facts line (Phase 2) |
 | Trouble and retries | `api_retry`, `assistant.error`; a refused turn ends `is_error: true`, `terminal_reason: "api_error"` (#651) | Transcript and `StopFailure` (#652) | `error` block, `turn` `failed` | Retry attempts as state | Trouble banner: one line and one button, retrying with attempt and countdown (Phase 2) |
-| Run state | `session_state_changed`, `status` (#644) | The session file's `status`, four values plus a reason (#344); `waitingFor` distinguishes a permission prompt from a question, 3–20 ms behind the screen (#610) | `state`, mapped to `agent_status` (docs/18) | — | The header's status mark; blocked opens the ask dock; `done` reads idle after `done.read` |
+| Run state | `status` (#644); `session_state_changed` in the types, not probed | The session file's `status`, four values plus a reason (#344); `waitingFor` distinguishes a permission prompt from a question, 3–20 ms behind the screen (#610) | `state`, mapped to `agent_status` (docs/18) | — | The header's status mark; blocked opens the ask dock; `done` reads idle after `done.read` |
 | Fast-mode billing | #671 (Anthropic's docs): on a subscription plan fast mode is paid from usage credits, not the plan's included usage | Same | n/a | — | A money-costing control: a refusal under `overage = "refuse"` |
 | Window title: busy glyph plus the session's title | n/a | Terminal only — OSC 0; the glyph tells busy from not-busy and nothing else (#602); answering `OSC 7501` drops the prefix, drawing is unchanged (#601) | n/a | — | Terminal only — a terminal signal; the pane's equivalent is the header's status mark |
 | Desktop notifications | n/a | Terminal only — OSC 9 / 99 / 777 / BEL, about 6 s late and only flushed with a repaint; needs a recognised `TERM_PROGRAM` or a `preferredNotifChannel` (#603) | n/a | — | Terminal only — a terminal signal; the pane's equivalent is triage and push |
