@@ -46,6 +46,8 @@ pub struct SessionNode {
     pub native: Option<Arc<NativeProvider>>,
     /// Only on the primary, for the same reason: the muffit daemon is the machine's (docs/18).
     pub muffit: Option<Arc<MuffitProvider>>,
+    /// Only on the primary: the headless Claude sessions are the machine's (docs/21 Phase 5).
+    pub claude: Option<Arc<kampr_claude::ClaudeSource>>,
     /// The primary's daemon on every session, since a TUI in any session's pane is its client.
     machine_muffit: Option<Arc<MuffitProvider>>,
     /// Only on the primary: the containers are the machine's (docs/19).
@@ -77,6 +79,9 @@ impl SessionNode {
         let herdr = Herdr::new(&sockets.herdr);
         let native = primary.then(|| native_provider(config, &sockets.hooks)).flatten();
         let muffit = primary.then(|| muffit_provider(config)).flatten();
+        let (claude, claude_provider) = primary
+            .then(|| claude_source(config))
+            .unwrap_or_default();
         let machine_muffit = muffit.clone().or(machine_muffit);
         let desk = native.clone().or(desk);
         let provider = Arc::new(HerdrProvider::spawn(
@@ -105,6 +110,9 @@ impl SessionNode {
         if let Some(muffit) = &muffit {
             providers.push(muffit.clone());
         }
+        if let Some(claude) = &claude_provider {
+            providers.push(claude.clone());
+        }
         providers.push(fleet.clone());
         providers.push(provider.clone());
         let registry = PaneRegistry::with_config(
@@ -131,6 +139,7 @@ impl SessionNode {
             fleet,
             native,
             muffit,
+            claude,
             machine_muffit,
             docker,
             adopted,
@@ -198,6 +207,16 @@ impl SessionNode {
 
     /// What this pane's conversation is, from the sources this node serves.
     pub fn conversation(&self, local: &str) -> Option<crate::conversations::ConversationRef> {
+        // A headless Claude pane is a conversation with no terminal beside it.
+        if let Some(claude) = &self.claude
+            && kampr_claude::provider::session_of(local).is_some()
+        {
+            return Some(crate::conversations::ConversationRef {
+                source: claude.clone(),
+                pane: local.to_string(),
+                terminal: false,
+            });
+        }
         let link = self.muffit_link(local)?;
         Some(crate::conversations::ConversationRef {
             source: Arc::new(kampr_muffit::MuffitSource::new(link.provider)),
@@ -304,6 +323,37 @@ fn muffit_provider(config: &Config) -> Option<Arc<MuffitProvider>> {
             None
         }
     }
+}
+
+/// The headless Claude source and the provider that lists its sessions as panes (docs/21 Phase
+/// 5). They share a `Herd`, so a create the source makes is a pane the herd lists.
+fn claude_source(
+    config: &Config,
+) -> (Option<Arc<kampr_claude::ClaudeSource>>, Option<Arc<kampr_claude::ClaudeProvider>>) {
+    let root = match kampr_keep::root() {
+        Ok(root) => root,
+        Err(e) => {
+            warn!(error = %format!("{e:#}"), "headless Claude sessions are unavailable on this node");
+            return (None, None);
+        }
+    };
+    let keeper = match kampr_keep::own_exe() {
+        Ok(keeper) => keeper,
+        Err(e) => {
+            warn!(error = %format!("{e:#}"), "headless Claude sessions are unavailable on this node");
+            return (None, None);
+        }
+    };
+    let (herd, _topology) = kampr_claude::Herd::new();
+    let herd = Arc::new(herd);
+    let source = Arc::new(kampr_claude::ClaudeSource::new(
+        config.claude.clone(),
+        herd.clone(),
+        root.clone(),
+        keeper.clone(),
+    ));
+    let provider = Arc::new(kampr_claude::ClaudeProvider::new(herd, root));
+    (Some(source), Some(provider))
 }
 
 // A node starts after every `kampr update`, so this pass is the release's keeper upgrade; the

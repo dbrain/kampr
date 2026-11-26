@@ -2741,6 +2741,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "kampr-claude"
+version = "0.1.152"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "kampr-core",
+ "kampr-journal",
+ "kampr-keep",
+ "kampr-testkit",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+]
+
+[[package]]
 name = "kampr-cli"
 version = "0.1.152"
 dependencies = [
@@ -2998,6 +3016,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.4.3",
  "kampr-auth",
+ "kampr-claude",
  "kampr-core",
  "kampr-docker",
  "kampr-fleet",

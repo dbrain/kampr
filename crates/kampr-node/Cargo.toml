@@ -12,6 +12,7 @@ axum-server.workspace = true
 base64.workspace = true
 futures-util.workspace = true
 kampr-auth = { path = "../kampr-auth" }
+kampr-claude = { path = "../kampr-claude" }
 kampr-core = { path = "../kampr-core" }
 kampr-docker = { path = "../kampr-docker" }
 kampr-fleet = { path = "../kampr-fleet" }

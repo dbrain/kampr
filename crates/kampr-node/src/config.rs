@@ -47,7 +47,12 @@ pub struct Config {
     pub docker: Docker,
     #[serde(default)]
     pub hooks: Hooks,
+    #[serde(default)]
+    pub claude: Claude,
 }
+
+/// The `[claude]` section: the headless Claude source and its billing safeguards (docs/21).
+pub use kampr_claude::Config as Claude;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -611,6 +616,7 @@ impl Config {
             muffit: Muffit::default(),
             docker: Docker::default(),
             hooks: Hooks::default(),
+            claude: Claude::default(),
         }
     }
 
