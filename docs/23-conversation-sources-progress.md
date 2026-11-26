@@ -48,9 +48,11 @@ STILL DOABLE WITHOUT A TURN:
 Built and committed so far: s1 (Phase 1), s2 (docs/22), s6 (Phase 2a, be4c2a9d), and **Phase 4 is
 CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778; kampr-keep
 48/48; two reviews passed). **Phase 2a review (s13) passed (SOUND)** — 2b and 5 are unblocked and
-launching. **CURRENT STATUS:** Phases 0,1,2a,2b,4,5,6 are all DONE with their review loops CLOSED
-(2b = s21 SOUND, 5 = s19 SOUND + guard-2 fix, 6 = s20 re-review FIXED). **Only s8 (muffit Phase 3)
-is in flight.** Phase 7 is unblocked (Phase 6 done) and launches once s8 is reviewed.
+launching. **CURRENT STATUS:** Phases 0,1,2a,2b,3,4,5,6,7 are ALL DONE with their review loops
+CLOSED (2a=s13, 2b=s21, 3=s23, 4=s12, 5=s19, 6=s20, 7=s25→s26 B1 fix). **No build workers in
+flight.** Next: the gate-green pass (`make check` is red on pre-existing toolchain drift — rustfmt
+1.10.0/1.99.1 wants to split ~34 files' long call lists + clippy), then Phase 8 (parity pass) and
+Phase 9 (third source).
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
@@ -93,6 +95,19 @@ is in flight.** Phase 7 is unblocked (Phase 6 done) and launches once s8 is revi
   + test `a_stray_base_url_is_blanked_under_plan_without_a_mock`; all 34 + e2e pass. **Phase 5
   review loop CLOSED.** Also fixed the `crate_graph` guard (0fa8cd43) that the Phase 5 commit broke
   (`kampr-node → kampr-claude` edge).
+- **s24 — Phase 7 (the pane pump behind the trait): DONE** (`5c899e9c`) — `TerminalClaude:
+  Conversation` in `convo.rs` (the pump's journal/preview/hooks → `Update`s through the Phase-2a
+  `emit()`), Codex/omp/pi/agy wrapped with a smaller ability set, key-driven steering NOT declared.
+- **s25 — Phase 7 review: one BLOCKING defect (B1)** — `has_conversation` now true for terminal
+  panes, so `convo.load`/`find`/`sub` on a pane with no transcript went `not_found` → silence
+  (two deterministic live tests pinned the old contract and failed; not caught by `test-fast`
+  because its nextest profile excludes `live::*`). Wire-unchanged confirmed frame-by-frame;
+  abilities PASS; D2 (steer/set/act → silence), D3 (test gap), D4 (pre-existing `reopening` flake).
+- **s26 — Phase 7 fix: DONE** (`ce5449cb`, 2 files +40/−9) — `Older`/`Find`/`Sub` emit
+  `Update::Missing` when the journal is `None` (restores `not_found`); D2 steer/set/act →
+  `Update::Missing`; D3 `lifecycle` assert. Both B1 tests red→green; node 474 (1 = D4 flake);
+  clippy 0 new; test-fast 2150. Kept the mass `cargo fmt` reformat OUT (pre-existing drift,
+  separate gate-green pass). **Phase 7 review loop CLOSED.**
 - **s14 — Phase 2b (the client learns the vocabulary, Kotlin): DONE** — committed `80fe0d2a`
   (13 files, +2457/−242, `client/` only). Wire mirror (`Protocol.kt`/`Codec.kt`/`Serializers.kt`):
   all 13 `convo.*` `ServerMsg` + 5 `ClientMsg` + widened `Answer.reply`, field-for-field vs the Rust
@@ -211,7 +226,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). **Review s17: DEFECTS FOUND** (1 blocking: `tasks_tick` wrong shell-task dir; its test passed with the defect) → **fixed 7c164f14** (real dir + `bind()` `facts.bg` exclusion + test to the real path + probe row 673) → **re-reviewed s20: FIXED** (both reds measured). **Phase 6 review loop CLOSED.** Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.
 
-## Phase 7 — the pane pump behind the trait — IN FLIGHT (s24): `TerminalClaude: Conversation` in `convo.rs` (the pump's journal/preview/hooks → `Update`s), other harnesses (Codex/omp/pi/agy) wrapped with a smaller ability set; key-driven steering (interrupt/mode/background) NOT declared as abilities. **Hard constraint: the wire a client sees is unchanged for every existing harness** (internal refactor through the seam; existing frames byte-compatible).
+## Phase 7 — the pane pump behind the trait — **DONE** (s24 `5c899e9c`: `TerminalClaude: Conversation` in `convo.rs`, the pump's journal/preview/hooks → `Update`s through the Phase-2a `emit()`; Codex/omp/pi/agy wrapped with a smaller ability set; key-driven steering NOT declared). **Review s25 = one BLOCKING defect (B1)** — `has_conversation` now true for terminal panes, so `convo.load`/`find`/`sub` on a pane with no transcript went from `not_found` to silence (two deterministic live tests pinned the old contract and failed). **Fixed (s26, `ce5449cb`):** the pump's `Older`/`Find`/`Sub` emit `Update::Missing` when the journal is `None` (restores `not_found`), plus D2 (steer/set/act → `not_found`) and D3 (abilities test asserts `lifecycle` empty). Both B1 tests red→green; node suite 474 (1 = pre-existing D4 flake); clippy 0 new; test-fast 2150. **Wire-unchanged confirmed frame-by-frame** (s25). **Phase 7 review loop CLOSED.**
 
 ## Phase 8 — nothing left that needs the terminal — not started
 
