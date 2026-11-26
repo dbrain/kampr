@@ -48,7 +48,9 @@ STILL DOABLE WITHOUT A TURN:
 Built and committed so far: s1 (Phase 1), s2 (docs/22), s6 (Phase 2a, be4c2a9d), and **Phase 4 is
 CLOSED** (s3 pipe mode b3b5411c + s7 fixes 278e74b5 + s10 re-review fix 36622778; kampr-keep
 48/48; two reviews passed). **Phase 2a review (s13) passed (SOUND)** — 2b and 5 are unblocked and
-launching. Now in flight:
+launching. **CURRENT STATUS:** Phases 0,1,2a,2b,4,5,6 are all DONE with their review loops CLOSED
+(2b = s21 SOUND, 5 = s19 SOUND + guard-2 fix, 6 = s20 re-review FIXED). **Only s8 (muffit Phase 3)
+is in flight.** Phase 7 is unblocked (Phase 6 done) and launches once s8 is reviewed.
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
@@ -199,13 +201,13 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
   falls through to the REST path instead of erroring "the conversation closed" — the daemon
   still answers, and the tests do not reach the race.
 
-## Phase 2 — the wire and the client learn the new vocabulary — **2a COMMITTED** (be4c2a9d, +1862/−74; 2089 passed; review s13 = SOUND). **2b COMMITTED** (80fe0d2a, client only; wire mirror field-for-field + pane pieces; `make check-client` green; review s21 in flight). **Deferral:** `kampr-tui` mirror (Rust crate) not done — to do after the reviews.
+## Phase 2 — the wire and the client learn the new vocabulary — **2a COMMITTED** (be4c2a9d, +1862/−74; 2089 passed; review s13 = SOUND). **2b COMMITTED** (80fe0d2a, client only; wire mirror field-for-field + pane pieces; `make check-client` green; **review s21 = SOUND** — 13 frames + 6 verbs field-for-field against Rust, `Reply`'s 6 shapes exactly reproduced, additive both ways, board-7 floor + confirm-sentence verified, floor + rich screenshots). **Phase 2 review loop CLOSED.** **Deferral:** `kampr-tui` mirror (Rust crate) not done — to do after the reviews.
 
 ## Phase 3 — muffit widened (muffit repo) — IN FLIGHT (s8)
 
 ## Phase 4 — a keeper for a process that speaks lines — CLOSED (b3b5411c + 278e74b5 + 36622778; kampr-keep 48/48; two reviews passed). Note for Phase 5's pipe consumer: a `Truncated { oldest_seq }` does NOT deliver the `oldest_seq` entry itself — treat it as a hard gap boundary.
 
-## Phase 5 — Claude with no terminal — COMMITTED (cherry-pick `ee203d76`, `kampr-claude` crate + node wiring + `mock.py`): stream-json reader/writer, `launch.rs` scrubbed env + guards 1–5, `billing.rs` guards 3/6–9, `ClaudeSource`/`Provider`/`Herd` (pipe mode), every guard red-tested (34 passed, no test reaches Anthropic). Deviation: guard-2 scrub *blanks* provider names (keeper pipe mode). **Review s19 = SOUND** (one minor/theoretical guard-2 gap — the `ANTHROPIC_BASE_URL` exclusion — **fixed 0c10c6e5** + test; `crate_graph` guard fixed 0fa8cd43). **Phase 5 review loop CLOSED.**
+## Phase 5 — Claude with no terminal — COMMITTED (cherry-pick `ee203d76`, `kampr-claude` crate + node wiring + `mock.py`): stream-json reader/writer, `launch.rs` scrubbed env + guards 1–5, `billing.rs` guards 3/6–9, `ClaudeSource`/`Provider`/`Herd` (pipe mode), every guard red-tested (34 passed, no test reaches Anthropic). Deviation: guard-2 scrub *blanks* provider names (keeper pipe mode). **Review s19 = SOUND** (one minor/theoretical guard-2 gap — the `ANTHROPIC_BASE_URL` exclusion — **fixed 0c10c6e5** + test; `crate_graph` guard fixed 0fa8cd43; mock-half unit test 73d9fb54). **Phase 5 review loop CLOSED.**
 
 ## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). **Review s17: DEFECTS FOUND** (1 blocking: `tasks_tick` wrong shell-task dir; its test passed with the defect) → **fixed 7c164f14** (real dir + `bind()` `facts.bg` exclusion + test to the real path + probe row 673) → **re-reviewed s20: FIXED** (both reds measured). **Phase 6 review loop CLOSED.** Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.
 
