@@ -67,14 +67,21 @@ launching. Now in flight:
   per #649/#310) — and its test writes to the code's own path so it **passes with the defect**
   (rule-#2 violation). Fix in flight (s18): real dir + `bind()` `facts.bg` exclusion + test rewritten
   to the real path + probe row.
-- **s15 — Phase 5 (kampr-claude, the headless source)**: a new `kampr-claude` crate — the
-  stream-json reader/writer, `launch.rs` (scrubbed env + billing guards 1–5), `ClaudeSource`
-  (create/resume/end/hand-to-terminal) + `ClaudeConversation` (lines→`Update`s, `Command`s→lines,
-  guards 6–9), wired into the node's `conversations` registry. **Rust only** — the client
-  "new conversation" opener lands after 2b (s15) so it builds on the new pane. **Money-critical: no
-  test reaches Anthropic** — a mock `ANTHROPIC_BASE_URL` (happy SSE + error path) + throwaway
-  `CLAUDE_CONFIG_DIR` + `billing = any` + `KAMPR_TEST=1`, and a guard test that the launcher
-  refuses to start under `KAMPR_TEST=1` without a mock. In a worktree (isolated from s11's Rust WIP).
+- **s15 — Phase 5 (kampr-claude, the headless source): DONE** — cherry-picked `ee203d76` (15 files,
+  +3031) onto conv-sources (the worktree branch's `dc8f4815` base was s11's Phase 6 WIP, already
+  committed, so only the Phase 5 commit was taken). The `kampr-claude` crate: `wire.rs` (lenient
+  stream-json reader + control-request writer, request ids matched), `launch.rs` (scrubbed env +
+  guards 1–5 + guard 11), `billing.rs` (guards 3, 6–9), `conversation.rs` (lines→`Update`s,
+  `Command`s→lines), `source.rs`/`provider.rs` (`ClaudeSource` + `Provider` + `Herd`, pipe mode).
+  `mock.py` (self-contained ThreadingHTTPServer; **logs every request** so a test reaching the mock
+  is provably not reaching Anthropic). **Every guard has a test that fails without it** (unit + e2e
+  real `claude -p` vs the mock); `cargo test -p kampr-claude` 34 passed, zero warnings. **Deviation
+  (justified):** guard-2 scrub *blanks* provider-shaped names (the keeper pipe mode can't do a pure
+  allow-list — Phase 4 closed); `--forward-subagent-text` added. Review in flight (s19, money-safety).
+- **s19 — Phase 5 review (money-safety)**: in a worktree, isolated build dir — verify no test
+  reaches Anthropic (guard 11), the guard-2 scrub-blanking is sound (stray key doesn't cross under
+  `plan`, mock preserved, keys cross under `api`), guards 3/4/6/7/8/9 red-verified, guard 5 never
+  `--bare`, lenient reader, node wiring, and no wire/client/journal/keep edits.
 - **s14 — Phase 2b (the client learns the vocabulary, Kotlin)**: mirror the 13 `convo.*`
   `ServerMsg` + 5 `ClientMsg` + widened `answer` in `client/shared/.../wire/`, and build the pane
   pieces in `client/conversation/` (controls sheet, actions palette, task panel, trouble banner,
@@ -179,7 +186,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 4 — a keeper for a process that speaks lines — CLOSED (b3b5411c + 278e74b5 + 36622778; kampr-keep 48/48; two reviews passed). Note for Phase 5's pipe consumer: a `Truncated { oldest_seq }` does NOT deliver the `oldest_seq` entry itself — treat it as a hard gap boundary.
 
-## Phase 5 — Claude with no terminal — IN FLIGHT (s15, Rust, worktree): the `kampr-claude` crate (stream-json reader/writer, `launch.rs` scrubbed env + billing guards 1–5, `ClaudeSource` + `ClaudeConversation` guards 6–9), node wiring, mock endpoint (no test reaches Anthropic).
+## Phase 5 — Claude with no terminal — COMMITTED (cherry-pick `ee203d76`, `kampr-claude` crate + node wiring + `mock.py`): stream-json reader/writer, `launch.rs` scrubbed env + guards 1–5, `billing.rs` guards 3/6–9, `ClaudeSource`/`Provider`/`Herd` (pipe mode), every guard red-tested (34 passed, no test reaches Anthropic). Deviation: guard-2 scrub *blanks* provider names (keeper pipe mode). **Review in flight (s19, money-safety).**
 
 ## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). **Review s17: DEFECTS FOUND** — 1 blocking (`tasks_tick` scans the wrong shell-task dir; its test passes with the defect); trouble/hooks/fork all confirmed sound. **Fix in flight (s18).** Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.
 
