@@ -1769,10 +1769,12 @@ impl Session {
             .await;
             return true;
         }
-        // A headless conversation pane has no terminal: its input is the conversation's, not a
-        // keystroke to a pane there is none behind.
+        // A headless Claude pane has no terminal: its input is the conversation's, not a keystroke to a
+        // pane there is none behind. A muffit session pane is also terminal-less, so the Claude
+        // pane id is the discriminator, not `terminal` alone.
         if let Some(ref_) = session.conversation(&local)
             && !ref_.terminal
+            && kampr_claude::provider::session_of(&local).is_some()
         {
             let text = match &input {
                 Input::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
@@ -2115,9 +2117,11 @@ impl Session {
             }
             return;
         }
-        // A headless conversation pane answers through its conversation, not a terminal keystroke.
+        // A headless Claude pane answers through its conversation, not a terminal keystroke. A muffit
+        // session pane is also terminal-less, so the Claude pane id is the discriminator.
         if let Some(ref_) = session.conversation(&local)
             && !ref_.terminal
+            && kampr_claude::provider::session_of(&local).is_some()
         {
             let reply = reply.cloned().unwrap_or(match key {
                 "1" => Reply::Allow {
