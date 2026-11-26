@@ -384,7 +384,7 @@ impl ClaudeParser {
 
         if !turn.blocks.is_empty() {
             // A record on a line no longer being drawn adds nothing to the drawing.
-            if line.map_or(true, |l| l == self.cur) {
+            if line.is_none_or(|l| l == self.cur) {
                 self.store.push(turn);
                 self.cur_ids.push(id.clone());
             }
@@ -394,9 +394,7 @@ impl ClaudeParser {
     /// Which line this record belongs to, moving the drawing to it when it is not the one
     /// drawn. A record with no `uuid` names no line at all.
     fn follow(&mut self, record: &Record) -> Option<usize> {
-        let Some(uuid) = record.uuid.as_deref() else {
-            return None;
-        };
+        let uuid = record.uuid.as_deref()?;
         if self.known.contains_key(uuid) {
             // A duplicate of a record already read in this pass: the drawing does not move.
             return None;

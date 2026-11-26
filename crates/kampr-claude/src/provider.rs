@@ -40,12 +40,12 @@ impl Herd {
 
     pub fn add(&self, id: &str) {
         self.sessions.lock().unwrap().insert(id.to_string());
-        let _ = self.topology.send_modify(|n| *n += 1);
+        self.topology.send_modify(|n| *n += 1);
     }
 
     pub fn remove(&self, id: &str) {
         self.sessions.lock().unwrap().remove(id);
-        let _ = self.topology.send_modify(|n| *n += 1);
+        self.topology.send_modify(|n| *n += 1);
     }
 
     pub fn sessions(&self) -> Vec<String> {

@@ -203,7 +203,7 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
         .block_on(future)
 }
 
-fn billing_trouble<'a>(updates: &'a [Update]) -> Option<&'a String> {
+fn billing_trouble(updates: &[Update]) -> Option<&String> {
     updates.iter().find_map(|u| match u {
         Update::Trouble(Some(t)) if t.fix == Some(Fix::Billing) => Some(&t.text),
         _ => None,

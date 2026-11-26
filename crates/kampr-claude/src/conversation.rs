@@ -194,14 +194,14 @@ impl Inner {
                 kind: task
                     .task_type
                     .clone()
-                    .or_else(|| Some(existing.kind))
+                    .or(Some(existing.kind))
                     .unwrap_or("task".into()),
                 backgrounded: task.is_backgrounded || existing.backgrounded,
                 state: match task.status.as_deref() {
                     Some(s) if s == "completed" || s == "failed" || s == "stopped" => TaskState::Ended,
                     _ => TaskState::Running,
                 },
-                title: task.prompt.clone().or_else(|| existing.title),
+                title: task.prompt.clone().or(existing.title),
                 ..existing
             },
         );
@@ -227,12 +227,11 @@ impl Conversation for ClaudeConversation {
         let session = SessionDir::at(session_path);
         let mut inner = Inner::new();
 
-        if let Some(path) = transcript {
-            if let Some(page) = history_page(&path) {
-                if !push(&mut emit, Update::Page(page)) {
-                    return;
-                }
-            }
+        if let Some(path) = transcript
+            && let Some(page) = history_page(&path)
+            && !push(&mut emit, Update::Page(page))
+        {
+            return;
         }
 
         if !push(&mut emit, Update::Abilities(Self::abilities())) {
@@ -299,6 +298,8 @@ impl Conversation for ClaudeConversation {
 
 /// One line of the child's stdout, mapped to seam `Update`s with the per-turn guards applied.
 /// Returns `false` when a guard has ended the session.
+// too_many_arguments: session and config are reserved for guard wiring; a params struct would hide what the line handler reads
+#[allow(clippy::too_many_arguments)]
 fn process_line(
     line: &str,
     inner: &mut Inner,
@@ -442,18 +443,18 @@ fn process_line(
             push(emit, Update::Tasks(inner.tasks_list()))
         }
         Line::TaskProgress(progress) => {
-            if let Some(id) = &progress.task_id {
-                if let Some(task) = inner.tasks.get_mut(id) {
-                    task.title = progress.description.clone().or_else(|| task.title.clone());
-                }
+            if let Some(id) = &progress.task_id
+                && let Some(task) = inner.tasks.get_mut(id)
+            {
+                task.title = progress.description.clone().or_else(|| task.title.clone());
             }
             push(emit, Update::Tasks(inner.tasks_list()))
         }
         Line::TaskNotification(notification) => {
-            if let Some(id) = &notification.task_id {
-                if let Some(task) = inner.tasks.get_mut(id) {
-                    task.state = TaskState::Ended;
-                }
+            if let Some(id) = &notification.task_id
+                && let Some(task) = inner.tasks.get_mut(id)
+            {
+                task.state = TaskState::Ended;
             }
             push(emit, Update::Tasks(inner.tasks_list()))
         }
@@ -663,10 +664,8 @@ fn dispatch_command(
                 // A turn in flight is interrupted by closing its tool; the seam has no finer word.
                 push(emit, Update::State(RunState::Idle));
             }
-            Steer::Continue => {
-                if inner.preflight == Preflight::Allowed {
-                    let _ = write(session, &wire::user_message(text.as_deref().unwrap_or(""), &[]));
-                }
+            Steer::Continue if inner.preflight == Preflight::Allowed => {
+                let _ = write(session, &wire::user_message(text.as_deref().unwrap_or(""), &[]));
             }
             _ => {}
         },
@@ -869,7 +868,7 @@ mod tests {
         updates.lock().unwrap().clone()
     }
 
-    fn billing_trouble<'a>(updates: &'a [Update]) -> Option<&'a String> {
+    fn billing_trouble(updates: &[Update]) -> Option<&String> {
         updates.iter().find_map(|u| match u {
             Update::Trouble(Some(t)) if t.fix == Some(Fix::Billing) => Some(&t.text),
             _ => None,

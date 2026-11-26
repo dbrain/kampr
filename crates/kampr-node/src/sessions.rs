@@ -79,7 +79,11 @@ impl SessionNode {
         let herdr = Herdr::new(&sockets.herdr);
         let native = primary.then(|| native_provider(config, &sockets.hooks)).flatten();
         let muffit = primary.then(|| muffit_provider(config)).flatten();
-        let (claude, claude_provider) = primary.then(|| claude_source(config)).unwrap_or_default();
+        let (claude, claude_provider) = if primary {
+            claude_source(config)
+        } else {
+            Default::default()
+        };
         let machine_muffit = muffit.clone().or(machine_muffit);
         let desk = native.clone().or(desk);
         let provider = Arc::new(HerdrProvider::spawn(
@@ -181,9 +185,7 @@ impl SessionNode {
                 terminal: false,
             });
         }
-        if self.machine_muffit.is_none() {
-            return None;
-        }
+        self.machine_muffit.as_ref()?;
         let session = self.held_muffit(&self.pane_processes(local))?;
         Some(MuffitLink {
             provider: self.machine_muffit.clone()?,

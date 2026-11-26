@@ -106,6 +106,8 @@ pub fn answer_result(wire: &Wire, pane: &str, result: AnswerResult) {
 
 /// The composer line behind an `m:` pane: its steps go to the conversation, and only what the
 /// conversation is gone takes the REST path directly.
+// too_many_arguments: the pane's wiring is one flat hand-off; a params struct would hide which caller owns each piece
+#[allow(clippy::too_many_arguments)]
 pub async fn input(
     lines: &mut HashMap<(String, Option<String>), Line>,
     provider: &Arc<MuffitProvider>,
@@ -131,7 +133,7 @@ pub async fn input(
             Step::Submit(text) => {
                 let msg_id = ulid::Ulid::generate().to_string();
                 let (text, images) = crate::paste::lift_images(state_dir, &text);
-                let sent = match conversations
+                match conversations
                     .send(
                         pane,
                         Command::Input {
@@ -152,8 +154,7 @@ pub async fn input(
                 {
                     Ok(()) => Ok(()),
                     Err(_) => provider.client().input(session, &text, &images, None).await,
-                };
-                sent
+                }
             }
         };
         if let Err(e) = sent {

@@ -1965,20 +1965,19 @@ fn grown(
 ) -> (String, Option<bool>) {
     let ended = tool
         .filter(|t| !facts.tools.contains_key(*t))
-        .and_then(|t| facts.tools_done.get(t).copied())
-        .map(|ok| ok);
+        .and_then(|t| facts.tools_done.get(t).copied());
     let mut text = String::new();
-    if ended.is_none() {
-        if let Ok(mut file) = std::fs::File::open(path) {
-            use std::io::{Read, Seek, SeekFrom};
-            if let Ok(len) = file.metadata().map(|m| m.len()) {
-                if len > offset {
-                    let mut buf = Vec::new();
-                    let _ = file.seek(SeekFrom::Start(offset));
-                    let _ = file.read_to_end(&mut buf);
-                    text = String::from_utf8_lossy(&buf).into_owned();
-                }
-            }
+    if ended.is_none()
+        && let Ok(mut file) = std::fs::File::open(path)
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        if let Ok(len) = file.metadata().map(|m| m.len())
+            && len > offset
+        {
+            let mut buf = Vec::new();
+            let _ = file.seek(SeekFrom::Start(offset));
+            let _ = file.read_to_end(&mut buf);
+            text = String::from_utf8_lossy(&buf).into_owned();
         }
     }
     (text, ended)

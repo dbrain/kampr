@@ -41,7 +41,7 @@ fn unattended_default() -> u32 {
 
 impl Config {
     pub fn config_dir(&self) -> Option<&str> {
-        (!self.config_dir.is_empty()).then(|| self.config_dir.as_str())
+        (!self.config_dir.is_empty()).then_some(self.config_dir.as_str())
     }
 
     pub fn binary(&self) -> &str {

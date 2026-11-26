@@ -2106,9 +2106,7 @@ impl Session {
             );
             return;
         }
-        let key = reply
-            .and_then(|reply| crate::muffit::key_of(reply))
-            .unwrap_or(key);
+        let key = reply.and_then(crate::muffit::key_of).unwrap_or(key);
         if let Some(result) = session.answer(&local, key).await {
             self.audit("answer", Some(pane), Some(json!({ "key": key, "convo": true })));
             crate::muffit::answer_result(&self.wire, pane, result);

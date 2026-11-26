@@ -477,16 +477,17 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 }
             }
             crate::wire::ContentBlock::ToolOutputChunk { call_id, text, seq } => {
-                if let Some((id, last)) = &mut self.followed {
-                    if call_id == id && *seq >= *last {
-                        *last = *seq;
-                        (self.emit)(Update::TaskOutput {
-                            id: id.clone(),
-                            at: *seq,
-                            text: text.clone(),
-                            ended: None,
-                        });
-                    }
+                if let Some((id, last)) = &mut self.followed
+                    && call_id == id
+                    && *seq >= *last
+                {
+                    *last = *seq;
+                    (self.emit)(Update::TaskOutput {
+                        id: id.clone(),
+                        at: *seq,
+                        text: text.clone(),
+                        ended: None,
+                    });
                 }
             }
             crate::wire::ContentBlock::ToolResult {
@@ -502,7 +503,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                         at,
                         text: String::new(),
                         ended: Some(TaskEnd {
-                            ok: exit_status.map_or(true, |status| status == 0),
+                            ok: exit_status.is_none_or(|status| status == 0),
                             summary: Some(summary.clone()),
                         }),
                     });
@@ -550,10 +551,10 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
         });
         if self.context != context {
             self.context = context;
-            if let Some(context) = context {
-                if !(self.emit)(Update::Context(context)) {
-                    return false;
-                }
+            if let Some(context) = context
+                && !(self.emit)(Update::Context(context))
+            {
+                return false;
             }
         }
         let cost = Cost {
@@ -719,9 +720,11 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     fn withdraw_live(&mut self) -> bool {
         let had_live = !self.seam_live.text.is_empty() || !self.seam_live.tools.is_empty();
         self.seam_live = SeamLive::default();
-        let cleared = had_live
-            .then(|| (self.emit)(Update::Live(SeamLive::default())))
-            .unwrap_or(true);
+        let cleared = if had_live {
+            (self.emit)(Update::Live(SeamLive::default()))
+        } else {
+            true
+        };
         match self.live.reset() {
             Some(withdrawn) => cleared && (self.emit)(Update::Turns(vec![withdrawn])),
             None => cleared,
