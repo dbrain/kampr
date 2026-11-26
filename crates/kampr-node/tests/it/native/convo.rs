@@ -291,4 +291,5 @@ async fn a_terminal_pane_declares_its_structural_abilities() {
     assert_eq!(words("facts"), vec!["trouble"]);
     assert!(words("steer").is_empty(), "steering is by key");
     assert!(words("input").is_empty(), "input beyond text is by key");
+    assert!(words("lifecycle").is_empty(), "a terminal pane's conversation ends with its harness");
 }

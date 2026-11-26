@@ -1082,26 +1082,35 @@ pub async fn pump(
             command = commands.recv() => {
                 match command {
                     Some(kampr_core::conversation::Command::Older { before }) => {
-                        if let Some(page) = page_update(&journal, before.as_deref(), false)
-                            && !emit(page)
-                        {
+                        if let Some(page) = page_update(&journal, before.as_deref(), false) {
+                            if !emit(page) {
+                                return;
+                            }
+                        } else if !emit(kampr_core::conversation::Update::Missing(
+                            "no conversation open for this pane".into(),
+                        )) {
                             return;
                         }
                     }
                     Some(kampr_core::conversation::Command::Find { query, cap }) => {
                         if let Some(found) =
                             journal.lock().unwrap().as_ref().map(|j| j.search(&query, cap))
-                            && !emit(kampr_core::conversation::Update::Found { query, found })
                         {
+                            if !emit(kampr_core::conversation::Update::Found { query, found }) {
+                                return;
+                            }
+                        } else if !emit(kampr_core::conversation::Update::Missing(
+                            "no conversation open for this pane".into(),
+                        )) {
                             return;
                         }
                     }
                     Some(kampr_core::conversation::Command::Sub { id, before }) => {
-                        if let Some(transcript) = opened.clone()
-                            && let Ok(sub) = journals.open_sub(&id, &transcript)
-                        {
-                            let mut sub =
-                                crate::pasted::Shown::over(sub, &state_dir);
+                        let sub = opened
+                            .clone()
+                            .and_then(|transcript| journals.open_sub(&id, &transcript).ok());
+                        if let Some(sub) = sub {
+                            let mut sub = crate::pasted::Shown::over(sub, &state_dir);
                             if sub.poll().is_err() {
                                 tracing::debug!(pane = %global, "a launched conversation is unreadable");
                             } else if emit(kampr_core::conversation::Update::SubPage {
@@ -1112,7 +1121,28 @@ pub async fn pump(
                             } else {
                                 return;
                             }
+                        } else if !emit(kampr_core::conversation::Update::Missing(
+                            if opened.is_none() {
+                                "this pane has no conversation".into()
+                            } else {
+                                "no such conversation".into()
+                            },
+                        )) {
+                            return;
                         }
+                    }
+                    Some(
+                        kampr_core::conversation::Command::Steer(..)
+                            | kampr_core::conversation::Command::Set { .. }
+                            | kampr_core::conversation::Command::Act { .. }
+                            | kampr_core::conversation::Command::Task { .. }
+                            | kampr_core::conversation::Command::Suggest { .. },
+                    )
+                    if !emit(kampr_core::conversation::Update::Missing(
+                        "no conversation open for this pane".into(),
+                    )) =>
+                    {
+                        return;
                     }
                     _ => {}
                 }
