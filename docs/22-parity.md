@@ -26,6 +26,10 @@ wide screens.
 - **Turns are blocked** (#670: the plan login refuses every prompt with a billing error).
   Cells marked "probe: blocked" are the Phase 0 items that need a turn; no-turn control
   requests keep working (#668, #669).
+- **Phase 8 pass**: each row was checked against the code — the headless source in
+  `crates/kampr-claude/`, the terminal pump in `crates/kampr-node/src/convo.rs`, the muffit
+  source in `crates/kampr-muffit/`, and the node's message routing in `session.rs`. Where the
+  headless Claude pane does not do what a row implies, the row says so and names the gap.
 
 "Terminal-only" means the feature exists only in the TUI process; the last column says what
 the pane does instead.
@@ -34,49 +38,49 @@ the pane does instead.
 
 | TUI feature | Claude, no terminal | Claude, in a terminal | muffit today | muffit, to add (Phase 3) | Where the pane draws it / why not |
 |---|---|---|---|---|---|
-| Turns, older, search | `assistant`, `user`; transcript for older and search | Transcript | `content`, `history`, REST transcript | — | Transcript, always drawn; paging `convo.load`, search `convo.find` |
+| Turns, older, search | `assistant`, `user`; transcript for older and search | Transcript | `content`, `history`, REST transcript | — | Transcript, always drawn; paging `convo.load`, search `convo.find` — muffit and terminal panes. Headless Claude draws the initial page only: `convo.load` returns no older turns and `convo.find` is not handled (gap) |
 | Text as written | `text_delta` (#644) | `MessageDisplay` paragraphs (#623) | `content` every 16 ms | — | Transcript; the live turn while it runs |
 | Tool arguments as written | `input_json_delta` (#644) | No | `tool_call` `started` then `running` | Argument deltas (item 4) | Transcript tool row, the argument |
-| Thinking | `thinking_tokens` (#644); `set_max_thinking_tokens` in the types, not probed | Transcript | `thinking` blocks | — | Transcript |
+| Thinking | `thinking_tokens` (#644); `set_max_thinking_tokens` in the types, not probed | Transcript | `thinking` blocks | — | Transcript — the terminal pane's `thinking` block and muffit. Headless Claude does not draw it: the block's text is empty (#644) and the source drops it |
 | Tool output live | `get_task_output` polled, or the task file (#647) | The task file, deleted on end (#649) | `tool_output_chunk` | — | Live tail under a shell row (Phase 2, `TaskOutput`) |
-| Subagent conversation, live | `parent_tool_use_id` lines, prose only under `--forward-subagent-text` (#650) | `subagents/agent-<id>.jsonl`, `SubagentStart`/`Stop` (#656) | REST transcript of the child; progress lines on the parent | A child that can be watched live (item 2) | Tasks sheet: select a subagent, its conversation live (Phase 2) |
+| Subagent conversation, live | `parent_tool_use_id` lines, prose only under `--forward-subagent-text` (#650) | `subagents/agent-<id>.jsonl`, `SubagentStart`/`Stop` (#656) | REST transcript of the child; progress lines on the parent | A child that can be watched live (item 2) | Tasks sheet: select a subagent, its conversation live (Phase 2) — muffit (REST transcript) and terminal panes (the `subagents/` file). Headless Claude does not open a subagent's conversation (gap) |
 | Tasks, with parents | `task_started`, `task_updated`, `background_tasks_changed` | Transcript fold, `Stop.background_tasks`, `PreToolUse` (#656) | `snapshot.subagents`, tasks REST | Shell tasks in the snapshot (item 3) | Activity bar and tasks sheet (Phase 2) |
 | Diffs, images, files | Tool inputs and results | Transcript | `diff`, `image` | — | Transcript |
-| Hook activity | `hook_started`, `hook_response` (#644) | No | n/a | — | Transcript (Phase 5) |
+| Hook activity | `hook_started`, `hook_response` (#644) | No | n/a | — | Transcript (Phase 5) for the stream's hook events where a source parses them; headless Claude does not parse `hook_started`/`hook_response` (gap) |
 | Compaction, notices | `compact_boundary` as a transcript record (#259, #312); `informational`, `notification` in the types, not probed | Transcript, `PreCompact`/`PostCompact` | `notice` | — | Transcript; compaction shows in the facts line |
 
 ## Dialogs
 
 | TUI feature | Claude, no terminal | Claude, in a terminal | muffit today | muffit, to add (Phase 3) | Where the pane draws it / why not |
 |---|---|---|---|---|---|
-| Permission: allow, always, edit input | `can_use_tool` with `permission_suggestions` (#645) | The dialog; `PermissionRequest` hook fires for every one (#623); "always" is `updatedPermissions` set to the request's own suggestions (#625); a dialog answered at the keyboard leaves its hook running (#626) | `PermissionPrompt`: Allow / Always allow / Deny | Suggestions for "always"; edited input | Ask dock (Phase 2): the full command, allow / deny / always, then deny-with-reason and edit input (`EditInput` draws the dock's second row) |
-| Question, several answers, free text | `can_use_tool` on `AskUserQuestion`, answered through `updatedInput.answers` (#645) | The dialog; bare digit answers it, in an unfocused pane too (#413); free text reaches the model as that text (#639) | No: its own gap 1 | A structured ask tool (item 1) | Ask dock (Phase 2), with the options and a free-text answer |
-| Plan approval | `can_use_tool` on `ExitPlanMode`; probe: blocked | The dialog; `PermissionRequest` with `{plan, planFilePath}` and no suggestions (#635) | No | With the ask tool (item 1) | Ask dock (Phase 2) |
+| Permission: allow, always, edit input | `can_use_tool` with `permission_suggestions` (#645) | The dialog; `PermissionRequest` hook fires for every one (#623); "always" is `updatedPermissions` set to the request's own suggestions (#625); a dialog answered at the keyboard leaves its hook running (#626) | `PermissionPrompt`: Allow / Always allow / Deny | Suggestions for "always"; edited input | Ask dock (Phase 2): the full command, allow / deny / always, then deny-with-reason and edit input (`EditInput` draws the dock's second row) — muffit and terminal panes. Headless Claude shows the dock (Permission/Always declared) with allow / always / deny only — no edit input — and an answer is not wired to the conversation: the node routes it to the provider, which refuses a headless pane (gap) |
+| Question, several answers, free text | `can_use_tool` on `AskUserQuestion`, answered through `updatedInput.answers` (#645) | The dialog; bare digit answers it, in an unfocused pane too (#413); free text reaches the model as that text (#639) | No: its own gap 1 | A structured ask tool (item 1) | Ask dock (Phase 2), with the options and a free-text answer — muffit (its ask tool) and terminal panes. Headless Claude maps an `AskUserQuestion` to a permission ask with allow / always / deny, not the question's options (#645: a bare allow leaves it unanswered), and an answer is not wired to the conversation (gap) |
+| Plan approval | `can_use_tool` on `ExitPlanMode`; probe: blocked | The dialog; `PermissionRequest` with `{plan, planFilePath}` and no suggestions (#635) | No | With the ask tool (item 1) | Ask dock (Phase 2) — muffit and terminal panes. Headless Claude shows it as a permission ask; the source sends a bare allow, which #635 measures as ignored (it needs `updatedInput` set to the plan), and an answer is not wired to the conversation (gap) |
 | MCP form, URL | `elicitation`; probe: blocked | Terminal only (#637) | No | — | Terminal only — the form is drawn in the TUI; the pane names it and opens the terminal |
-| A subagent's ask, beside the main one | `can_use_tool` carrying the agent; probe: blocked | Hook with `agent_id` (#636); it stays answerable while the main session fires `Stop` (#657) | Local to the session: its gap 4 | Child and mesh prompts (item 2) | Ask dock (Phase 2): says "1 of 2", names the next and whose it is |
+| A subagent's ask, beside the main one | `can_use_tool` carrying the agent; probe: blocked | Hook with `agent_id` (#636); it stays answerable while the main session fires `Stop` (#657) | Local to the session: its gap 4 | Child and mesh prompts (item 2) | Ask dock (Phase 2): says "1 of 2", names the next and whose it is — terminal panes (the hook carries `agent_id`, #636). Headless Claude holds one ask at a time, names no agent, and an answer is not wired to the conversation (gap) |
 | Trust prompt, at startup | n/a — a headless session starts trusted or not at all | Terminal only: drawn before a conversation exists; a key at it waits the 8 s boot hold (#549); 2.1.282 draws no numbers and defaults to No, exit (#550); a bare digit answers the numbered form (#72, #106) | n/a | — | Terminal only — the pane sees it on screen and can open a terminal |
 
 ## Steering and keys
 
 | TUI feature | Claude, no terminal | Claude, in a terminal | muffit today | muffit, to add (Phase 3) | Where the pane draws it / why not |
 |---|---|---|---|---|---|
-| Send, images | `user` line; images: probe: blocked | Keys, paste (#619, #620) | `input` with `images` | — | Composer send (Phase 2); attach for images |
-| Send, files | `user` line; file attachments over stdin: not probed (docs/20) | — | — | — | Composer send (Phase 2); attach for files — docs/21 draws the attach control for `Files`, on its own |
-| Queue, send now, unqueue | `priority`, `cancel_async_message`; probe: blocked | Keys | `input` steers a running turn | Unqueue (item 4) | Composer: while a turn runs the button queues, a second sends now (Phase 2, `QueueNext`/`SendNow`) |
-| Interrupt | `interrupt` (#646) | Esc (#610) | `interrupt` (WS and REST) | — | Composer's Stop, drawn when `Interrupt` is declared |
+| Send, images | `user` line; images: probe: blocked | Keys, paste (#619, #620) | `input` with `images` | — | Composer send (Phase 2); attach for images — for muffit and terminal panes. A headless Claude send is not wired to the conversation: the node writes it to the provider, which refuses a headless pane (gap; the source's `Input` handler drops files and ignores `when`) |
+| Send, files | `user` line; file attachments over stdin: not probed (docs/20) | — | — | — | Composer send (Phase 2); attach for files — docs/21 draws the attach control for `Files`, on its own. Headless Claude drops files on dispatch (gap) |
+| Queue, send now, unqueue | `priority`, `cancel_async_message`; probe: blocked | Keys | `input` steers a running turn | Unqueue (item 4) | Composer: while a turn runs the button queues, a second sends now (Phase 2, `QueueNext`/`SendNow`) — for muffit. Headless Claude declares `QueueNext`/`SendNow`/`Unqueue` but the node ignores `when` and never sends `cancel_async_message` (gap) |
+| Interrupt | `interrupt` (#646) | Esc (#610) | `interrupt` (WS and REST) | — | Composer's Stop, drawn when `Interrupt` is declared — muffit sends `interrupt`. Headless Claude's `Interrupt` only marks the pane idle; it never sends the `interrupt` control request (gap) |
 | Continue, pause, resume, stop | Stop is ending the process | Keys | `continue`, `pause`, `resume`, `stop` | — | Session sheet actions (Phase 2) |
 | Background, stop a task | `background_tasks` backgrounds the running one, as ctrl+b does (#648); `stop_task` (#669) | ctrl+b (#648) | No | Both (item 3) | Tasks sheet: background, stop (Phase 2) |
 | Compact, clear | `/compact`, `/clear` as input; probe: blocked | Typed | `context.compact` | Clear (item 4) | Session sheet actions (Phase 2) |
 | Rewind | `rewind_files` (#669) | Esc Esc; the menu is offered as a question (#563) | `revert`, `rewind`, `changesets` | — | Session sheet actions (Phase 2) |
 | Fork, rename | `--fork-session`; `rename_session` (#669) | Typed | No | Both (item 4) | Session sheet actions (Phase 2); a resume of a live id is refused (#655) |
 | An aside that stays out of the history | probe: blocked | `/btw` typed | `btw` | — | Session sheet actions (Phase 2) |
-| Model: list, switch | `list_models` (#668), `set_model` (#669) | `/model` typed | `models.list`, `model.swap` | Adding a provider's model from a client (item 5) | Controls sheet, a choice row (Phase 2); the model in the facts line |
-| Effort, thinking | `set_max_thinking_tokens`, `apply_flag_settings`, both in the types, not probed | Typed | `thinking.set` | — | Controls sheet (Phase 2); effort in the facts line |
+| Model: list, switch | `list_models` (#668), `set_model` (#669) | `/model` typed | `models.list`, `model.swap` | Adding a provider's model from a client (item 5) | Controls sheet, a choice row (Phase 2); the model in the facts line. Muffit fills the options from `models.list`; headless Claude draws the row with no options — it never calls `list_models` and discards the `initialize` model list (gap) |
+| Effort, thinking | `set_max_thinking_tokens`, `apply_flag_settings`, both in the types, not probed | Typed | `thinking.set` | — | Controls sheet (Phase 2); effort in the facts line — muffit (`thinking.set`). Headless Claude draws no effort/thinking control (gap) |
 | Permission mode, rules | `set_permission_mode` (#646, #669), `list_permission_rules` (#668), `update_settings` in the types, not probed | shift+tab | `mode.set`, `permissions.set` | — | The mode as a tappable word in the composer (Phase 2); bypass is always on offer — every launch passes `--allow-dangerously-skip-permissions` |
 | Directories | `register_repo_root` (#669; whether it is what `/add-dir` does: probe: blocked) | `/add-dir` | No | — | Session sheet actions (Phase 2) |
-| MCP servers | `mcp_status` (#668), `mcp_reconnect` (#669); `mcp_toggle`, `mcp_set_servers` in the types, not probed | `/mcp` | `mcp.*` | — | Controls sheet (Phase 2) |
-| Slash commands, with completion | `initialize.commands` (the list below) | Typed | No list | A command list (item 5) | Session sheet: the source's commands as a list; `/` completion in the composer (Phase 2) |
-| `@` file completion | `file_suggestions` (#668) | Keys | No | — | Composer's `@` (Phase 2) |
+| MCP servers | `mcp_status` (#668), `mcp_reconnect` (#669); `mcp_toggle`, `mcp_set_servers` in the types, not probed | `/mcp` | `mcp.*` | — | Controls sheet (Phase 2) — muffit. Headless Claude offers `/mcp` as a session-sheet action, with no dedicated control (gap) |
+| Slash commands, with completion | `initialize.commands` (the list below) | Typed | No list | A command list (item 5) | Session sheet: the source's commands as a list (Phase 2). Headless Claude lists them but does not answer `/` completion in the composer (`convo.suggest` is not handled; gap) |
+| `@` file completion | `file_suggestions` (#668) | Keys | No | — | Composer's `@` (Phase 2) — muffit. Headless Claude does not answer `@` completion (`convo.suggest` is not handled; gap) |
 | Enter submits the box | `user` line | A CR in the same write as the text does not submit (#79); submits from 2.1.268 (#536); a CR milliseconds after a retake is kept as a newline, 300 ms later it submits (#619) | Text plus `"\r"` as one `input` (docs/18) | — | Composer send (Phase 2); for a terminal pane the CR timing is the pane's to get right (#619) |
 | Arrows and `\x7f` edit the box | n/a | One character at a time, across wrapped rows (#564) | Keys go to the TUI in its terminal; over the pane, everything but text and ctrl-c/esc is dropped (docs/18) | — | The composer is a native input; the mirror reads the box back (#558, #622, #663) |
 | Wheel scrolls the transcript | n/a | Past either end it does nothing (#613) | Keys go to the TUI | — | The transcript scrolls (Phase 2) |
@@ -88,12 +92,13 @@ the pane does instead.
 ## Claude's slash commands
 
 The 63 commands in this login's `initialize` list (Claude 2.1.326, no turn sent, #672).
-`initialize` carries a separate `terminal_slash_commands` field (#644) that names four of them;
-the four names themselves — `doctor`, `color`, `focus`, `reload-plugins` — have no log row.
-Phase 8 writes them down as terminal-only.
+`initialize` carries a separate `terminal_slash_commands` field (#644) that names four of them —
+`doctor`, `color`, `focus`, `reload-plugins` — written down below as terminal-only; the four names
+themselves have no log row.
 Muffit has no command list at all (docs/21: "No list"); where a control verb is the closest
-thing it is named. The pane draws every non-terminal command in the session sheet's command
-list, sent as input (Phase 2).
+thing it is named. The pane draws every non-terminal command in the session sheet's command list
+and fires it as a `convo.act` control request (Phase 2); whether `claude -p` accepts a slash
+command as a control-request subtype is not probed (docs/20 "Not measured").
 
 | Command | What it is | Where the pane draws it / why not |
 |---|---|---|
@@ -172,7 +177,7 @@ probe when the plan runs turns again (#670).
 |---|---|---|---|---|---|
 | Account and billing | `initialize.account`: a plan login reports `subscriptionType`, a key an `apiKeySource`, a logged-out session `tokenSource: "none"` (#661, #668) | A headless sibling asked with no prompt (#658) | Provider and model in the session | Which provider and key a session is billed to (item 6) | Session sheet, billing and limits first (Phase 2) |
 | Limits | `rate_limit_event`, `get_usage` (#658, #668) | Sibling (#658) | No | Provider rate-limit state (item 6) | Facts line: the five-hour and weekly limits (Phase 2) |
-| Context, cost | `get_context_usage`, `get_session_cost` (#668) | Transcript usage | `context`, `cost` | — | Facts line (Phase 2) |
+| Context, cost | `get_context_usage`, `get_session_cost` (#668) | Transcript usage | `context`, `cost` | — | Facts line (Phase 2). Cost is drawn for every source (headless from the `result` line); context usage is drawn for muffit and terminal panes, but headless Claude never calls `get_context_usage` (gap) |
 | Trouble and retries | `api_retry`, `assistant.error`; a refused turn ends `is_error: true`, `terminal_reason: "api_error"` (#651) | Transcript and `StopFailure` (#652) | `error` block, `turn` `failed` | Retry attempts as state | Trouble banner: one line and one button, retrying with attempt and countdown (Phase 2) |
 | Run state | `status` (#644); `session_state_changed` in the types, not probed | The session file's `status`, four values plus a reason (#344); `waitingFor` distinguishes a permission prompt from a question, 3–20 ms behind the screen (#610) | `state`, mapped to `agent_status` (docs/18) | — | The header's status mark; blocked opens the ask dock; `done` reads idle after `done.read` |
 | Fast-mode billing | #671 (Anthropic's docs): on a subscription plan fast mode is paid from usage credits, not the plan's included usage | Same | n/a | — | A money-costing control: a refusal under `overage = "refuse"` |
@@ -182,10 +187,15 @@ probe when the plan runs turns again (#670).
 
 ## Not determined
 
-- The seven commands above that are not in this login's list (`login`, `add-dir`, `resume`,
-  `btw`, `permissions`, `status`, `help`): state-dependent or absent.
-- Every cell marked "probe: blocked": the plan login refuses turns (#670).
+- The seven commands not in this login's list (`login`, `add-dir`, `resume`, `btw`, `permissions`,
+  `status`, `help`), and whether the command list changes with the model, the project, or a
+  logged-out login: each needs a no-turn `initialize` under that state (#672 was the plan login in
+  this project). Cheap — no turn — but it needs a logged-out login and a second project, so it is a
+  live probe this pass does not run.
+- Every cell marked "probe: blocked": the plan login refuses turns (#670); it needs a live probe
+  once the plan runs turns again.
 - Muffit's TUI keybindings: there is no listing to read them from until Phase 3 item 5 (the
   control and action listing verb, tested against muffit's own TUI).
-- What `register_repo_root` does relative to `/add-dir` (docs/21 Phase 0).
-- Whether the command list changes with the model, the project, or a logged-out login.
+- What `register_repo_root` does relative to `/add-dir`: #669 measured `register_repo_root`
+  registering a path as a repo root (it errors when the path is not a repo); whether that is the
+  same as `/add-dir`, which adds a working directory, needs a turn to observe both.
