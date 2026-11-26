@@ -44,20 +44,11 @@ pub enum CommandError {
 
 impl Conversations {
     /// Opens the source's conversation for the pane and runs it until the watch ends.
-    pub async fn open(
-        &mut self,
-        convo: &ConversationRef,
-        pane: &str,
-        wire: &Arc<Wire>,
-    ) {
+    pub async fn open(&mut self, convo: &ConversationRef, pane: &str, wire: &Arc<Wire>) {
         let conversation = match convo.source.open(&convo.pane).await {
             Ok(conversation) => conversation,
             Err(refusal) => {
-                wire.error(
-                    ErrorCode::SessionUnavailable,
-                    &refusal.message,
-                    Some(pane),
-                );
+                wire.error(ErrorCode::SessionUnavailable, &refusal.message, Some(pane));
                 return;
             }
         };
@@ -65,26 +56,15 @@ impl Conversations {
         let pane_key = pane.to_string();
         let wire = wire.clone();
         let pane = pane.to_string();
-        let task = tokio::spawn(conversation.run(
-            received,
-            Box::new(move |update| emit(&wire, &pane, update)),
-        ));
-        self.0.insert(
-            pane_key,
-            ConversationLink {
-                commands,
-                task,
-            },
-        );
+        let task =
+            tokio::spawn(conversation.run(received, Box::new(move |update| emit(&wire, &pane, update))));
+        self.0.insert(pane_key, ConversationLink { commands, task });
     }
 
     /// A verb the conversation takes, sent without waiting: the pane gets the refusal.
     pub fn command(&self, pane: &str, command: Command) -> Result<(), CommandError> {
         match self.0.get(pane) {
-            Some(link) => link
-                .commands
-                .try_send(command)
-                .map_err(|_| CommandError::Busy),
+            Some(link) => link.commands.try_send(command).map_err(|_| CommandError::Busy),
             None => Err(CommandError::Closed),
         }
     }
@@ -105,6 +85,10 @@ impl Conversations {
         self.0.remove(pane)
     }
 
+    pub fn has(&self, pane: &str) -> bool {
+        self.0.contains_key(pane)
+    }
+
     pub fn drain(&mut self) -> impl Iterator<Item = ConversationLink> + '_ {
         self.0.drain().map(|link| link.1)
     }
@@ -122,6 +106,24 @@ fn emit(wire: &Wire, pane: &str, update: Update) -> bool {
         Update::Facets(facets) => wire.send(&ServerMsg::ConvoFacets {
             pane: pane.into(),
             facets,
+        }),
+        Update::Composer(line) => wire.send(&ServerMsg::ConvoComposer {
+            pane: pane.into(),
+            text: line.as_ref().map(|c| c.text.clone()).filter(|t| !t.is_empty()),
+            clear: line.as_ref().and_then(|c| c.clear).map(str::to_string),
+            caret: line.as_ref().map(|c| c.caret),
+            keys: line.and_then(|c| c.keys),
+        }),
+        Update::Heard(text) => wire.send(&ServerMsg::ConvoHeard {
+            pane: pane.into(),
+            text,
+        }),
+        Update::ClaudeHooks(hooks) => wire.send(&ServerMsg::ClaudeHooks {
+            pane: pane.into(),
+            state: hooks.state,
+            scope: hooks.scope,
+            ask: hooks.ask,
+            project: hooks.project,
         }),
         Update::Asks(asks) => wire.send(&pending(pane, &asks)),
         Update::Found { query, found } => wire.send(&crate::convo::found(pane, &query, found)),
@@ -143,12 +145,7 @@ fn emit(wire: &Wire, pane: &str, update: Update) -> bool {
             pane: pane.into(),
             tasks,
         }),
-        Update::TaskOutput {
-            id,
-            at,
-            text,
-            ended,
-        } => wire.send(&ServerMsg::ConvoTask {
+        Update::TaskOutput { id, at, text, ended } => wire.send(&ServerMsg::ConvoTask {
             pane: pane.into(),
             id,
             at,
@@ -196,9 +193,7 @@ fn emit(wire: &Wire, pane: &str, update: Update) -> bool {
             text,
         }),
         Update::Missing(message) => wire.error(ErrorCode::NotFound, &message, Some(pane)),
-        Update::Failed(message) => {
-            wire.error(ErrorCode::SessionUnavailable, &message, Some(pane))
-        }
+        Update::Failed(message) => wire.error(ErrorCode::SessionUnavailable, &message, Some(pane)),
         // The seam's wider vocabulary has no wire frame until the wire learns it.
         _ => true,
     }

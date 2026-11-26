@@ -44,6 +44,7 @@ tracing.workspace = true
 ulid.workspace = true
 url.workspace = true
 zip.workspace = true
+async-trait.workspace = true
 
 [dev-dependencies]
 # Only the fake muffit daemon serves a websocket through axum; the node serves its own through yawc.

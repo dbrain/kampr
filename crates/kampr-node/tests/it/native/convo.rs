@@ -248,3 +248,47 @@ async fn a_box_watched_again_is_still_published_as_it_is_typed() {
         c.quiet().await;
     }
 }
+
+/// **A terminal pane's conversation declares what it can do structurally**, and nothing it can
+/// only do by a key the operator types at the terminal: the abilities frame is present and
+/// carries the asks and streams the hooks and the transcript provide, with the key-driven
+/// steering and input left undeclared so the pane draws no control for them.
+#[tokio::test]
+async fn a_terminal_pane_declares_its_structural_abilities() {
+    let mut c = Claude::start(true).await;
+    let pane = c.pane.clone();
+    let abilities = c
+        .client
+        .until("the pane's abilities", |c| {
+            let at = c
+                .others
+                .iter()
+                .position(|v| v["t"] == "convo.abilities" && v["pane"] == pane)?;
+            Some(c.others.remove(at))
+        })
+        .await;
+    let a = &abilities["abilities"];
+    let words = |key: &str| -> Vec<String> {
+        a[key]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        words("asks"),
+        vec![
+            "permission",
+            "always",
+            "editinput",
+            "question",
+            "freetext",
+            "plan"
+        ]
+    );
+    assert_eq!(words("streams"), vec!["text", "taskoutput", "sublive"]);
+    assert_eq!(words("facts"), vec!["trouble"]);
+    assert!(words("steer").is_empty(), "steering is by key");
+    assert!(words("input").is_empty(), "input beyond text is by key");
+}

@@ -26,6 +26,10 @@ mod wake;
 /// reply it landed in — see `FileJournal::page_before`, where the rule and its bound live.
 const PAGE: usize = 40;
 
+/// Turns in a page of a launched conversation: larger than the pane's own, because a
+/// subagent's whole conversation is usually shorter than one exchange of its parent's.
+const SUB_PAGE: usize = 200;
+
 /// How often a followed transcript is re-read where no watch could be put on it, and how often the
 /// launched conversation a reader opens is looked for (the session sets it and says nothing).
 const POLL: Duration = Duration::from_millis(400);
@@ -266,22 +270,38 @@ pub fn page(journal: &Open, pane: &str, before: Option<&str>, fresh: bool) -> Op
 /// this page replaces what a client holds is the *hub's* to decide and it already decides it —
 /// `relay::first_page` marks the first page each client is handed and leaves every later one to
 /// merge by id.
-fn reopened(journal: &Open, pane: &str, showing: Option<&[String]>, relayed: bool) -> Option<ServerMsg> {
+fn reopened(
+    journal: &Open,
+    showing: Option<&[String]>,
+    relayed: bool,
+) -> Option<kampr_core::conversation::Update> {
+    use kampr_core::conversation::Update;
     let Some(ids) = showing else {
-        return page(journal, pane, None, true);
+        return page_update(journal, None, true);
     };
     if relayed {
-        return page(journal, pane, None, false);
+        return page_update(journal, None, false);
     }
     let turns = journal.lock().unwrap().as_ref()?.page_before(None, PAGE).turns;
     match turns.iter().any(|turn| ids.contains(&turn.id)) {
-        true => Some(ServerMsg::ConvoTurn {
-            pane: pane.to_string(),
-            sub: None,
-            turns,
-        }),
-        false => page(journal, pane, None, true),
+        true => Some(Update::Turns(turns)),
+        false => page_update(journal, None, true),
     }
+}
+
+/// A page of the open transcript as an update: `fresh` is what the client is told it replaces.
+fn page_update(
+    journal: &Open,
+    before: Option<&str>,
+    fresh: bool,
+) -> Option<kampr_core::conversation::Update> {
+    use kampr_core::conversation::Update;
+    let guard = journal.lock().unwrap();
+    let page = guard.as_ref()?.page_before(before, PAGE);
+    Some(match fresh {
+        true => Update::Page(page),
+        false => Update::Older(page),
+    })
 }
 
 /// What a pane has to keep for its conversation to be the same conversation: the harness, the
@@ -326,12 +346,99 @@ pub struct ConvoCtx {
     pub hooks: Arc<crate::hooks::Hooks>,
 }
 
+/// A terminal pane's conversation: its transcript, its live preview and its hooks, behind the
+/// seam. The pump is its inside; what it cannot do structurally it does not declare.
+pub struct TerminalClaude(ConvoCtx);
+
+/// The seam's source for a terminal pane: one per watch, holding the context the pane's
+/// conversation runs on.
+pub struct PaneSource(Mutex<Option<ConvoCtx>>);
+
+impl PaneSource {
+    pub fn new(ctx: ConvoCtx) -> Self {
+        Self(Mutex::new(Some(ctx)))
+    }
+}
+
+#[async_trait::async_trait]
+impl kampr_core::conversation::Source for PaneSource {
+    fn kind(&self) -> &'static str {
+        "pane"
+    }
+    async fn open(
+        &self,
+        _pane: &str,
+    ) -> Result<Box<dyn kampr_core::conversation::Conversation>, kampr_core::conversation::Refusal> {
+        Ok(Box::new(TerminalClaude(
+            self.0.lock().unwrap().take().ok_or_else(|| {
+                kampr_core::conversation::Refusal::new("this pane's conversation is closed")
+            })?,
+        )))
+    }
+    async fn create(
+        &self,
+        _new: kampr_core::conversation::NewSession,
+    ) -> Result<String, kampr_core::conversation::Refusal> {
+        Err(kampr_core::conversation::Refusal::new(
+            "a terminal pane's conversation is its harness's, not one to create",
+        ))
+    }
+    async fn resumable(&self, _cwd: Option<&std::path::Path>) -> Vec<kampr_core::conversation::Stored> {
+        Vec::new()
+    }
+    async fn end(
+        &self,
+        _pane: &str,
+        _how: kampr_core::conversation::Ending,
+    ) -> Result<(), kampr_core::conversation::Refusal> {
+        Err(kampr_core::conversation::Refusal::new(
+            "a terminal pane's conversation ends with its harness",
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl kampr_core::conversation::Conversation for TerminalClaude {
+    async fn run(
+        self: Box<Self>,
+        commands: tokio::sync::mpsc::Receiver<kampr_core::conversation::Command>,
+        emit: kampr_core::conversation::Emit,
+    ) {
+        pump(self.0, commands, emit).await;
+    }
+}
+
+/// What a terminal pane's conversation can do, as the harness the pane runs says it: what it
+/// takes from the pane by a command is declared, and what it does only by a key the operator
+/// types at the terminal is not.
+fn terminal_abilities(agent: Option<&str>) -> kampr_core::conversation::Abilities {
+    use kampr_core::conversation::abilities::{AskAbility, Fact, Stream};
+    let mut abilities = kampr_core::conversation::Abilities::default();
+    abilities.streams.insert(Stream::Text);
+    abilities.facts.insert(Fact::Trouble);
+    if agent == Some("claude") {
+        abilities.asks.insert(AskAbility::Permission);
+        abilities.asks.insert(AskAbility::Always);
+        abilities.asks.insert(AskAbility::EditInput);
+        abilities.asks.insert(AskAbility::Question);
+        abilities.asks.insert(AskAbility::FreeText);
+        abilities.asks.insert(AskAbility::Plan);
+        abilities.streams.insert(Stream::TaskOutput);
+        abilities.streams.insert(Stream::SubLive);
+    }
+    abilities
+}
+
 /// One pane's transcript for one client: the initial page, then the tail.
 ///
 /// Turns arrive **revised, not appended** — `Journal::poll` returns what the last read added *or
 /// changed*, so a tool turn comes back under its own id when its result lands. A client that
 /// appends renders every tool twice, which is why the wire says match by id and replace.
-pub async fn pump_convo(ctx: ConvoCtx) {
+pub async fn pump(
+    ctx: ConvoCtx,
+    mut commands: tokio::sync::mpsc::Receiver<kampr_core::conversation::Command>,
+    mut emit: kampr_core::conversation::Emit,
+) {
     let ConvoCtx {
         journals,
         state_dir,
@@ -411,6 +518,12 @@ pub async fn pump_convo(ctx: ConvoCtx) {
     let mut screen_seen: Option<&'static str> = None;
 
     let herd_pane = kampr_core::split_view(&global).0.to_string();
+    let agent = herd.borrow().pane(&herd_pane).and_then(|p| p.agent.clone());
+    if !emit(kampr_core::conversation::Update::Abilities(terminal_abilities(
+        agent.as_deref(),
+    ))) {
+        return;
+    }
     loop {
         let now = pane_of(&herd, &herd_pane, &identity, &local);
         // A harness whose only handle on its session is the environment its tools carry (pi)
@@ -454,12 +567,12 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // record and *then* goes idle, so withdrawing before that read leaves the client with
         // neither the preview nor its replacement for as long as the follow tick takes to notice.
         if (!live_now || opened.is_none()) && live.showing() {
-            let (ok, news) = flush(&journal, &wire, &global, &held).await;
+            let (ok, news) = flush(&journal, &mut emit, &held).await;
             apply_news(&mut transcript_trouble, news);
             if !ok {
                 return;
             }
-            if send_live(&wire, &global, live.stop(), &held).is_err() {
+            if send_live(&mut emit, live.stop(), &held).is_err() {
                 return;
             }
         }
@@ -501,7 +614,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             // this node having looked in procfs and found no harness, which is a fact and not
             // the absence of one, and a pane with no harness has no conversation.
             let gone = matches!(now.identity.harness, Harness::Absent) || closed;
-            if (elsewhere || gone) && !retire(&wire, &global, &held) {
+            if (elsewhere || gone) && !retire(&mut emit, &held) {
                 return;
             }
             due = true;
@@ -588,7 +701,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 None if !emptied && settled_empty(&journals, &now) => {
                     misses += 1;
                     emptied = true;
-                    if !empty(&wire, &global, &held) {
+                    if !empty(&mut emit, &held) {
                         return;
                     }
                 }
@@ -616,15 +729,13 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     warm.lock().unwrap().opened = opened.clone();
                     task_files.clear();
                     let (delivered, news) =
-                        deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live)
-                            .await;
+                        deliver(&journal, &mut emit, &held, &path, relayed, &mut hooked_live).await;
                     apply_news(&mut transcript_trouble, news);
                     if !delivered
                         || !publish_facets(
                             &warm,
                             &journals,
-                            &wire,
-                            &global,
+                            &mut emit,
                             &path,
                             now.agent.as_deref(),
                             describe(&local),
@@ -644,14 +755,13 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             && let Some(path) = opened.clone()
         {
             let (delivered, news) =
-                deliver(&journal, &wire, &global, &held, &path, relayed, &mut hooked_live).await;
+                deliver(&journal, &mut emit, &held, &path, relayed, &mut hooked_live).await;
             apply_news(&mut transcript_trouble, news);
             if !delivered
                 || !publish_facets(
                     &warm,
                     &journals,
-                    &wire,
-                    &global,
+                    &mut emit,
                     &path,
                     now.agent.as_deref(),
                     describe(&local),
@@ -699,11 +809,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             // files a subagent's words as the parent's.
             match drain_sub(&followed).await {
                 Some((id, turns)) if !turns.is_empty() => {
-                    if !wire.send(&ServerMsg::ConvoTurn {
-                        pane: global.clone(),
-                        sub: Some(id),
-                        turns,
-                    }) {
+                    if !emit(kampr_core::conversation::Update::SubTurns { id, turns }) {
                         return;
                     }
                 }
@@ -711,10 +817,10 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
             // The shells the agent runs write their output to the per-user tmp task directory,
             // not beside the transcript (#649), and a watched one is read for its growth.
-            if let Some(path) = opened.clone() {
-                if !tasks_tick(&path, &hooks, &herd_pane, &global, &wire, &mut task_files).await {
-                    return;
-                }
+            if let Some(path) = opened.clone()
+                && !tasks_tick(&path, &hooks, &herd_pane, &mut emit, &mut task_files).await
+            {
+                return;
             }
             match drain(&journal).await {
                 Ok((mut turns, news)) if !turns.is_empty() => {
@@ -731,12 +837,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                         turns.insert(0, kampr_journal::retired());
                     }
                     holding(&held, &turns);
-                    let revised = ServerMsg::ConvoTurn {
-                        pane: global.clone(),
-                        sub: None,
-                        turns,
-                    };
-                    if !wire.send(&revised) {
+                    if !emit(kampr_core::conversation::Update::Turns(turns)) {
                         return;
                     }
                 }
@@ -762,20 +863,14 @@ pub async fn pump_convo(ctx: ConvoCtx) {
         // still be told its turn failed.
         let current = trouble_now(transcript_trouble.as_ref(), &hooks, &herd_pane);
         if current != trouble_out {
-            if !wire.send(&ServerMsg::ConvoTrouble {
-                pane: global.clone(),
-                trouble: current.clone(),
-            }) {
+            if !emit(kampr_core::conversation::Update::Trouble(current.clone())) {
                 return;
             }
             trouble_out = current;
         }
         let wanted = tasks_now(&hooks, &herd_pane);
         if wanted != tasks_out {
-            if !wire.send(&ServerMsg::ConvoTasks {
-                pane: global.clone(),
-                tasks: wanted.clone(),
-            }) {
+            if !emit(kampr_core::conversation::Update::Tasks(wanted.clone())) {
                 return;
             }
             tasks_out = wanted;
@@ -796,10 +891,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     screen_seen,
                 )
                 .await
-                && !wire.send(&ServerMsg::ConvoFacets {
-                    pane: global.clone(),
-                    facets: moved,
-                })
+                && !emit(kampr_core::conversation::Update::Facets(moved))
             {
                 return;
             }
@@ -831,7 +923,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     desk_read.owe_after(DESK_POLL);
                 }
                 if let Some(moved) = desk.moved(line)
-                    && !wire.send(&desk_frame(&global, moved))
+                    && !emit(kampr_core::conversation::Update::Composer(moved))
                 {
                     return;
                 }
@@ -881,7 +973,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                     }
                     None => live.stop(),
                 };
-                if send_live(&wire, &global, change, &held).is_err() {
+                if send_live(&mut emit, change, &held).is_err() {
                     return;
                 }
                 if screen_seen != before {
@@ -894,7 +986,7 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             true => hooked_live.next(hooks.live(&herd_pane)),
             false => hooked_live.next(None),
         };
-        if send_live(&wire, &global, change, &held).is_err() {
+        if send_live(&mut emit, change, &held).is_err() {
             return;
         }
 
@@ -906,7 +998,9 @@ pub async fn pump_convo(ctx: ConvoCtx) {
                 .or_else(|| now.cwd.clone().map(PathBuf::from));
             let told = (project, claude);
             if hooks_told.as_ref() != Some(&told) {
-                if !wire.send(&hooks.frame(&global, told.0.as_deref(), claude)) {
+                if !emit(kampr_core::conversation::Update::ClaudeHooks(
+                    hooks.seam_frame(told.0.as_deref(), claude),
+                )) {
                     return;
                 }
                 hooks_told = Some(told);
@@ -978,13 +1072,51 @@ pub async fn pump_convo(ctx: ConvoCtx) {
             }
             said = heard.recv() => match said {
                 Ok((pane, text)) if pane == herd_pane => {
-                    if !wire.send(&ServerMsg::ConvoHeard { pane: global.clone(), text }) {
+                    if !emit(kampr_core::conversation::Update::Heard(text)) {
                         return;
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
                 _ => {}
             },
+            command = commands.recv() => {
+                match command {
+                    Some(kampr_core::conversation::Command::Older { before }) => {
+                        if let Some(page) = page_update(&journal, before.as_deref(), false)
+                            && !emit(page)
+                        {
+                            return;
+                        }
+                    }
+                    Some(kampr_core::conversation::Command::Find { query, cap }) => {
+                        if let Some(found) =
+                            journal.lock().unwrap().as_ref().map(|j| j.search(&query, cap))
+                            && !emit(kampr_core::conversation::Update::Found { query, found })
+                        {
+                            return;
+                        }
+                    }
+                    Some(kampr_core::conversation::Command::Sub { id, before }) => {
+                        if let Some(transcript) = opened.clone()
+                            && let Ok(sub) = journals.open_sub(&id, &transcript)
+                        {
+                            let mut sub =
+                                crate::pasted::Shown::over(sub, &state_dir);
+                            if sub.poll().is_err() {
+                                tracing::debug!(pane = %global, "a launched conversation is unreadable");
+                            } else if emit(kampr_core::conversation::Update::SubPage {
+                                id: id.clone(),
+                                page: sub.page_before(before.as_deref(), SUB_PAGE),
+                            }) {
+                                *followed.lock().unwrap() = Some((id, sub));
+                            } else {
+                                return;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 }
@@ -1042,8 +1174,7 @@ async fn switched(followed: &Followed, from: Option<&Path>) {
 /// pump that skipped this would sit on a socket that had been sent no conversation at all.
 async fn deliver(
     journal: &Open,
-    wire: &Wire,
-    pane: &str,
+    emit: &mut kampr_core::conversation::Emit,
     held: &Held,
     transcript: &Path,
     relayed: bool,
@@ -1058,7 +1189,7 @@ async fn deliver(
         .as_ref()
         .filter(|(path, _)| path == transcript)
         .map(|(_, ids)| ids.clone());
-    if !withdraw(wire, pane, held, transcript) {
+    if !withdraw(emit, held, transcript) {
         return (false, Vec::new());
     }
     // The first read is the page the client is about to be sent, so it must not also arrive behind
@@ -1066,21 +1197,26 @@ async fn deliver(
     // watching; on a cold one it is the whole file. Its trouble news is handed back, because a
     // failure at the tail of a resumed session is exactly what the reader wanted to be told.
     let (_, news) = drain(journal).await.unwrap_or_default();
-    match reopened(journal, pane, showing_already.as_deref(), relayed) {
-        Some(first) if wire.send(&first) => {
-            if let ServerMsg::Convo { turns, .. } | ServerMsg::ConvoTurn { turns, .. } = &first {
-                live.record(turns);
-            }
+    match reopened(journal, showing_already.as_deref(), relayed) {
+        Some(first) if emit(first.clone()) => {
+            let turns: &[Turn] = match &first {
+                kampr_core::conversation::Update::Page(p) => &p.turns,
+                kampr_core::conversation::Update::Older(p) => &p.turns,
+                kampr_core::conversation::Update::Turns(turns) => turns.as_slice(),
+                _ => &[],
+            };
+            live.record(turns);
             // The other half of the same blind spot: which shape went out, and how much of it. A
             // page and a revision are the difference between a client drawing the conversation and
             // a client merging into one it is assumed to already have, and a pane reported as
             // showing nothing has no other way to be told apart from a pane sent nothing.
             let (kind, count) = match &first {
-                ServerMsg::Convo { turns, .. } => ("page", turns.len()),
-                ServerMsg::ConvoTurn { turns, .. } => ("revision", turns.len()),
+                kampr_core::conversation::Update::Page(p) => ("page", p.turns.len()),
+                kampr_core::conversation::Update::Older(p) => ("page", p.turns.len()),
+                kampr_core::conversation::Update::Turns(turns) => ("revision", turns.len()),
                 _ => ("other", 0),
             };
-            tracing::info!(pane = %pane, kind, turns = count, "conversation delivered");
+            tracing::info!(kind, turns = count, "conversation delivered");
         }
         _ => return (false, news),
     }
@@ -1102,8 +1238,7 @@ async fn deliver(
 async fn publish_facets(
     warm: &Warmth,
     journals: &Journals,
-    wire: &Wire,
-    pane: &str,
+    emit: &mut kampr_core::conversation::Emit,
     transcript: &Path,
     agent: Option<&str>,
     marker: Option<SessionMarker>,
@@ -1136,27 +1271,21 @@ async fn publish_facets(
             .map(FacetFeed::last)
             .unwrap_or_default(),
     };
-    wire.send(&ServerMsg::ConvoFacets {
-        pane: pane.to_string(),
-        facets: opening,
-    })
+    emit(kampr_core::conversation::Update::Facets(opening))
 }
 
 /// Sends whatever the transcript has grown by, if anything, and hands back the trouble news the
 /// same read carried, so the caller can file it. A read that fails is left to the
 /// follow tick, which re-derives the transcript rather than dropping a turn.
-async fn flush(journal: &Open, wire: &Wire, pane: &str, held: &Held) -> (bool, Vec<TroubleNews>) {
+async fn flush(
+    journal: &Open,
+    emit: &mut kampr_core::conversation::Emit,
+    held: &Held,
+) -> (bool, Vec<TroubleNews>) {
     match drain(journal).await {
         Ok((turns, news)) if !turns.is_empty() => {
             holding(held, &turns);
-            (
-                wire.send(&ServerMsg::ConvoTurn {
-                    pane: pane.to_string(),
-                    sub: None,
-                    turns,
-                }),
-                news,
-            )
+            (emit(kampr_core::conversation::Update::Turns(turns)), news)
         }
         Ok((_, news)) => (true, news),
         Err(_) => (true, Vec::new()),
@@ -1177,18 +1306,14 @@ fn superseded(journal: &Open, panes: &PaneRegistry, local: &str) -> bool {
 
 /// A live turn is a *revision* like any other, which is what lets it be withdrawn: the same id
 /// with no blocks, and a client that matches by id and replaces is rid of it.
-fn send_live(wire: &Wire, pane: &str, change: Change, held: &Held) -> Result<(), ()> {
+fn send_live(emit: &mut kampr_core::conversation::Emit, change: Change, held: &Held) -> Result<(), ()> {
     let turns = match change {
         Change::Held => return Ok(()),
         Change::Show(turn) => vec![turn],
         Change::Retire => vec![kampr_journal::retired()],
     };
     holding(held, &turns);
-    match wire.send(&ServerMsg::ConvoTurn {
-        pane: pane.to_string(),
-        sub: None,
-        turns,
-    }) {
+    match emit(kampr_core::conversation::Update::Turns(turns)) {
         true => Ok(()),
         false => Err(()),
     }
@@ -1235,18 +1360,6 @@ fn desk_line(
     }
     let rows: Vec<&str> = screen.rows.iter().map(String::as_str).collect();
     reader(&rows, screen.caret, screen.frame)
-}
-
-/// An empty box goes out as `text: null`, which is what took the strip down before a box could be
-/// typed into; `keys` is what says it is drawn.
-fn desk_frame(pane: &str, line: Option<Composed>) -> ServerMsg {
-    ServerMsg::ConvoComposer {
-        pane: pane.to_string(),
-        text: line.as_ref().map(|c| c.text.clone()).filter(|t| !t.is_empty()),
-        clear: line.as_ref().and_then(|c| c.clear).map(str::to_string),
-        caret: line.as_ref().map(|c| c.caret),
-        keys: line.and_then(|c| c.keys),
-    }
 }
 
 fn status_of(herd: &watch::Receiver<Arc<HerdModel>>, global: &str) -> AgentStatus {
@@ -1350,11 +1463,11 @@ fn holding(held: &Held, turns: &[Turn]) {
 /// above the old conversation instead of in place of it, which reads exactly like the panel
 /// refusing to update. Withdrawing first is the existing retirement mechanism applied to the
 /// whole conversation: a turn carrying no blocks is not drawn.
-fn withdraw(wire: &Wire, pane: &str, held: &Held, fresh: &Path) -> bool {
+fn withdraw(emit: &mut kampr_core::conversation::Emit, held: &Held, fresh: &Path) -> bool {
     let holding = held.lock().unwrap().take();
     match holding {
         Some((path, _)) if path == fresh => true,
-        Some((_, ids)) => send_retirement(wire, pane, ids),
+        Some((_, ids)) => send_retirement(emit, ids),
         None => true,
     }
 }
@@ -1372,17 +1485,14 @@ fn withdraw(wire: &Wire, pane: &str, held: &Held, fresh: &Path) -> bool {
 ///
 /// Sent whether or not any turn was held, because the two are not held together: a client that
 /// paged away from the transcript still has the strip on its screen.
-fn retire(wire: &Wire, pane: &str, held: &Held) -> bool {
+fn retire(emit: &mut kampr_core::conversation::Emit, held: &Held) -> bool {
     let holding = held.lock().unwrap().take();
     if let Some((_, ids)) = holding
-        && !send_retirement(wire, pane, ids)
+        && !send_retirement(emit, ids)
     {
         return false;
     }
-    wire.send(&ServerMsg::ConvoFacets {
-        pane: pane.to_string(),
-        facets: Facets::default(),
-    })
+    emit(kampr_core::conversation::Update::Facets(Facets::default()))
 }
 
 /// The harness process that announced the pane's session, kept so its losing the name can be told
@@ -1417,22 +1527,16 @@ fn settled_empty(journals: &Journals, now: &Handle) -> bool {
         }
 }
 
-fn empty(wire: &Wire, pane: &str, held: &Held) -> bool {
+fn empty(emit: &mut kampr_core::conversation::Emit, held: &Held) -> bool {
     held.lock().unwrap().take();
-    wire.send(&ServerMsg::Convo {
-        pane: pane.to_string(),
+    emit(kampr_core::conversation::Update::Page(kampr_journal::Page {
         cursor: None,
         more: false,
-        fresh: true,
-        sub: None,
         turns: Vec::new(),
-    }) && wire.send(&ServerMsg::ConvoFacets {
-        pane: pane.to_string(),
-        facets: Facets::default(),
-    })
+    })) && emit(kampr_core::conversation::Update::Facets(Facets::default()))
 }
 
-fn send_retirement(wire: &Wire, pane: &str, ids: Vec<String>) -> bool {
+fn send_retirement(emit: &mut kampr_core::conversation::Emit, ids: Vec<String>) -> bool {
     if ids.is_empty() {
         return true;
     }
@@ -1440,11 +1544,7 @@ fn send_retirement(wire: &Wire, pane: &str, ids: Vec<String>) -> bool {
         .into_iter()
         .map(|id| Turn::new(id, Role::Assistant, None))
         .collect();
-    wire.send(&ServerMsg::ConvoTurn {
-        pane: pane.to_string(),
-        sub: None,
-        turns,
-    })
+    emit(kampr_core::conversation::Update::Turns(turns))
 }
 
 /// Whether the pane named a *different* session, rather than merely stopped naming the
@@ -1553,37 +1653,40 @@ fn trouble_now(
     hooks: &crate::hooks::Hooks,
     pane: &str,
 ) -> Option<kampr_core::conversation::Trouble> {
-    transcript
-        .cloned()
-        .map(wire_trouble)
-        .or_else(|| hooks.facts(pane).and_then(|facts| facts.failure).map(wire_failure))
+    transcript.cloned().map(wire_trouble).or_else(|| {
+        hooks
+            .facts(pane)
+            .and_then(|facts| facts.failure)
+            .map(wire_failure)
+    })
 }
 
 /// The transcript's trouble onto the wire's shape, with the fix a known kind names.
 fn wire_trouble(trouble: kampr_journal::Trouble) -> kampr_core::conversation::Trouble {
     let fix = match trouble.kind.as_str() {
         "not-logged-in" | "login-expired" => Some(kampr_core::conversation::Fix::Login),
-        "rate-limit" | "overloaded" => trouble
-            .retry
-            .as_ref()
-            .map(|retry| {
-                kampr_core::conversation::Fix::Wait {
+        "rate-limit" | "overloaded" => {
+            trouble
+                .retry
+                .as_ref()
+                .map(|retry| kampr_core::conversation::Fix::Wait {
                     until: stamp(SystemTime::now() + Duration::from_millis(retry.in_ms)),
-                }
-            }),
+                })
+        }
         _ => None,
     };
     kampr_core::conversation::Trouble {
         kind: trouble.kind,
         text: trouble.text,
-        status: trouble.status.map(|status| status.to_string()).unwrap_or_default(),
-        retry: trouble
-            .retry
-            .map(|retry| kampr_core::conversation::Retry {
-                attempt: retry.attempt,
-                of: retry.of,
-                in_ms: retry.in_ms,
-            }),
+        status: trouble
+            .status
+            .map(|status| status.to_string())
+            .unwrap_or_default(),
+        retry: trouble.retry.map(|retry| kampr_core::conversation::Retry {
+            attempt: retry.attempt,
+            of: retry.of,
+            in_ms: retry.in_ms,
+        }),
         fix,
     }
 }
@@ -1684,8 +1787,7 @@ async fn tasks_tick(
     transcript: &Path,
     hooks: &crate::hooks::Hooks,
     pane: &str,
-    global: &str,
-    wire: &Wire,
+    emit: &mut kampr_core::conversation::Emit,
     files: &mut std::collections::HashMap<String, (PathBuf, u64, Option<String>)>,
 ) -> bool {
     let dir = std::env::temp_dir()
@@ -1696,9 +1798,7 @@ async fn tasks_tick(
     let facts = hooks.facts(pane).unwrap_or_default();
     let known: Vec<(String, u64, Option<String>)> = files
         .iter()
-        .map(|(id, (_path, offset, tool))| {
-            (id.clone(), *offset, tool.clone())
-        })
+        .map(|(id, (_path, offset, tool))| (id.clone(), *offset, tool.clone()))
         .collect();
     let ticks = tokio::task::spawn_blocking(move || {
         let mut entries: Vec<(String, PathBuf, Option<SystemTime>)> = Vec::new();
@@ -1730,8 +1830,7 @@ async fn tasks_tick(
                     let (text, ended) = grown(&path, *offset, tool.as_deref(), &facts);
                     // A shell Claude's own `Stop` still names as running keeps going after its
                     // tool call came back: it was backgrounded, not finished.
-                    let ended =
-                        ended.filter(|_| !facts.bg.iter().any(|b| b.id == stem));
+                    let ended = ended.filter(|_| !facts.bg.iter().any(|b| b.id == stem));
                     ticks.push(TaskTick {
                         id: stem,
                         offset: text_end(&path, *offset),
@@ -1776,29 +1875,21 @@ async fn tasks_tick(
         match ended {
             Some(ok) => {
                 files.remove(&tick.id);
-                if !wire.send(&ServerMsg::ConvoTask {
-                    pane: global.to_string(),
+                if !emit(kampr_core::conversation::Update::TaskOutput {
                     id,
                     at: now_ms(),
                     text,
-                    ended: Some(kampr_core::conversation::TaskEnd {
-                        ok,
-                        summary: None,
-                    }),
+                    ended: Some(kampr_core::conversation::TaskEnd { ok, summary: None }),
                 }) {
                     return false;
                 }
             }
             None => {
-                files.insert(
-                    tick.id.clone(),
-                    (tick.path, tick.offset, tick.tool),
-                );
+                files.insert(tick.id.clone(), (tick.path, tick.offset, tick.tool));
                 if text.is_empty() {
                     continue;
                 }
-                if !wire.send(&ServerMsg::ConvoTask {
-                    pane: global.to_string(),
+                if !emit(kampr_core::conversation::Update::TaskOutput {
                     id,
                     at: now_ms(),
                     text,
@@ -1831,12 +1922,7 @@ fn bind(
         return None;
     }
     let tool = in_flight.pop().unwrap();
-    let postdates = mtime.is_some_and(|mtime| {
-        facts
-            .tools
-            .get(&tool)
-            .is_some_and(|started| mtime >= started)
-    });
+    let postdates = mtime.is_some_and(|mtime| facts.tools.get(&tool).is_some_and(|started| mtime >= started));
     (postdates || Some(stem) == newest).then_some(tool)
 }
 

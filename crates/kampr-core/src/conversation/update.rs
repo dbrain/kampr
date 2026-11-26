@@ -5,7 +5,7 @@ use crate::conversation::control::{Action, Control};
 use crate::conversation::facts::{
     ContextUse, Cost, Limits, RunState, SessionFacts, Suggestion, Task, TaskEnd, Trouble,
 };
-use kampr_journal::{ConvoFound, Facets, Page, Turn};
+use kampr_journal::{Composed, ConvoFound, Facets, Page, Turn};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -16,6 +16,9 @@ pub enum Update {
     Older(Page),
     Live(Live),
     Facets(Facets),
+    Composer(Option<Composed>),
+    Heard(String),
+    ClaudeHooks(ClaudeHooks),
     Asks(Vec<Ask>),
     Found {
         query: String,
@@ -86,6 +89,16 @@ pub struct Notice {
     pub text: String,
 }
 
+/// The state of Claude's hooks on a terminal pane, as the node measures it: where they are
+/// installed, whether they will answer, and the project they were told about.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClaudeHooks {
+    pub state: crate::wire::HooksState,
+    pub scope: Option<crate::wire::HooksScope>,
+    pub ask: bool,
+    pub project: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -108,6 +121,14 @@ mod tests {
             }),
             Update::Live(Live::default()),
             Update::Facets(Facets::default()),
+            Update::Composer(None),
+            Update::Heard("h".into()),
+            Update::ClaudeHooks(ClaudeHooks {
+                state: crate::wire::HooksState::Current,
+                scope: None,
+                ask: true,
+                project: None,
+            }),
             Update::Asks(Vec::new()),
             Update::Found {
                 query: "q".into(),
@@ -155,10 +176,7 @@ mod tests {
             Update::Controls(Vec::new()),
             Update::Actions(Vec::new()),
             Update::Limits(Limits::default()),
-            Update::Context(ContextUse {
-                used: 0,
-                total: 0,
-            }),
+            Update::Context(ContextUse { used: 0, total: 0 }),
             Update::Cost(Cost {
                 usd: 0.0,
                 input_tokens: 0,
@@ -174,9 +192,7 @@ mod tests {
                 ok: true,
                 text: None,
             },
-            Update::Notice(Notice {
-                text: "n".into(),
-            }),
+            Update::Notice(Notice { text: "n".into() }),
             Update::Missing("m".into()),
             Update::Failed("f".into()),
         ];

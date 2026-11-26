@@ -8,8 +8,8 @@ use crate::state::{BUILD, Node};
 use crate::wire::Wire;
 use base64::Engine;
 use kampr_auth::{Device, Entry, Role};
-use kampr_core::conversation::{Reply, Steer, SuggestKind};
 use kampr_core::PaneRegistry;
+use kampr_core::conversation::{Reply, Steer, SuggestKind};
 use kampr_core::provider::Input;
 use kampr_core::registry::{PaneHold, Source, Written};
 use kampr_core::wire::{ClientMsg, ErrorCode, PROTOCOL, PendingSource, ServerMsg};
@@ -859,7 +859,13 @@ impl Session {
                 typed,
                 id,
             } => self.paste(&pane, &b64, name.as_deref(), typed, id).await,
-            ClientMsg::Answer { pane, key, id, text, reply } => {
+            ClientMsg::Answer {
+                pane,
+                key,
+                id,
+                text,
+                reply,
+            } => {
                 self.answer(&pane, &key, id.as_deref(), text.as_deref(), reply.as_ref())
                     .await
             }
@@ -873,27 +879,11 @@ impl Session {
             } => self.find(&pane, &query, backward, from).await,
             ClientMsg::ConvoFind { pane, query } => self.convo_find(&pane, &query),
             ClientMsg::ConvoSub { pane, id, before } => self.convo_sub(&pane, &id, before.as_deref()),
-            ClientMsg::ConvoSteer {
-                pane,
-                steer,
-                text,
-            } => self.convo_steer(&pane, steer, text),
-            ClientMsg::ConvoSet {
-                pane,
-                control,
-                value,
-            } => self.convo_set(&pane, control, value),
-            ClientMsg::ConvoAct {
-                pane,
-                action,
-                args,
-            } => self.convo_act(&pane, action, args),
+            ClientMsg::ConvoSteer { pane, steer, text } => self.convo_steer(&pane, steer, text),
+            ClientMsg::ConvoSet { pane, control, value } => self.convo_set(&pane, control, value),
+            ClientMsg::ConvoAct { pane, action, args } => self.convo_act(&pane, action, args),
             ClientMsg::ConvoFollow { pane, id, from } => self.convo_follow(&pane, &id, from),
-            ClientMsg::ConvoSuggest {
-                pane,
-                kind,
-                query,
-            } => self.convo_suggest(&pane, kind, &query),
+            ClientMsg::ConvoSuggest { pane, kind, query } => self.convo_suggest(&pane, kind, &query),
             ClientMsg::DoneRead { pane, at } => self.done_read(&pane, at),
             ClientMsg::Resync => self.resync().await,
             ClientMsg::Ping { n } => {
@@ -947,7 +937,7 @@ impl Session {
             Streams::Local(&session.registry, &local),
             pane,
         );
-        let mut tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
+        let tasks = vec![tokio::spawn(pump_pane(PaneStreamCtx {
             registry: session.registry.clone(),
             screen: pending::Screen::of(&session, &local),
             herd: self.node.subscribe_herd(),
@@ -981,7 +971,7 @@ impl Session {
                 .entry(pane.to_string())
                 .or_insert_with(convo::held)
                 .clone();
-            tasks.push(tokio::spawn(convo::pump_convo(ConvoCtx {
+            let ctx = ConvoCtx {
                 state_dir: self.node.state_dir.clone(),
                 journals: self.node.journals(),
                 panes: session.registry.clone(),
@@ -990,13 +980,24 @@ impl Session {
                 describe: Box::new(move |local| convo::marker_of(&for_marker, &marker_session, local)),
                 wire: self.wire.clone(),
                 global: pane.to_string(),
-                local,
+                local: local.clone(),
                 warm: warm.clone(),
                 held,
                 followed: followed.clone(),
                 relayed: self.caller == Caller::Hub,
                 hooks: self.node.hooks.clone(),
-            })));
+            };
+            self.conversations
+                .open(
+                    &crate::conversations::ConversationRef {
+                        source: Arc::new(convo::PaneSource::new(ctx)),
+                        pane: local.clone(),
+                        terminal: true,
+                    },
+                    pane,
+                    &self.wire,
+                )
+                .await;
         }
         self.panes.insert(
             pane.to_string(),
@@ -1069,16 +1070,17 @@ impl Session {
                 );
             }
             Err(crate::conversations::CommandError::Closed) => {
-                self.wire
-                    .error(ErrorCode::NotFound, "no conversation open for this pane", Some(pane));
+                self.wire.error(
+                    ErrorCode::NotFound,
+                    "no conversation open for this pane",
+                    Some(pane),
+                );
             }
         }
     }
 
     fn has_conversation(&self, pane: &str) -> bool {
-        self.node
-            .resolve(pane)
-            .is_some_and(|(session, local)| session.conversation(&local).is_some())
+        self.conversations.has(pane)
     }
 
     /// A pane on another host. The hub holds one relay per pane however many clients are looking
@@ -1374,10 +1376,7 @@ impl Session {
             );
             return;
         }
-        self.convo_command(
-            pane,
-            kampr_core::conversation::Command::Set { control, value },
-        );
+        self.convo_command(pane, kampr_core::conversation::Command::Set { control, value });
     }
 
     fn convo_act(&self, pane: &str, action: String, args: Value) {
@@ -1389,10 +1388,7 @@ impl Session {
             );
             return;
         }
-        self.convo_command(
-            pane,
-            kampr_core::conversation::Command::Act { action, args },
-        );
+        self.convo_command(pane, kampr_core::conversation::Command::Act { action, args });
     }
 
     fn convo_follow(&self, pane: &str, id: &str, from: u64) {

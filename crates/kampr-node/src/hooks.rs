@@ -265,6 +265,21 @@ impl Hooks {
     }
 
     pub fn frame(&self, pane: &str, project: Option<&Path>, claude: Option<u32>) -> ServerMsg {
+        let hooks = self.seam_frame(project, claude);
+        ServerMsg::ClaudeHooks {
+            pane: pane.to_string(),
+            state: hooks.state,
+            scope: hooks.scope,
+            ask: hooks.ask,
+            project: hooks.project,
+        }
+    }
+
+    pub fn seam_frame(
+        &self,
+        project: Option<&Path>,
+        claude: Option<u32>,
+    ) -> kampr_core::conversation::ClaudeHooks {
         let files = install::Files::new(&self.home, project);
         let (state, scope) = match files.status() {
             (HooksState::Absent, _)
@@ -274,8 +289,7 @@ impl Hooks {
             }
             found => found,
         };
-        ServerMsg::ClaudeHooks {
-            pane: pane.to_string(),
+        kampr_core::conversation::ClaudeHooks {
             state,
             scope,
             ask: self.asks.load(Ordering::Relaxed),
@@ -373,10 +387,12 @@ impl Hooks {
             return;
         };
         let mut state = self.state.lock().unwrap();
-        state.facts.entry(pane.to_string()).or_default().tools.insert(
-            id.to_string(),
-            SystemTime::now(),
-        );
+        state
+            .facts
+            .entry(pane.to_string())
+            .or_default()
+            .tools
+            .insert(id.to_string(), SystemTime::now());
         drop(state);
         self.bump();
     }
