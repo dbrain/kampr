@@ -285,4 +285,15 @@ mod tests {
         let url = env.iter().find(|(k, _)| k == "ANTHROPIC_BASE_URL").map(|(_, v)| v.as_str());
         assert_eq!(url, Some(""), "a production plan child must not inherit a base URL");
     }
+
+    // guard 2, the test half: a mock address is only ever present under KAMPR_TEST, and while it
+    // is set it is what crosses under plan — a stray node base URL does not.
+    #[test]
+    fn the_mock_address_crosses_under_plan_while_a_mock_is_set() {
+        let mut plan = plan();
+        plan.base_url = Some("http://127.0.0.1:18080".into());
+        let env = env(&plan, vars(&[("ANTHROPIC_BASE_URL", "http://real/"), ("HOME", "/h")]));
+        let url = env.iter().find(|(k, _)| k == "ANTHROPIC_BASE_URL").map(|(_, v)| v.as_str());
+        assert_eq!(url, Some("http://127.0.0.1:18080"), "the mock, not a stray URL: {env:?}");
+    }
 }
