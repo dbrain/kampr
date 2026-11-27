@@ -12,7 +12,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 mod convo;
-mod fake;
+pub(crate) mod fake;
 mod linked;
 mod live;
 mod refused;
@@ -243,7 +243,7 @@ impl Client {
     }
 }
 
-async fn eventually<T>(what: &str, mut found: impl FnMut() -> Option<T>) -> T {
+pub(crate) async fn eventually<T>(what: &str, mut found: impl FnMut() -> Option<T>) -> T {
     let deadline = tokio::time::Instant::now() + SOON;
     loop {
         if let Some(t) = found() {

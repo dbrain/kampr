@@ -18,6 +18,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 pub(crate) type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+mod muffit;
 mod native;
 
 static SESSIONS_STARTED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);

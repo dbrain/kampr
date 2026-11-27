@@ -17,6 +17,15 @@ use tokio::sync::mpsc;
 
 const FAKE: &str = include_str!("support/fake-claude.py");
 
+/// The environment the stand-in child wrote as it started. It writes as it starts, so a read can
+/// land between its open and its write.
+fn started_env(rig: &Rig) -> std::collections::BTreeMap<String, String> {
+    let path = rig.dir.path().join("env.json");
+    let read = || serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok();
+    wait_for("the child to start", 20, || read().is_some());
+    read().unwrap()
+}
+
 fn wait_for(what: &str, secs: u64, mut found: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(secs);
     while !found() {
@@ -482,10 +491,7 @@ fn a_headless_child_starts_with_the_login_environment_less_what_pays() {
         },
     );
     rig.create(None);
-    let env_json = rig.dir.path().join("env.json");
-    wait_for("the child to start", 20, || env_json.exists());
-    let env: std::collections::BTreeMap<String, String> =
-        serde_json::from_str(&std::fs::read_to_string(env_json).unwrap()).unwrap();
+    let env = started_env(&rig);
 
     let bin = rig.dir.path().join("profile-bin").display().to_string();
     assert!(env["PATH"].split(':').any(|d| d == bin), "{:?}", env["PATH"]);
@@ -539,10 +545,7 @@ fn a_claude_only_bashrc_finds_starts_with_bashrcs_path() {
         },
     );
     rig.create(None);
-    let env_json = rig.dir.path().join("env.json");
-    wait_for("the child to start", 20, || env_json.exists());
-    let env: std::collections::BTreeMap<String, String> =
-        serde_json::from_str(&std::fs::read_to_string(env_json).unwrap()).unwrap();
+    let env = started_env(&rig);
     let bin = rig.dir.path().join("bashrc-bin").display().to_string();
     assert!(env["PATH"].split(':').any(|d| d == bin), "{:?}", env["PATH"]);
 }

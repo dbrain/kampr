@@ -250,7 +250,7 @@ struct Inner {
     /// it — [`HerdrProvider::pane_processes`] looks each pid up again and drops any whose start
     /// no longer matches, so an entry that outlives its process yields *nothing* instead of a
     /// stranger.
-    pids: Mutex<HashMap<String, Vec<PaneProcess>>>,
+    pids: Mutex<HashMap<String, Pids>>,
     reporter: Reporter,
     desk_reporter: Reporter,
     desk_agents: DeskAgents,
@@ -468,25 +468,31 @@ impl HerdrProvider {
     /// Looked up rather than cached: the pid set is as old as the last sweep, and whether each pid
     /// is still that process is a question procfs answers for free at the moment of asking.
     pub fn pane_processes(&self, pane_id: &str) -> Vec<PaneProcess> {
-        self.inner
-            .pids
-            .lock()
-            .unwrap()
-            .get(pane_id)
-            .map(|pids| {
-                pids.iter()
-                    .filter_map(|was| {
-                        let now = PaneProcess::look_up(was.pid);
-                        // The pid the kernel has handed on to somebody else, dropped rather than
-                        // answered: a marker keyed on it would resolve, and what it would resolve
-                        // to is another pane's conversation. Two `None`s pass, and deliberately —
-                        // a host with no readable procfs learns nothing either way, and refusing
-                        // every pipeline there would be a worse answer than the last look.
-                        (now.start == was.start).then_some(now)
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(pids) = self.inner.pids.lock().unwrap().get(pane_id).cloned() else {
+            return Vec::new();
+        };
+        // The pid the kernel has handed on to somebody else, dropped rather than answered: a
+        // marker keyed on it would resolve, and what it would resolve to is another pane's
+        // conversation. Two `None`s pass, and deliberately — a host with no readable procfs
+        // learns nothing either way, and refusing every pipeline there would be a worse answer
+        // than the last look.
+        let still = |was: &PaneProcess| {
+            let now = PaneProcess::look_up(was.pid);
+            (now.start == was.start).then_some(now)
+        };
+        let mut found: Vec<PaneProcess> = pids.found.iter().filter_map(still).collect();
+        // A sweep idles for 30 s with nobody watching and a job that starts quietly wakes none, so
+        // what started since the last one is walked for here: a muffit TUI started by hand names
+        // its own pid to the daemon at once, and the session it holds is this pane's only if that
+        // pid is among these.
+        if let Some(shell) = pids.shell.as_ref().and_then(still) {
+            for process in procfs::below(&kampr_proc::here(), shell.pid).all {
+                if !found.iter().any(|f| f.pid == process.pid) {
+                    found.push(PaneProcess::look_up(process.pid));
+                }
+            }
+        }
+        found
     }
 
     /// Puts the desk's own agent order back, for a caller that is shutting this node down.
@@ -860,10 +866,13 @@ impl Inner {
                     // has re-issued.
                     pids.push((
                         pane_id.clone(),
-                        foreground_pids(&info, &walked)
-                            .into_iter()
-                            .map(PaneProcess::look_up)
-                            .collect(),
+                        Pids {
+                            shell: info.shell_pid.map(PaneProcess::look_up),
+                            found: foreground_pids(&info, &walked)
+                                .into_iter()
+                                .map(PaneProcess::look_up)
+                                .collect(),
+                        },
                     ));
                     if let Some(agent) = wanted.get(&pane_id) {
                         let harness = info
@@ -942,7 +951,7 @@ impl Inner {
 
     /// Replaced wholesale rather than merged: a pane that was not read this pass has no pid set
     /// worth keeping, and a pane that closed has none at all.
-    fn record_pids(&self, snapshot: &Snapshot, read: Vec<(String, Vec<PaneProcess>)>) {
+    fn record_pids(&self, snapshot: &Snapshot, read: Vec<(String, Pids)>) {
         let live: std::collections::HashSet<&str> =
             snapshot.panes.iter().map(|p| p.pane_id.as_str()).collect();
         let mut pids = self.pids.lock().unwrap();
@@ -1386,6 +1395,13 @@ fn as_info(processes: &[ForegroundProcess]) -> ProcessInfo {
 /// herdr's own list is kept even where it is only the shell: a marker directory keyed on a pid
 /// simply will not contain a shell's, and dropping it would drop the case where herdr sees the
 /// harness and the walk cannot reach it.
+/// A pane's processes as the last sweep read them, and the shell they run under.
+#[derive(Clone)]
+struct Pids {
+    shell: Option<PaneProcess>,
+    found: Vec<PaneProcess>,
+}
+
 fn foreground_pids(info: &ProcessInfo, walked: &Foreground) -> Vec<u32> {
     let mut pids: Vec<u32> = info
         .foreground_processes
