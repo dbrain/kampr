@@ -2821,6 +2821,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kampr-codex"
+version = "0.1.152"
+dependencies = [
+ "async-trait",
+ "kampr-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "time",
+ "tokio",
+]
+
+[[package]]
 name = "kampr-core"
 version = "0.1.152"
 dependencies = [

@@ -1,0 +1,3 @@
+# probe runs: the wire logs and transcripts are 100 MB a run; the measurements live in probe-log.md
+run*/
+__pycache__/
