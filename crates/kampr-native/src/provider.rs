@@ -653,15 +653,29 @@ impl Inner {
         let harness = fg.as_ref().and_then(procs::harness);
         let agent = harness.as_ref().map(|(name, _)| name.to_string());
         let hosts = session.hosts();
-        let (cols, rows, scrollback_rows, title, screen) = match live {
-            Some(live) => live.with_screen(|s| {
+        let (cols, rows, scrollback_rows, title, screen, size_holder) = match live {
+            Some(live) => live.with_held_screen(|s, holder| {
                 let (cols, rows) = s.size();
                 let history = if s.alternate_screen() { 0 } else { s.history_rows() };
-                (cols, rows, history, s.title().to_string(), visible(s))
+                (
+                    cols,
+                    rows,
+                    history,
+                    s.title().to_string(),
+                    visible(s),
+                    Some(holder.to_string()),
+                )
             }),
             None => {
                 let (cols, rows) = live::size_of(session);
-                (cols, rows, 0, String::new(), String::new())
+                (
+                    cols,
+                    rows,
+                    0,
+                    String::new(),
+                    String::new(),
+                    session.size().map(|s| s.holder),
+                )
             }
         };
         // A program that died with mouse tracking on leaves it on, and nothing at the prompt it left
@@ -725,7 +739,7 @@ impl Inner {
                 session_id: session.id().to_string(),
                 on_desk: hosts.iter().find_map(|h| h.herdr_pane.clone()),
                 detached: hosts.is_empty(),
-                size_holder: session.size().map(|s| s.holder),
+                size_holder,
                 exited: match exit {
                     Some(exit) => Some(NativeExit {
                         code: exit.code,

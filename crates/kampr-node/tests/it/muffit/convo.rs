@@ -186,6 +186,11 @@ async fn the_pane_drives_the_session_over_the_new_verbs() {
     })
     .await;
 
+    // A chunk is only live, so the follow goes ahead of the compact on the pane's one command
+    // queue: the compact's `convo.acted` is the proof the follow was taken before the push.
+    client
+        .send(json!({ "t": "convo.follow", "pane": id, "id": "call_7", "from": 0 }))
+        .await;
     client
         .send(json!({ "t": "convo.act", "pane": id, "action": "compact", "args": {} }))
         .await;
@@ -202,9 +207,6 @@ async fn the_pane_drives_the_session_over_the_new_verbs() {
         })
         .await;
 
-    client
-        .send(json!({ "t": "convo.follow", "pane": id, "id": "call_7", "from": 0 }))
-        .await;
     fake.push(json!({ "type": "content", "blocks": [
         { "type": "tool_output_chunk", "call_id": "call_7", "stream": "stdout", "text": "Worker s1 on mock\n", "seq": 0 }
     ] }));

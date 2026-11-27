@@ -71,6 +71,10 @@ struct State {
     title: String,
     alternate: bool,
     history: History,
+    /// Taken from the journal record that sized `screen`, not from `size.json`: the keeper
+    /// renames that into place after the record, and a listing read between the two (a kqueue
+    /// watch wakes on its `.tmp`) would pair the new size with the old holder.
+    holder: String,
 }
 
 /// What `read_scrollback` answers depends on; when it moves, [`Pulses::history`] is bumped.
@@ -127,6 +131,7 @@ impl Live {
         closing: Arc<AtomicBool>,
     ) -> Arc<Self> {
         let (cols, rows) = size_of(&dir);
+        let holder = dir.size().map_or_else(|| "spawn".to_string(), |s| s.holder);
         let typed_at_report = read_at(&dir);
         let replay_end = dir.log_end().ok();
         let intake = Intake::open(resume.as_ref(), &dir, token, &closing);
@@ -140,6 +145,7 @@ impl Live {
                 title: String::new(),
                 alternate: false,
                 history: History::default(),
+                holder,
             }),
             resized: Condvar::new(),
             events: broadcast::channel(LIVE_DEPTH).0,
@@ -203,10 +209,23 @@ impl Live {
         f(&self.state.lock().unwrap().screen)
     }
 
-    fn resize(&self, cols: u16, rows: u16) -> bool {
+    pub fn with_held_screen<T>(&self, f: impl FnOnce(&Screen, &str) -> T) -> T {
+        let state = self.state.lock().unwrap();
+        f(&state.screen, &state.holder)
+    }
+
+    fn resize(&self, cols: u16, rows: u16, holder: &str) {
         let mut state = self.state.lock().unwrap();
+        let rehold = state.holder != holder;
+        if rehold {
+            state.holder = holder.to_string();
+        }
         if state.screen.size() == (cols, rows) {
-            return false;
+            drop(state);
+            if rehold {
+                self.resized.notify_all();
+            }
+            return;
         }
         state.screen.resize(cols, rows);
         // A resized screen's next diff is drawn against a blank grid of the new size, which is
@@ -219,7 +238,6 @@ impl Live {
         drop(state);
         self.resized.notify_all();
         self.activity.lock().unwrap().resized = Some(Instant::now());
-        true
     }
 
     fn history_moved(&self, state: &mut State) {
@@ -263,7 +281,9 @@ impl Live {
         let state = self.state.lock().unwrap();
         let _ = self
             .resized
-            .wait_timeout_while(state, CLAIMED, |s| s.screen.size() != (cols, rows))
+            .wait_timeout_while(state, CLAIMED, |s| {
+                s.screen.size() != (cols, rows) || s.holder != holder
+            })
             .unwrap();
         Ok(())
     }
@@ -523,7 +543,7 @@ impl Live {
                     }
                 }
                 Ok(Replay::Resize(to)) => {
-                    self.resize(to.cols, to.rows);
+                    self.resize(to.cols, to.rows, &to.holder);
                 }
                 Ok(Replay::Truncated { .. }) => {
                     let Some(resumed) = self.resume() else {
@@ -571,6 +591,7 @@ impl Live {
                     let mut state = self.state.lock().unwrap();
                     let (cols, rows) = resumed.screen.size();
                     state.screen = resumed.screen;
+                    state.holder = resumed.reader.size().holder.clone();
                     state.offset = resumed.reader.offset();
                     state.saved = match resumed.origin {
                         Origin::Checkpoint(at) => Some(at),
