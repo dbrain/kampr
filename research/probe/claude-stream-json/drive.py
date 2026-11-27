@@ -5,6 +5,7 @@
 
 Steps run in order:
     say:<text>          send a user message
+    sayjson:<json>      send that json as the whole user line
     ctl:<json>          send a control_request with that body, log the response; $TASK is the
                         task_id of the latest task_started
     wait:<type>[/<subtype>][:<secs>]   block until such a line arrives (default 90 s)
@@ -12,14 +13,17 @@ Steps run in order:
     eof                 close stdin
 
 A can_use_tool request is answered from --allow (default), --deny, or --answer <json> where the
-json is the whole `response` body. Each log line is {"t": secs since start, "dir": "<"|">", ...}.
+json is the whole `response` body. An elicitation request is answered from --elicit <json>,
+default {"behavior":"accept","content":{"answer":"ok"}}. Each log line is
+{"t": secs since start, "dir": "<"|">", ...}.
 """
 import json, os, subprocess, sys, threading, time, uuid
 
 out_path, rest = sys.argv[1], sys.argv[2:]
 split = rest.index("--")
 opts, steps = rest[:split], rest[split + 1:]
-env, extra, mode, answer = dict(os.environ), [], "allow", None
+env, extra, mode, answer, elicit = dict(os.environ), [], "allow", None, \
+    {"action": "accept", "content": {}}
 i = 0
 while i < len(opts):
     o = opts[i]
@@ -31,6 +35,8 @@ while i < len(opts):
         extra.append(opts[i + 1]); i += 2
     elif o == "--answer":
         answer = json.loads(opts[i + 1]); i += 2
+    elif o == "--elicit":
+        elicit = json.loads(opts[i + 1]); i += 2
     elif o in ("--allow", "--deny", "--hold"):
         mode = o[2:]; i += 1
     else:
@@ -68,6 +74,9 @@ def reader():
                               if mode == "allow" else {"behavior": "deny", "message": "probe said no"})
             send({"type": "control_response",
                   "response": {"subtype": "success", "request_id": obj["request_id"], "response": body}})
+        if obj.get("type") == "control_request" and req.get("subtype") == "elicitation":
+            send({"type": "control_response",
+                  "response": {"subtype": "success", "request_id": obj["request_id"], "response": elicit}})
         with cond:
             seen.append(obj)
             cond.notify_all()
@@ -89,6 +98,8 @@ for step in steps:
     if kind == "say":
         send({"type": "user", "message": {"role": "user", "content": arg}, "parent_tool_use_id": None,
               "session_id": ""})
+    elif kind == "sayjson":
+        send(json.loads(arg))
     elif kind == "ctl":
         with cond:
             task = next((o["task_id"] for o in reversed(seen) if o.get("subtype") == "task_started"), "")

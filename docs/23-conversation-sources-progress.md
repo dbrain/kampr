@@ -5,14 +5,9 @@ Kept current as phases land. Branch: `conv-sources`.
 
 ## Money state (read this first)
 
-The operator's plan login **cannot run turns right now** (probe #670). `initialize`/`get_usage`
-report `subscription_type:"max"`, `rate_limits_available:true`, no overage, but every real prompt
-fails with `terminal_reason:"api_error"` — "Claude Code can't use your Claude subscription, usually
-because a payment is past due". No-turn control requests keep working.
-
-Consequence: **the turn-based Phase 0 probes are blocked** until the plan runs turns again. The
-no-turn control shapes and the billing-state finding are measured and logged (#668–#670). The
-phases that need no live Claude (1, 2, 4, 5, 7) proceed against the mock endpoint.
+The operator's plan **runs turns again** (payment fixed; the refusal of #670 is gone). `initialize`
+reports `subscriptionType:"Claude Pro"` and `get_usage` shows 5 h 72% / 7 d 47%, no overage, as of
+this session. The turn-based Phase 0 probes are done (rows 674–684 below).
 
 ## Phase 0 — probes
 
@@ -20,17 +15,37 @@ DONE (no turn spent, rows 668–670):
 - Zero-cost `get_usage`/`initialize` check: `max` plan, rate limits available, no overage.
 - No-turn read control requests (#668): `list_models`, `file_suggestions`, `mcp_status`,
   `list_permission_rules`, `get_context_usage`, `get_session_cost`.
-- No-turn state-change control requests (#669): `set_permission_mode` to/from `bypassPermissions`,
-  `rename_session`, `stop_task`, `register_repo_root`, `rewind_files`, `mcp_reconnect`.
+- No-turn state-change control requests (#669): `rename_session`, `stop_task`, `register_repo_root`,
+  `rewind_files`, `mcp_reconnect`. (`set_permission_mode` to `bypassPermissions` was read as a
+  success in #669 but does not reproduce — struck through there, corrected in #683.)
 - Fast-mode billing (#671, from Anthropic's docs): on a subscription plan fast mode is paid from
   usage credits, not the plan's included usage — a money-costing control, a refusal under
   `overage = "refuse"`.
 
-BLOCKED on the plan (turn-based headless):
-plan approval; images/files on stdin; `priority`/`cancel_async_message`; slash commands as input;
-valid `set_model` value shape; `stop_task`/`rewind_files`/`rename_session`/`file_suggestions`/
-`mcp_*`/`elicitation` during a turn; `register_repo_root` vs `/add-dir`; a subagent's `can_use_tool`;
-`result.origin` on each self-started turn; the `--allow-dangerously-skip-permissions` launch flag.
+DONE (turn-based, rows 674–684, plan paid and running, `--model haiku`):
+- Plan approval (#674): not an `initialize` state; a `can_use_tool` for `ExitPlanMode` with
+  `input.plan`; allow reverts to `dontAsk` and the plan runs.
+- Images/files on stdin (#675): `image` and `document` base64 blocks accepted; an unprocessable
+  image is stripped with an explanatory text block, not a hard failure.
+- `priority`/`cancel_async_message` (#676): cancels without a `request_id` answer
+  `success {cancelled:false}`; a queued message merges into the running turn.
+- Slash commands as input (#677): `/compact`, `/clear`, `/model` are interpreted, not sent to the
+  model; `/add-dir` goes to the model as literal text.
+- Valid `set_model` value shape (#678): alias or canonical id; the response carries the resolved
+  canonical id; omitting `model` resets to the default.
+- Controls during a turn (#679): `rename_session`/`file_suggestions`/`mcp_status`/`stop_task` all
+  work mid-turn; `rewind_files` is "not enabled".
+- `register_repo_root` vs `/add-dir` (#680): not the same; neither extends the readable
+  directories in a headless session.
+- A subagent's `can_use_tool` (#681): the main agent's shape plus one field, `agent_id`.
+- `result.origin` on self-started turns (#682): present on task-notification turns
+  (`{kind:"task-notification", producer:"session-task", runId}`), absent on user and slash turns.
+- `--allow-dangerously-skip-permissions` (#683): starts the session in `bypassPermissions`;
+  without it, the `set_permission_mode` to bypass is refused (`bypass_not_launched`) — the #669
+  reading of a success does not reproduce (struck through there).
+- Elicitation during a turn (#684): `elicitation/create` arrives as a `control_request
+  {subtype:"elicitation"}` with schema and `property_order`; the client's `{action, content}`
+  object is what the MCP server receives.
 
 BLOCKED (keeper lifecycle, need a live Claude under the keeper):
 keeper killed mid-turn; node gone while a `can_use_tool` stands; stdin held open with nobody reading stdout.
