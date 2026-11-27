@@ -215,19 +215,30 @@ fn install_launchd(
 /// Both run in a process group of their own: `kampr update` is often a child of the node it
 /// updates (a fleet run, the phone), and a bootout kills the job's process group, which would end
 /// this command between the two and leave the node unloaded until the next login.
+///
+/// `bootout` returns once it has sent SIGTERM; launchd keeps the job until it exits, up to five
+/// seconds before it kills it, and refuses a bootstrap meanwhile (37, "Operation already in
+/// progress"). So the bootstrap retries.
 fn load_launchd(path: &Path) -> bool {
+    reload_launchd("launchctl", path)
+}
+
+const RELOAD_SCRIPT: &str = r#"
+"$4" bootout "$1/$2" >/dev/null 2>&1
+n=0
+until "$4" bootstrap "$1" "$3"; do
+  n=$((n + 1))
+  [ "$n" -lt 75 ] || exit 1
+  sleep 0.2
+done
+"#;
+
+fn reload_launchd(launchctl: &str, path: &Path) -> bool {
     use std::os::unix::process::CommandExt;
     let domain = format!("gui/{}", uid());
     let plist_path = path.display().to_string();
     let loaded = Command::new("/bin/sh")
-        .args([
-            "-c",
-            r#"launchctl bootout "$1/$2" >/dev/null 2>&1; launchctl bootstrap "$1" "$3""#,
-            "sh",
-            &domain,
-            LABEL,
-            &plist_path,
-        ])
+        .args(["-c", RELOAD_SCRIPT, "sh", &domain, LABEL, &plist_path, launchctl])
         .process_group(0)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -783,6 +794,34 @@ mod tests {
             "a created session inherits the node's mount namespace, so a private /tmp is the \
              operator's agents writing somewhere their own shell cannot see: {SYSTEMD_UNIT}"
         );
+    }
+
+    #[test]
+    fn a_reload_waits_out_a_bootout_that_has_not_finished() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().display();
+        let launchctl = dir.path().join("launchctl");
+        std::fs::write(
+            &launchctl,
+            format!(
+                "#!/bin/sh\n\
+                 case \"$1\" in\n\
+                 bootout) echo 3 > {state}/busy ;;\n\
+                 bootstrap)\n\
+                   n=$(cat {state}/busy 2>/dev/null || echo 0)\n\
+                   if [ \"$n\" -gt 0 ]; then echo $((n - 1)) > {state}/busy; exit 37; fi\n\
+                   touch {state}/loaded ;;\n\
+                 esac\n"
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&launchctl, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let loaded = reload_launchd(launchctl.to_str().unwrap(), Path::new("/x/dev.kampr.node.plist"));
+
+        assert!(loaded);
+        assert!(dir.path().join("loaded").exists());
     }
 
     #[test]
