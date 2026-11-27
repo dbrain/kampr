@@ -17,6 +17,7 @@ import dev.kampr.shared.theme.Ground
 import dev.kampr.shared.theme.LocalTokens
 import dev.kampr.shared.theme.SoftTheme
 import dev.kampr.shared.theme.TypeScale
+import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalPaneIo
 import dev.kampr.shared.ui.LocalSafeArea
@@ -27,6 +28,7 @@ import dev.kampr.shared.wire.Control
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SessionFacts
 import dev.kampr.shared.wire.Turn
+import kotlinx.serialization.json.JsonPrimitive
 import org.jetbrains.skia.EncodedImageFormat
 import org.jetbrains.skia.Image
 import java.io.File
@@ -54,6 +56,7 @@ private val HEADLESS_CONTROLS = listOf(
         id = "model",
         label = "Model",
         kind = "select",
+        value = JsonPrimitive("sonnet"),
         options = listOf(
             dev.kampr.shared.wire.ControlOption("sonnet", "Claude Sonnet"),
             dev.kampr.shared.wire.ControlOption("haiku", "Claude Haiku"),
@@ -64,8 +67,11 @@ private val HEADLESS_CONTROLS = listOf(
         id = "permission",
         label = "Permissions",
         kind = "select",
+        value = JsonPrimitive("default"),
         options = listOf(
             dev.kampr.shared.wire.ControlOption("default", "Default"),
+            dev.kampr.shared.wire.ControlOption("plan", "Plan"),
+            dev.kampr.shared.wire.ControlOption("acceptEdits", "Accept edits"),
             dev.kampr.shared.wire.ControlOption("bypassPermissions", "Bypass"),
         ),
     ),
@@ -195,6 +201,16 @@ class ConversationSourcesArtboardTest {
                     converses = true,
                 )
                 shoot(name, frame) { ConversationView(store.pane(PANE_ID), info, Modifier.fillMaxSize()) }
+            }
+        }
+    }
+
+    @Test
+    fun theSessionSheetDrawsTheDeclaredControls() {
+        for (frame in SourceFrame.entries) {
+            val store = sourceStore(HEADLESS_ABILITIES, HEADLESS_CONTROLS, agent = "claude")
+            shoot("headless-claude-sheet", frame) {
+                SessionSheet(store.pane(PANE_ID), RecordingIo, Breakpoint.Portrait, onDismiss = {})
             }
         }
     }
