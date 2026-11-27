@@ -192,6 +192,20 @@ assertion weakened; the three that never failed in s39's loaded runs were left u
 conv-sources tests pass: 222 kampr-claude, 476 kampr-node, 7+4 kampr-codex, 10 kampr-testkit guards.
 **Next: the gated billing-guards turn probe (after the 5h window reset); the deferred items.**
 
+## Release 0.1.153 + muffit deploy (2026-11-27)
+
+- **kampr**: `conv-sources` (all ten phases + the other agent's pane-modes/OSC-7501/unattended-perms
+  work) merged to `main`, pushed. `make check` green (2376/2376). Bumped to **0.1.153**, tagged,
+  pushed; `make android-publish` put 0.1.153 on kobup (version.properties committed + pushed).
+  `android-attach` runs once the tag's GitHub release exists.
+- **muffit**: the other agent's uncommitted work (unattended-permissions raise-to-ask, plus the
+  rustfmt pass) committed, `conv-sources` merged to `main`, pushed. Gate green (86 suites, clippy
+  clean). Tarball `muffit-0.1.0-7f5ceda61c14` staged **without restarts** on all three daemons:
+  this machine, 10.0.0.208 and 10.0.0.229 (previous binary kept for rollback; verified no process
+  was restarted). The 10.0.0.208 container image `docker.oldug.com/muffit-server:7f5ceda` +
+  `:latest` is built from the same commit and pushed to the registry — the container picks it up on
+  its next scheduled `compose pull && up -d`, which nobody has triggered.
+
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
   row** for the 2.1.326 no-turn `initialize` (63-command list), and coverage holes (the `Files` input
