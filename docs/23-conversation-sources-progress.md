@@ -9,6 +9,80 @@ The operator's plan **runs turns again** (payment fixed; the refusal of #670 is 
 reports `subscriptionType:"Claude Pro"` and `get_usage` shows 5 h 72% / 7 d 47%, no overage, as of
 this session. The turn-based Phase 0 probes are done (rows 674–684 below).
 
+## Final report
+
+**Status: ready for user testing.** All ten phases are built, reviewed (each review loop closed),
+and committed on `conv-sources`. The gates are green; a handful of pre-existing flaky live-herdr
+tests are being stabilized (s39). The money-safety item — the billing guards — is verified against
+the operator's real plan login to the extent the plan's usage window allows (see below).
+
+### What was built, by phase
+- **0 — probes.** Everything the plan lists as "not measured" is measured: no-turn control shapes
+  and billing state (668–670), the full turn-based set (674–684: plan approval, images/files,
+  priority/cancel, slash commands, `set_model` shape, mid-turn controls, `register_repo_root`,
+  subagent `can_use_tool`, `result.origin`, the bypass launch flag, elicitation), and the Codex
+  app-server protocol (26-row log). Each is a probe-log row; the log is the only source of facts.
+- **1 — the seam.** One `Conversation`/`Source` trait in `kampr-core/src/conversation/` in front of
+  every agent, with a capabilities definition; muffit is the first source on it; the node's
+  `conversations` registry replaces the muffit special cases. `session.rs` has no muffit path.
+- **2 — the wire + client.** 13 `convo.*` server frames and 5 client verbs, all additive (an older
+  client/node keeps working). The Kotlin client mirrors them field-for-field and the pane draws
+  only what the source declares — nothing with nothing to show takes no room.
+- **3 — muffit widened.** All seven capabilities in the muffit repo (ask tool, live child, shell
+  tasks, arg-deltas/steer, the command catalog, billed-to + rate-limit, prompt events).
+- **4 — the keeper.** Pipe mode beside pty mode: stdin/stdout pipes, a seq-numbered `PipeLog`,
+  read-from-seq, and the 2-fd lifecycle. A node restart mid-turn comes back to the same request.
+- **5 — Claude with no terminal.** The `kampr-claude` crate: the stream-json reader/writer, the
+  scrubbed launch, the 12 billing guards, and `ClaudeSource`/`Provider` so the herd lists headless
+  sessions as terminal-less panes. **5b** then closed the headless gaps Phase 8 found: input/answer
+  routing to the conversation, interrupt, context usage, completions, queue/send-now/unqueue,
+  files, subagent-live, and search/older.
+- **6 — Claude in a terminal.** The gaps that need no trait: trouble parsing, the 14 hooks,
+  fork-aware transcript read, and live shell/subagent output — all over existing frames.
+- **7 — the pane pump behind the trait.** `TerminalClaude: Conversation` in `convo.rs`; the other
+  harnesses (Codex, omp, pi, agy) wrapped with a smaller ability set.
+- **8 — the parity pass.** Every row of docs/22 checked against the code; it found and drove the
+  fix for the CRITICAL headless routing bug (send/answer were drawn but non-functional).
+- **9 — a third source.** The Codex app-server (`kampr-codex`): NDJSON JSON-RPC over stdio,
+  pipelined for the one-behind flush, mapped to the same seam.
+
+### Billing guards (the part that can hurt)
+- **Guards 3, 6, 9 — verified against the real login, no turn spent** (probe row 685): `initialize`
+  returns the plan account with no `apiKeySource`; `get_usage` shows no overage; billing reports as
+  `Plan`.
+- **Guards 2, 4 — the turn-side half is staged, not spent.** Both need one haiku turn (a
+  parent-env key blanked by the scrub; the turn's `system/init` `apiKeySource: "none"`). The 5-hour
+  window was at 94%, above the ~90% line, so the money discipline held the turn. Run
+  `cargo run -p kampr-claude --example plan-probe -- turn --with-key` after the window resets
+  (2026-11-27T07:09:59Z) to close it out.
+- **All negative cases are mock-tested and passing** (a key in the env, a logged-out config, the
+  bare default, an `isUsingOverage` mid-turn, the unattended cap, the launcher refusing under
+  `KAMPR_TEST=1` with no mock). No test reaches Anthropic.
+
+### Skipped or deferred, and why
+- **Codex real-world** — needs a Codex subscription; the protocol is pinned by the probe log +
+  mock, so the source is verified offline.
+- **Keeper lifecycle probes** (mid-turn kill, orphaned `can_use_tool`, stdin held) — need a
+  herdr/keeper environment.
+- **macOS terminal probes** — need macOS.
+- **`kampr-tui` mirror** (the Rust TUI's copy of the new vocabulary) — deferred while `crates/`
+  churned; unblocked now, not yet done.
+
+### What still needs a terminal
+Only the items above that are environment-bound. Nothing in the pane's core function is
+terminal-only: every docs/22 row that is terminal-only carries its measured reason.
+
+### Gates
+- `make check` (Kampr): green; a handful of **pre-existing** flaky live-herdr tests fail under load
+  but pass in isolation — s39 is stabilizing them toward a fully clean gate.
+- `make check-client`: green. Muffit gate: green.
+
+### The one remaining "done" item
+The plan's final bar is a look at the pane on a phone with the four sources (headless Claude,
+Claude in a terminal, muffit, the least-capable harness), confirming no empty row, disabled control
+or gap. The artboard screenshots stand in for this (four sources × two frames, plus the session
+sheet showing the model and mode controls); a real-Pixel pass is optional per the operator.
+
 ## Phase 0 — probes
 
 DONE (no turn spent, rows 668–670):
