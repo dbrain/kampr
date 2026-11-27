@@ -9,6 +9,7 @@ use crate::mosaic::{Axis, Divider};
 use crate::render::grid;
 use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use kampr_client::Role;
+use kampr_core::{MouseTracking, PaneModes};
 use kampr_term::Cell;
 use ratatui::layout::Rect;
 use std::collections::HashSet;
@@ -524,37 +525,76 @@ fn focus(arriving: bool, pane: String) -> Click {
     }
 }
 
-/// Harnesses known to take a real wheel report: Claude Code sets `?1000h` and `?1006h` and
-/// scrolls its transcript on one (#388); muffit's TUI enables mouse capture and scrolls three lines
-/// on one (`muffit-tui/src/keys.rs` `handle_mouse`), where an arrow recalls its composer's history.
-/// Anything nobody has looked at gets alternate scroll.
+/// Harnesses known to take a real wheel report, for a pane whose node cannot say what the program
+/// asked for (a herdr pane, #292, #686, or an older node): Claude Code sets `?1000h` and `?1006h`
+/// and scrolls its transcript on one (#388); muffit's TUI enables mouse capture and scrolls three
+/// lines on one (`muffit-tui/src/keys.rs` `handle_mouse`), where an arrow recalls its composer's
+/// history. Anything nobody has looked at gets alternate scroll.
 const TAKES_THE_WHEEL: &[&str] = &["claude", "muffit"];
 
-/// What a wheel notch over a pane with no ring is sent to the pane's program as, the gate the
-/// phone's `PaneScroll.kt` writes down.
+/// What a wheel notch over a pane with no ring is sent to the pane's program as, the rule the
+/// phone's `PaneScroll.kt` writes down (docs/26).
 ///
-/// **`cmd` is the gate and it fails closed**: it is null at a prompt and wherever the node could
-/// not name the job, and a cursor key into a shell's line editor recalls its history (#391).
-/// Otherwise alternate scroll in the *application* form, which is what moves `less`, `man` and
-/// `vim` (#390), `rows` keys a notch.
+/// **What the program asked for decides when the node said** (`modes`): a mouse mode is one SGR
+/// report a notch, the alternate screen with alternate scroll on is `rows` cursor keys, and anything
+/// else is nothing whatever the pane's `agent` says. A mouse mode without SGR encoding is sent
+/// nothing, because its reports stop at column 223 and no program measured needs them.
+///
+/// **Without modes `cmd` is the gate and it fails closed**: it is null at a prompt and wherever the
+/// node could not name the job, and a cursor key into a shell's line editor recalls its history
+/// (#391). Otherwise alternate scroll in the *application* form, which is what moves `less`, `man`
+/// and `vim` (#390), `rows` keys a notch.
 pub fn handoff(
     agent: Option<&str>,
     cmd: Option<&str>,
+    modes: Option<PaneModes>,
     up: bool,
     cell: (u16, u16),
     rows: u16,
 ) -> Option<String> {
-    cmd?;
-    if agent.is_some_and(|agent| TAKES_THE_WHEEL.contains(&agent)) {
-        return Some(sgr(if up { 64 } else { 65 }, cell, true));
-    }
-    Some(
+    let report = || sgr(if up { 64 } else { 65 }, cell, true);
+    let keys = || {
         match up {
             true => "\u{1b}OA",
             false => "\u{1b}OB",
         }
-        .repeat(rows as usize),
-    )
+        .repeat(rows as usize)
+    };
+    match modes {
+        Some(modes) if modes.mouse != MouseTracking::None => modes.mouse_sgr.then(report),
+        Some(modes) => (modes.alt_screen && modes.alt_scroll).then(keys),
+        None if cmd.is_none() => None,
+        None if program(agent, cmd).is_some_and(|name| TAKES_THE_WHEEL.contains(&name)) => Some(report()),
+        None => Some(keys()),
+    }
+}
+
+/// Whether an armed pane's program is sent mouse reports: where the node reported modes, only under
+/// an SGR mouse mode (docs/26); where it could not, arming is the operator's word.
+pub fn hears_reports(modes: Option<PaneModes>) -> bool {
+    modes.is_none_or(|modes| modes.mouse != MouseTracking::None && modes.mouse_sgr)
+}
+
+/// Programs measured to hold the alternate screen for their whole run: muffit-tui sets `?1049h`
+/// before it draws anything. Claude is not one, because its classic renderer writes its turns into
+/// a ring that is the conversation itself (#588).
+const HOLDS_THE_SCREEN: &[&str] = &["muffit"];
+
+/// Whether the wheel goes to the program while kampr holds a ring for the pane, the rule the web
+/// client's `paneWheelBeatsTheRing` writes down: the node supersedes the ring only under a program
+/// it can name, so modes it reported beat the ring, as in every terminal, and with no modes only a
+/// program that holds the screen does.
+pub fn beats_the_ring(agent: Option<&str>, cmd: Option<&str>, modes: Option<PaneModes>) -> bool {
+    modes.is_some() || program(agent, cmd).is_some_and(|name| HOLDS_THE_SCREEN.contains(&name))
+}
+
+/// herdr labels no agent on a muffit TUI pane and names its job `muffit-tui` (probe #699), so the
+/// command's stem stands in where the label is missing.
+fn program<'a>(agent: Option<&'a str>, cmd: Option<&'a str>) -> Option<&'a str> {
+    agent.or_else(|| {
+        let stem = cmd?.rsplit('/').next()?;
+        Some(stem.strip_suffix("-tui").unwrap_or(stem))
+    })
 }
 
 fn along(axis: Axis, at: (u16, u16)) -> u16 {

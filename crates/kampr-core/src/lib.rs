@@ -8,26 +8,32 @@
 
 pub mod agent_view;
 pub mod backoff;
+pub mod child_env;
 pub mod conversation;
 pub mod desk;
 pub mod herdr_provider;
 pub mod keys;
 pub mod local_node;
+pub mod login;
+pub mod modes;
 pub mod naming;
 pub mod paste;
 pub mod procfs;
+pub mod program;
 pub mod prompt;
 pub mod provider;
 pub mod push;
 pub mod question;
 pub mod registry;
 pub mod reporter;
+pub mod resume;
 pub mod scrollback;
 pub mod tile;
 pub mod wire;
 
 pub use backoff::Backoff;
 pub use herdr_provider::{HerdrConfig, HerdrProvider};
+pub use modes::{MouseTracking, PaneModes};
 pub use naming::{DEFAULT_TEMPLATE, Fields, Template, TemplateError};
 pub use provider::{
     Composite, FleetPane, FleetState, Input, MuffitPane, NativeExit, NativePane, PaneEvent, PaneInfo,

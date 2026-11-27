@@ -42,8 +42,12 @@ import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.paneTitle
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.model.watchersTag
+import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.platform.keyRowNeeded
 import dev.kampr.shared.theme.Kampr
+import dev.kampr.shared.util.billingWord
+import dev.kampr.shared.util.limitsWord
+import dev.kampr.shared.util.usageChip
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.talks
@@ -144,7 +148,7 @@ private fun StatusChip(info: PaneInfo?) {
 // corner on it in the most serious one's colour; the badges themselves are composed unseen so each
 // still says its own sentence to a reader.
 @Composable
-private fun StatusMarkFor(info: PaneInfo?, warnings: List<PaneStatus>, backLabel: String, onBack: () -> Unit) {
+private fun StatusMarkFor(info: PaneInfo?, warnings: List<PaneStatus>, backLabel: String, onBack: () -> Unit, onPrograms: (() -> Unit)?) {
     val tokens = Kampr.tokens
     val status = info?.let(::statusOf) ?: AgentStatus.Unknown
     val word = statusWord(status)
@@ -152,15 +156,15 @@ private fun StatusMarkFor(info: PaneInfo?, warnings: List<PaneStatus>, backLabel
     Box(
         Modifier
             .size(18.dp, PHONE_TITLE)
-            .pointerInput(onBack) { detectTapGestures(onTap = { onBack() }) }
-            .gestureAction(said, onBack, clickLabel = backLabel)
+            .pointerInput(onBack, onPrograms) { detectTapGestures(onTap = { onBack() }, onLongPress = onPrograms?.let { open -> { open() } }) }
+            .gestureAction(said, onBack, onLongClick = onPrograms, clickLabel = backLabel, longLabel = "Show the programs")
             .announce(said, urgent = status == AgentStatus.Blocked),
         contentAlignment = Alignment.Center,
     ) {
         StatusMark(status, 10.dp)
-        warnings.firstOrNull()?.let { IconGlyph(KamprIcons.warning, 10.dp, it.tone, Modifier.align(Alignment.Center).offset(6.dp, (-7).dp)) }
+        warnings.firstOrNull { it.warns }?.let { IconGlyph(KamprIcons.warning, 10.dp, it.tone, Modifier.align(Alignment.Center).offset(6.dp, (-7).dp)) }
         CompositionLocalProvider(LocalStatusUnseen provides true) { warnings.forEach { it.draw() } }
-        Hint((listOf(word) + warnings.map { it.words }).joinToString(" · "))
+        Hint((listOf(word) + warnings.map { it.words }).joinToString(" · "), byTouch = onPrograms == null)
     }
 }
 
@@ -178,17 +182,21 @@ private fun rememberLastKnown(paneId: String, info: PaneInfo?): PaneInfo? {
 // What the header says *about* the pane rather than which pane it is. `words` is what the overflow
 // pill lists when this one does not fit, and `tone` is what that pill borrows when this is the most
 // serious one hidden.
-private class PaneStatus(val words: String, val tone: Color, val agent: Boolean = false, val draw: @Composable () -> Unit)
+private class PaneStatus(val words: String, val tone: Color, val agent: Boolean = false, val warns: Boolean = !agent, val draw: @Composable () -> Unit)
 
 // One order on every layout: what the agent is doing first, then what is wrong with the pane, the
 // keyboard or the device, most serious first. Every host keeps them after the controls, so a status
 // arriving never moves a control.
 @Composable
-private fun paneStatuses(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?, shown: PaneView): List<PaneStatus> {
+private fun paneStatuses(pane: PaneState, info: PaneInfo?, readOnly: Boolean, gone: PaneGone?, shown: PaneView, onPrograms: () -> Unit): List<PaneStatus> {
     val tokens = Kampr.tokens
     val agent = info?.let(::statusOf) ?: AgentStatus.Unknown
+    val programs = info?.program.orEmpty().size
     return listOfNotNull(
         statusLabel(agent)?.let { PaneStatus(it, statusColor(agent), agent = true) { StatusChip(info) } },
+        PaneStatus("$programs programs", tokens.color.dim, warns = false) { ProgramsBadge(programs, onPrograms) }.takeIf { programs > 0 },
+        usageStatus(pane),
+        info?.let(::programFailure)?.let { PaneStatus(it, tokens.color.blocked) { ProgramFailureBadge(info) } },
         gone?.let { PaneStatus(goneWord(it), tokens.color.blocked) { GoneBadge(it) } },
         pane.undelivered.takeIf { it > 0 }?.let { PaneStatus("Not sent", tokens.color.blocked) { UnsentBadge(it) } },
         PaneStatus("No stream", tokens.color.blocked) { StreamBadge() }.takeIf { info?.detail != null && info.paints },
@@ -205,6 +213,22 @@ private fun paneStatuses(pane: PaneState, info: PaneInfo?, readOnly: Boolean, go
             )
         }.takeIf { readOnly },
     )
+}
+
+// What the plan has used, when it comes back and who pays, on a source that declares limits or
+// billing. Not a warning — unless the provider says it is throttling.
+@Composable
+private fun usageStatus(pane: PaneState): PaneStatus? {
+    if (pane.abilities.facts.none { it == "limits" || it == "billing" }) return null
+    val billing = pane.session?.billing
+    val words = usageChip(pane.limits, billing, wallClockMillis()) ?: return null
+    val tokens = Kampr.tokens
+    val throttled = billing?.rateLimited == true
+    val tone = if (throttled) tokens.color.working else tokens.color.dim
+    val said = listOfNotNull(pane.limits?.let { limitsWord(it, wallClockMillis()) }, billing?.let(::billingWord)).joinToString(", ")
+    return PaneStatus(words, tone, warns = throttled) {
+        StatusBadge(words, tone, tokens.color.surface, label = "Usage: $said", outlined = true)
+    }
 }
 
 // One line, end-aligned, most important first. What does not fit is counted in a pill that wears
@@ -285,6 +309,8 @@ fun PaneScreenMobile(
     val presence = rememberWatchPresence(pane.id, info)
     val shown = viewOn(info, view)
     val named = rememberLastKnown(pane.id, info)
+    var programsOpen by remember(pane.id) { mutableStateOf(false) }
+    val openPrograms = { programsOpen = true }
     BoxWithConstraints(modifier.fillMaxSize().background(tokens.color.surface2)) {
         val guessed = chrome ?: if (landscape) DESK_HEADER else PHONE_HEADER
         // Never more of the window than leaves a reply box standing. The terminal is unaffected:
@@ -314,6 +340,7 @@ fun PaneScreenMobile(
                     .fillMaxWidth()
                     .background(tokens.color.bar)
                     .edgeBottom()
+                    .progressEdge(info?.programProgress, tokens.color.working)
                     .absolutePadding(left = (if (landscape) 4.dp else 0.dp) + safe.left, top = safe.top + 3.dp, right = 8.dp + safe.right, bottom = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(if (landscape) 8.dp else 4.dp),
@@ -322,7 +349,7 @@ fun PaneScreenMobile(
                     BackAction(backLabel, onBack, target = LANDSCAPE_TOUCH)
                     KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f).asHeading())
                     watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
-                    StatusLine(paneStatuses(pane, info, readOnly, gone, shown), Modifier.weight(1f).height(LANDSCAPE_TOUCH))
+                    StatusLine(paneStatuses(pane, info, readOnly, gone, shown, openPrograms), Modifier.weight(1f).height(LANDSCAPE_TOUCH))
                     if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
                     if (info.switches) ViewSwitch(shown, onView, Modifier, compact = true)
                 } else {
@@ -343,7 +370,13 @@ fun PaneScreenMobile(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            StatusMarkFor(info, paneStatuses(pane, info, readOnly, gone, shown).filterNot { it.agent }, backLabel, onBack)
+                            StatusMarkFor(
+                                info,
+                                paneStatuses(pane, info, readOnly, gone, shown, openPrograms).filterNot { it.agent },
+                                backLabel,
+                                onBack,
+                                openPrograms.takeIf { !info?.program.isNullOrEmpty() },
+                            )
                             KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f, fill = false).asHeading())
                             watchersTag(presence.others)?.let { KText(it, tokens.type.meta, tokens.color.mute) }
                         }
@@ -394,6 +427,9 @@ fun PaneScreenMobile(
                 surfaces.KeyRow(pane, landscape, Modifier.fillMaxWidth())
             }
         }
+    }
+    if (programsOpen) {
+        ProgramsSheet(paneName(named, pane), info?.program.orEmpty(), if (landscape) Breakpoint.Landscape else Breakpoint.Portrait) { programsOpen = false }
     }
 }
 
@@ -487,6 +523,7 @@ fun PaneScreenDesktop(
     val presence = rememberWatchPresence(pane.id, info)
     val shown = viewOn(info, view)
     val named = rememberLastKnown(pane.id, info)
+    var programsOpen by remember(pane.id) { mutableStateOf(false) }
     Box(modifier.fillMaxSize().background(tokens.color.surface2)) {
         CompositionLocalProvider(LocalPaneChrome provides chrome?.let { PaneChrome(it, DESK_FOOT) }) {
             Row(Modifier.fillMaxSize()) {
@@ -519,12 +556,13 @@ fun PaneScreenDesktop(
                     .fillMaxWidth()
                     .background(tokens.color.bar)
                     .edgeBottom()
+                    .progressEdge(info?.programProgress, tokens.color.working)
                     .absolutePadding(left = 12.dp + safe.left, top = 3.dp + safe.top, right = 8.dp + safe.right, bottom = 3.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 KText(paneName(named, pane), tokens.type.bodyStrong, tokens.color.text, Modifier.asHeading(), maxLines = 1)
-                paneStatuses(pane, info, readOnly, gone, shown).forEach { it.draw() }
+                paneStatuses(pane, info, readOnly, gone, shown) { programsOpen = true }.forEach { it.draw() }
                 Box(Modifier.weight(1f))
                 if (info.paints) ZoomSlot(pane, surfaces, shown, Modifier.height(LANDSCAPE_TOUCH))
                 if (info.switches) {
@@ -583,5 +621,8 @@ fun PaneScreenDesktop(
                 if (keyRowNeeded()) surfaces.KeyRow(pane, compact = true, Modifier.fillMaxWidth())
             }
         }
+    }
+    if (programsOpen) {
+        ProgramsSheet(paneName(named, pane), info?.program.orEmpty(), Breakpoint.Desktop) { programsOpen = false }
     }
 }

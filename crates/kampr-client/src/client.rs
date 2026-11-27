@@ -309,6 +309,13 @@ impl Client {
         self.send(message)
     }
 
+    /// A form's submit key, with its values by field name.
+    pub fn answer_form(&self, pane: &str, key: &str, id: Option<&str>, values: Value) -> bool {
+        let mut message = question(json!({ "t": "answer", "pane": pane, "key": key }), id);
+        message["reply"] = json!({ "form": { "values": values } });
+        self.send(message)
+    }
+
     /// Commits the ticks on a question that takes several answers.
     pub fn answer_submit(&self, pane: &str, id: Option<&str>) -> bool {
         self.send(question(json!({ "t": "answer.submit", "pane": pane }), id))
@@ -510,6 +517,9 @@ impl Inner {
                 if let Some(n) = message["n"].as_u64() {
                     self.emit(Event::Pong { n });
                 }
+            }
+            t if let Some((pane, update)) = crate::convo::decode(t, &message) => {
+                self.emit(Event::ConvoUpdate { pane, update });
             }
             "hold.lost" => {
                 if let Some(pane) = message["pane"].as_str() {

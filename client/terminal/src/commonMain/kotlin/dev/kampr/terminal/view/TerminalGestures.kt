@@ -98,7 +98,7 @@ internal suspend fun PointerInputScope.terminalGestures(
                 // notch. Only a harness measured to take it is ever given one; `toPane` is null
                 // everywhere else, which is every pane Kampr holds the history for itself.
                 if (toPane != null && pan.y != 0f && view.scrollY == before) {
-                    val cell = probe.cellAt(pressed.first().position)
+                    val cell = probe.screenCellAt(pressed.first().position)
                     toPane.refused(pan.y, probe.cellHeight, cell.col, cell.row)
                 }
             }

@@ -229,6 +229,7 @@ fn same(a: &PaneEntry, b: &PaneEntry) -> bool {
         && a.exited == b.exited
         && a.tile == b.tile
         && a.container == b.container
+        && a.modes == b.modes
 }
 
 #[cfg(test)]
@@ -283,6 +284,23 @@ mod tests {
     fn a_geometry_change_shows_up_as_changed() {
         let before = model(&[("w1:p1", 74)]);
         let after = model(&[("w1:p1", 94)]);
+        let (added, changed, removed) = patch(&after.diff(&before).unwrap());
+        assert!(added.is_empty() && removed.is_empty());
+        assert_eq!(changed, ["01J/w1:p1"]);
+    }
+
+    #[test]
+    fn a_program_turning_a_mode_on_shows_up_as_changed() {
+        let modes = |mouse| {
+            let mut m = model(&[("w1:p1", 74)]);
+            m.panes[0].modes = Some(kampr_core::PaneModes {
+                mouse,
+                ..Default::default()
+            });
+            m
+        };
+        let before = modes(kampr_core::MouseTracking::None);
+        let after = modes(kampr_core::MouseTracking::Press);
         let (added, changed, removed) = patch(&after.diff(&before).unwrap());
         assert!(added.is_empty() && removed.is_empty());
         assert_eq!(changed, ["01J/w1:p1"]);
@@ -499,6 +517,8 @@ mod tests {
                 reachable: None,
                 native: None,
                 muffit: None,
+                claude: None,
+                resume: None,
                 herdr: None,
                 rtt_ms: None,
                 herdr_version: None,

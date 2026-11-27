@@ -54,6 +54,7 @@ import dev.kampr.shared.model.PaneState
 import dev.kampr.shared.model.PendingFile
 import dev.kampr.shared.model.PendingSend
 import dev.kampr.shared.model.UNSEEN_AFTER_MS
+import dev.kampr.shared.model.newSendId
 import dev.kampr.shared.model.paints
 import dev.kampr.shared.model.statusOf
 import dev.kampr.shared.net.wallClockMillis
@@ -66,7 +67,6 @@ import dev.kampr.shared.ui.Breakpoint
 import dev.kampr.shared.ui.GlyphTarget
 import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KText
-import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LocalConnectionStatus
 import dev.kampr.shared.ui.LocalOpenPlace
 import dev.kampr.shared.ui.LocalPaneIo
@@ -80,13 +80,18 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.named
 import dev.kampr.shared.ui.readingOrder
+import dev.kampr.shared.ui.rememberPaneClock
+import dev.kampr.shared.ui.touchTarget
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.Reply
 import dev.kampr.shared.wire.Task
+import dev.kampr.shared.wire.canAttach
 import dev.kampr.shared.wire.canQueue
 import dev.kampr.shared.wire.canSendNow
+import dev.kampr.shared.wire.canUnqueue
 import dev.kampr.shared.wire.talks
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -109,6 +114,14 @@ private const val ASK_AFTER_MS = 260L
 // transcript measured on the operator's own machine (1053 turns) and still a bounded walk.
 private const val MOST_PAGES_TO_REACH = 26
 private const val PAGE_WITHIN_MS = 6_000L
+
+// Of the transcript's box: what the question card and the task panel may cover between them, and
+// what the panel alone may, with and without a question beside it. The rest is the conversation's.
+private const val OVERLAY_SHARE = 0.65f
+private const val TASKS_SHARE = 0.4f
+
+// A folded task bar is its one row plus the panel's own margins and padding.
+private val FOLDED_BAR_PADDING = 30.dp
 
 @Composable
 fun ConversationView(
@@ -145,14 +158,14 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // A live preview is withdrawn by arriving again with no blocks, so an empty turn is a turn
     // that is no longer there.
     //
-    // The queue goes on the end, after every record: the harness has not started on any of it yet,
-    // so it is the newest thing anybody has said to this pane.
+    // The seam's live edge goes after every record: the message being written is what the pane is
+    // doing now, and it carries the live turn's id, which the transcript's own `Reply` already
+    // reads for the working line.
     //
-    // The seam's live edge goes on the very end: the message being written is the newest thing
-    // the pane has to say, and it carries the live turn's id, which the transcript's own `Reply`
-    // already reads for the working line.
+    // The queue goes on the very end, after the turn in flight: the harness takes none of it until
+    // that turn is done, so drawn above it the queue read as already answered.
     val turns = remember(pane.revision) {
-        pane.turns.filter { it.isVisible() } + queuedTurns(pane.facets) + listOfNotNull(liveTurnOf(pane.live))
+        pane.turns.filter { it.isVisible() } + listOfNotNull(liveTurnOf(pane.live)) + queuedTurns(pane.facets)
     }
     var query by remember { mutableStateOf("") }
     DisposableEffect(search) {
@@ -189,13 +202,8 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // of day (#285), which does not move on its own — this is what moves the *bucket* it is drawn
     // in, from a bare clock to a weekday to a date, and what carries the age a zoneless stamp
     // still falls back to. A minute is finer than any of those need.
-    var now by remember { mutableStateOf(clock()) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            delay(60_000)
-            now = clock()
-        }
-    }
+    val paneClock = rememberPaneClock(clock)
+    val now = paneClock.minute
     // The herd's word where the harness publishes one, and the screen's word where it does not:
     // a harness with no detection manifest says `idle` through a whole working turn, and the
     // node reads the state its screen paints into the facet instead.
@@ -220,7 +228,13 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // transcript rather than at the head of that reply because the transcript follows its own end:
     // the end is where the reader's eye already is, and the head of a reply eleven minutes long is
     // far above the fold, which is the one place a progress line is no use.
-    val shown = if (tail == null) rows else rows + TranscriptRow.Working(tail)
+    // Under the reply it belongs to, which is above the queue when one is waiting behind it.
+    val shown = if (tail == null) {
+        rows
+    } else {
+        val queue = rows.indexOfFirst { it is TranscriptRow.Ask && isQueued(it.turn) }.takeIf { it >= 0 } ?: rows.size
+        rows.take(queue) + TranscriptRow.Working(tail) + rows.drop(queue)
+    }
     val stamps = remember(shown, now) { stepStamps(shown, now) }
     // **The search is the node's where the node can answer it.** This client holds the page the
     // conversation opened on and whatever the reader has paged back to, so its own count is short
@@ -274,6 +288,15 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     fun say(text: String): Boolean {
         val before = pane.undelivered
         pane.mirror.submit(text).forEach { io.send(ClientMsg.InputText(pane.id, it)) }
+        return pane.undelivered == before
+    }
+
+    // A source that can take a message back is told the message whole, under an id it can be named
+    // by, and whether it waits behind the turn in flight; it has no keys to type.
+    fun tell(text: String, id: String): Boolean {
+        val before = pane.undelivered
+        val queue = "next".takeIf { pane.runState == "running" && pane.abilities.canQueue }
+        io.send(ClientMsg.InputText(pane.id, text, id = id, queue = queue))
         return pane.undelivered == before
     }
     // Timed from the send rather than from this composition, so looking at the terminal for a
@@ -467,6 +490,12 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // much of its own box, which both reserves the band and clips it — measured, never named,
     // because the card wraps onto a different number of rows for every question it carries.
     val question = if (io.readOnly) null else pane.pending?.takeIf { it.question != null }
+    LaunchedEffect(question?.id, question?.question) {
+        if (question != null) {
+            expanded.remove(TASKS_OPEN)
+            expanded.remove(RUNNING_OPEN)
+        }
+    }
     // Keyed on the rows, and it has to be: a `remember` that outlives them closes over the list it
     // was created with, and on a real open that list is the empty one the screen composes before
     // the transcript arrives. The bar then had nothing to name for the life of the pane, while
@@ -478,7 +507,7 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     // anything is never measured again, so a strip that has gone reports the size it had when it
     // was there for ever.
     var footPx by remember { mutableStateOf(0) }
-    val foot = if (pane.facets.running.isEmpty()) 0 else footPx
+    val foot = if (pane.facets.running.isEmpty() && pane.tasks.isEmpty()) 0 else footPx
     val density = LocalDensity.current
     // A stack, not a flag: `depth` says a launched conversation can launch one of its own, so
     // going in twice and coming back once has to mean something. Dropped with the pane.
@@ -514,340 +543,382 @@ private fun PaneConversation(pane: PaneState, info: PaneInfo?, modifier: Modifie
     CompositionLocalProvider(LocalOpenSub provides openSub) {
         BoxWithConstraints(modifier) {
             SideEffect { breakpoint = breakpointOf(maxWidth, maxHeight) }
-            opened.lastOrNull()?.let { sub ->
-                SubConversationView(
-                    sub = sub,
-                    state = pane.subOrNull(sub.id),
-                    agent = info?.agent,
-                    now = now,
-                    onBack = { opened.removeAt(opened.lastIndex) },
-                    onOlder = { cursor -> io.send(ClientMsg.ConvoSub(pane.id, sub.id, cursor)) },
-                    modifier = Modifier.fillMaxSize(),
-                    clock = clock,
-                )
-                return@BoxWithConstraints
-            }
-
-            ConversationColumn(Modifier.fillMaxSize().background(tokens.color.bg), bar = {
-                // The trouble is under the header and over everything else on the pane: it is
-                // what is happening to the pane right now, and the search bar is what the reader
-                // happened to be doing.
-                TroubleBanner(
-                    pane,
-                    onOpenSession = { sessionOpen = true },
-                    onTerminal = { io.show(PaneView.Terminal) },
-                )
-                if (search.open) {
-                    SearchBar(
-                        query = query,
-                        hits = results.size,
-                        // Every matching turn the node found, which is not what it listed: the list is
-                        // capped so one keystroke cannot become a frame of hundreds. Absent where this
-                        // client did the searching, because then there is no wider number to know.
-                        total = whole?.total,
-                        // The one frame between a result set arriving and the effect above standing on
-                        // its newest match has nothing to be on, and a bar that reads "0/2" for it is
-                        // a worse lie than one that reads "1/2".
-                        focus = focus.coerceAtLeast(0),
-                        older = whole == null && pageable,
-                        reaching = reaching,
-                        listing = listing,
-                        onQuery = {
-                            query = it
-                            standingOn = null
-                        },
-                        onClose = { search.open = false },
-                        onStep = { step ->
-                            if (results.isNotEmpty()) {
-                                val from = if (focus >= 0) focus else results.lastIndex
-                                standingOn = results[(from + step + results.size) % results.size].turn
-                            }
-                        },
-                        onListing = { listing = it },
-                    )
-                }
-
-                // Everything the transcript shows, under one selection: the turns, the prompt the agent
-                // is waiting on, and the line that stands in for both when there is nothing yet. A lazy
-                // list only holds the items it has composed, so a drag reaches as far as the reader has
-                // scrolled and no further — the alternative is laying an unbounded transcript out at once.
-            }, transcript = {
-                // The matches instead of the transcript, while the reader asked for that. Outside the
-                // selection container and outside the list below it: it is a list of controls, and a
-                // drag across it is a scroll rather than a copy.
-                if (listing && results.isNotEmpty()) {
-                    SearchResults(
-                        results = results,
-                        focus = focus,
-                        query = query,
+            CompositionLocalProvider(LocalTouch provides touchTarget(breakpointOf(maxWidth, maxHeight))) {
+                opened.lastOrNull()?.let { sub ->
+                    SubConversationView(
+                        sub = sub,
+                        state = pane.subOrNull(sub.id),
                         agent = info?.agent,
                         now = now,
-                        whole = whole != null,
-                        found = whole?.total,
-                        onPick = { at ->
-                            standingOn = results[at].turn
-                            listing = false
-                        },
+                        onBack = { opened.removeAt(opened.lastIndex) },
+                        onOlder = { cursor -> io.send(ClientMsg.ConvoSub(pane.id, sub.id, cursor)) },
+                        modifier = Modifier.fillMaxSize(),
+                        clock = clock,
                     )
-                    return@ConversationColumn
+                    return@CompositionLocalProvider
                 }
-                SelectionContainer(Modifier.fillMaxSize()) {
-                    Box(Modifier.fillMaxSize()) {
-                        if (turns.isEmpty() && sending.isEmpty()) {
-                            KText(
-                                if (info?.hasConversation == false) {
-                                    "no messages yet \u2014 send one to get started"
-                                } else {
-                                    "waiting for the transcript"
-                                },
-                                tokens.type.caption,
-                                tokens.color.mute,
-                                Modifier.align(Alignment.Center),
-                            )
-                        }
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(
-                                    top = if (question == null) 0.dp else with(density) { strip.toDp() },
-                                    bottom = with(density) { foot.toDp() },
+
+                ConversationColumn(Modifier.fillMaxSize().background(tokens.color.bg), bar = {
+                    // The trouble is under the header and over everything else on the pane: it is
+                    // what is happening to the pane right now, and the search bar is what the reader
+                    // happened to be doing.
+                    TroubleBanner(
+                        pane,
+                        paneClock,
+                        onOpenSession = { sessionOpen = true },
+                        onTerminal = { io.show(PaneView.Terminal) },
+                    )
+                    if (search.open) {
+                        SearchBar(
+                            query = query,
+                            hits = results.size,
+                            // Every matching turn the node found, which is not what it listed: the list is
+                            // capped so one keystroke cannot become a frame of hundreds. Absent where this
+                            // client did the searching, because then there is no wider number to know.
+                            total = whole?.total,
+                            // The one frame between a result set arriving and the effect above standing on
+                            // its newest match has nothing to be on, and a bar that reads "0/2" for it is
+                            // a worse lie than one that reads "1/2".
+                            focus = focus.coerceAtLeast(0),
+                            older = whole == null && pageable,
+                            reaching = reaching,
+                            listing = listing,
+                            onQuery = {
+                                query = it
+                                standingOn = null
+                            },
+                            onClose = { search.open = false },
+                            onStep = { step ->
+                                if (results.isNotEmpty()) {
+                                    val from = if (focus >= 0) focus else results.lastIndex
+                                    standingOn = results[(from + step + results.size) % results.size].turn
+                                }
+                            },
+                            onListing = { listing = it },
+                        )
+                    }
+
+                    // Everything the transcript shows, under one selection: the turns, the prompt the agent
+                    // is waiting on, and the line that stands in for both when there is nothing yet. A lazy
+                    // list only holds the items it has composed, so a drag reaches as far as the reader has
+                    // scrolled and no further — the alternative is laying an unbounded transcript out at once.
+                }, transcript = {
+                    // The matches instead of the transcript, while the reader asked for that. Outside the
+                    // selection container and outside the list below it: it is a list of controls, and a
+                    // drag across it is a scroll rather than a copy.
+                    if (listing && results.isNotEmpty()) {
+                        SearchResults(
+                            results = results,
+                            focus = focus,
+                            query = query,
+                            agent = info?.agent,
+                            now = now,
+                            whole = whole != null,
+                            found = whole?.total,
+                            onPick = { at ->
+                                standingOn = results[at].turn
+                                listing = false
+                            },
+                        )
+                        return@ConversationColumn
+                    }
+                    SelectionContainer(Modifier.fillMaxSize()) {
+                        BoxWithConstraints(Modifier.fillMaxSize()) {
+                            // The question card and the task panel stand over the transcript, and they
+                            // share one budget so the conversation they are about always keeps room. The
+                            // question outranks the panel: it takes the budget less a folded bar, the panel
+                            // folds when a question arrives, and opened again it has what the card leaves.
+                            val overlay = maxHeight * OVERLAY_SHARE
+                            val bar = LocalTouch.current + FOLDED_BAR_PADDING
+                            val footed = pane.tasks.isNotEmpty() || pane.facets.running.isNotEmpty()
+                            val questionMax = overlay - if (footed) bar else 0.dp
+                            val tasksMax = if (question == null) {
+                                maxHeight * TASKS_SHARE
+                            } else {
+                                (overlay - with(density) { strip.toDp() }).coerceAtLeast(bar + LocalTouch.current)
+                            }
+                            if (turns.isEmpty() && sending.isEmpty()) {
+                                KText(
+                                    if (info?.hasConversation == false) {
+                                        "no messages yet \u2014 send one to get started"
+                                    } else {
+                                        "waiting for the transcript"
+                                    },
+                                    tokens.type.caption,
+                                    tokens.color.mute,
+                                    Modifier.align(Alignment.Center),
                                 )
-                                .onSizeChanged { viewport = it.height },
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                                start = 16.dp,
-                                end = 16.dp,
-                                top = 12.dp,
-                                bottom = 16.dp,
-                            ),
-                            // None. A block is one box drawn a piece at a time, and a gap between the
-                            // pieces is a gap in the box — the foot of each block pays the space that
-                            // separates it from the next one, outside its own paint.
-                            verticalArrangement = Arrangement.spacedBy(0.dp),
-                        ) {
-                            if (pageable) {
-                                item(key = "older") {
-                                    DisableSelection {
-                                        Row(
-                                            Modifier.fillMaxWidth().announce("Loading earlier turns").padding(bottom = 2.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        ) {
-                                            IconGlyph(ConversationIcons.history, 12.dp, tokens.color.mute)
-                                            KText("loading earlier turns", tokens.type.meta, tokens.color.mute)
+                            }
+                            LazyColumn(
+                                state = listState,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(
+                                        top = if (question == null) 0.dp else with(density) { strip.toDp() },
+                                        bottom = with(density) { foot.toDp() },
+                                    )
+                                    .onSizeChanged { viewport = it.height },
+                                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                                    start = 16.dp,
+                                    end = 16.dp,
+                                    top = 12.dp,
+                                    bottom = 16.dp,
+                                ),
+                                // None. A block is one box drawn a piece at a time, and a gap between the
+                                // pieces is a gap in the box — the foot of each block pays the space that
+                                // separates it from the next one, outside its own paint.
+                                verticalArrangement = Arrangement.spacedBy(0.dp),
+                            ) {
+                                if (pageable) {
+                                    item(key = "older") {
+                                        DisableSelection {
+                                            Row(
+                                                Modifier.fillMaxWidth().announce("Loading earlier turns").padding(bottom = 2.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                IconGlyph(ConversationIcons.history, 12.dp, tokens.color.mute)
+                                                KText("loading earlier turns", tokens.type.meta, tokens.color.mute)
+                                            }
+                                        }
+                                    }
+                                }
+                                itemsIndexed(shown, key = { _, row -> row.key }) { at, _ ->
+                                    TranscriptRowView(
+                                        shown, at, stamps.getOrNull(at), query, expanded, toggle,
+                                        attachments = attachments, now = now, agent = info?.agent, clock = clock,
+                                    )
+                                }
+                                items(sending, key = { "sending:${it.id}" }) { send ->
+                                    SendingCard(
+                                        send,
+                                        info?.agent,
+                                        now,
+                                        attachments,
+                                        onResend = { pane.sends.resent(send.id, pane.turns, pane.facets.queued, say(send.text), clock()) },
+                                        onDismiss = { pane.sends.dismiss(send.id) },
+                                        // Only while the source has not taken it: once heard it is
+                                        // the turn's, and the words go back to the box to be edited.
+                                        onUnqueue = if (pane.abilities.canUnqueue && !io.readOnly && send.state == PendingSend.State.Sending && pane.runState == "running") {
+                                            {
+                                                io.send(ClientMsg.InputUnqueue(pane.id, send.id))
+                                                pane.sends.dismiss(send.id)
+                                                pane.draft = send.text
+                                            }
+                                        } else {
+                                            null
+                                        },
+                                    )
+                                }
+                                catchingUp?.let { said ->
+                                    item(key = "read-up-to") {
+                                        DisableSelection { CatchingUpLine(said) }
+                                    }
+                                }
+                                // In the list, at its foot, rather than over it: it must never cover the
+                                // question card or the reply box, and on a phone there is no band to spare.
+                                hooksOffer?.let { offer ->
+                                    item(key = "claude-hooks") {
+                                        DisableSelection {
+                                            HooksOffer(
+                                                offer,
+                                                asking = pane.hooks.asking,
+                                                refusal = pane.hooks.refusal,
+                                                onInstall = { mode -> pane.hooks.ask(ManageOp.ClaudeHooksInstall(pane.id, mode), io::send) },
+                                                onNotNow = { notNow = true },
+                                                onDecline = { pane.hooks.ask(ManageOp.ClaudeHooksDecline(pane.id), io::send) },
+                                            )
                                         }
                                     }
                                 }
                             }
-                            itemsIndexed(shown, key = { _, row -> row.key }) { at, _ ->
-                                TranscriptRowView(
-                                    shown, at, stamps.getOrNull(at), query, expanded, toggle,
-                                    attachments = attachments, now = now, agent = info?.agent, clock = clock,
-                                )
-                            }
-                            items(sending, key = { "sending:${it.id}" }) { send ->
-                                SendingCard(
-                                    send,
+                            // The header of whatever the reader is standing in the middle of, pinned where
+                            // that turn's own header used to be, so putting a long message away never means
+                            // scrolling back up to find the chevron that does it. It sits under the question
+                            // card for the same reason the list is inset by it: the card is the one thing on
+                            // this screen that outranks the transcript.
+                            pinned?.let { at ->
+                                PinnedBlockBar(
+                                    at,
                                     info?.agent,
                                     now,
-                                    attachments,
-                                    onResend = { pane.sends.resent(send.id, pane.turns, pane.facets.queued, say(send.text), clock()) },
-                                    onDismiss = { pane.sends.dismiss(send.id) },
+                                    onCollapse = collapseKey(at.head)?.let { key ->
+                                        {
+                                            toggle(key)
+                                            scope.launch { listState.scrollToItem(at.index + leading) }
+                                        }
+                                    },
+                                    modifier = Modifier
+                                        .align(Alignment.TopStart)
+                                        .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() }),
                                 )
                             }
-                            catchingUp?.let { said ->
-                                item(key = "read-up-to") {
-                                    DisableSelection { CatchingUpLine(said) }
-                                }
+                            question?.let {
+                                PendingStrip(
+                                    it,
+                                    answering = answering(LocalConnectionStatus.current, pane.undelivered),
+                                    onAnswer = { key ->
+                                        val reply = permissionReply(key).takeIf { _ -> it.kind == null || it.kind == "permission" }
+                                        io.send(ClientMsg.Answer(pane.id, key, it.id, reply = reply))
+                                    },
+                                    onSubmit = { io.send(ClientMsg.AnswerSubmit(pane.id, it.id)) },
+                                    byKeys = info.paints,
+                                    onWords = { key, words -> io.send(ClientMsg.Answer(pane.id, key, it.id, words)) },
+                                    onForm = { values -> io.send(ClientMsg.Answer(pane.id, "1", it.id, reply = Reply.Form(values))) },
+                                    agent = info?.agent,
+                                    maxHeight = questionMax,
+                                    modifier = Modifier.onSizeChanged { size -> strip = size.height },
+                                )
                             }
-                            // In the list, at its foot, rather than over it: it must never cover the
-                            // question card or the reply box, and on a phone there is no band to spare.
-                            hooksOffer?.let { offer ->
-                                item(key = "claude-hooks") {
-                                    DisableSelection {
-                                        HooksOffer(
-                                            offer,
-                                            asking = pane.hooks.asking,
-                                            refusal = pane.hooks.refusal,
-                                            onInstall = { mode -> pane.hooks.ask(ManageOp.ClaudeHooksInstall(pane.id, mode), io::send) },
-                                            onNotNow = { notNow = true },
-                                            onDecline = { pane.hooks.ask(ManageOp.ClaudeHooksDecline(pane.id), io::send) },
-                                        )
-                                    }
-                                }
+                            // Pinned at the foot rather than in the turn that launched it: what is running
+                            // now is a fact about now, and the card in the transcript is only findable by
+                            // scrolling back to the moment of the launch. Under the question, which is the
+                            // one thing on this screen that outranks everything.
+                            //
+                            // Measured, and the list handed that much of its own box, for the reason the
+                            // question card above is: an overlay that takes nothing back does not sit
+                            // above the transcript, it sits *on* it — the last turn was under the strip
+                            // for as long as anything was running. The list's 16 dp of foot survives it
+                            // and becomes the gap between the two.
+                            //
+                            // Where the source names its tasks by id, the task panel takes the strip's
+                            // place: the same read, with rows that open the thing they name — a
+                            // subagent's conversation or a shell's output. A source that sends neither
+                            // gets neither, and the strip stands alone.
+                            if (pane.tasks.isNotEmpty()) {
+                                ActivityBar(
+                                    pane,
+                                    onOpenTask = { task ->
+                                        when (task.kind) {
+                                            // The task's kind is "agent", which is what every one of these is: the
+                                            // sub's `kind` is the agent type, and the task does not know it.
+                                            "agent" -> openSub(Block.Sub(id = task.id, title = taskLabel(task)))
+
+                                            else -> taskSheet = task
+                                        }
+                                    },
+                                    Modifier.align(Alignment.BottomStart).onSizeChanged { size -> footPx = size.height },
+                                    open = TASKS_OPEN in expanded,
+                                    onFold = { toggle(TASKS_OPEN) },
+                                    now = paneClock.now,
+                                    maxHeight = tasksMax,
+                                )
+                            } else {
+                                RunningStrip(
+                                    pane.facets.running,
+                                    Modifier.align(Alignment.BottomStart).onSizeChanged { size -> footPx = size.height },
+                                    open = RUNNING_OPEN in expanded,
+                                    onFold = { toggle(RUNNING_OPEN) },
+                                    clock = clock,
+                                )
                             }
-                        }
-                        // The header of whatever the reader is standing in the middle of, pinned where
-                        // that turn's own header used to be, so putting a long message away never means
-                        // scrolling back up to find the chevron that does it. It sits under the question
-                        // card for the same reason the list is inset by it: the card is the one thing on
-                        // this screen that outranks the transcript.
-                        pinned?.let { at ->
-                            PinnedBlockBar(
-                                at,
-                                info?.agent,
-                                now,
-                                onCollapse = collapseKey(at.head)?.let { key ->
-                                    {
-                                        toggle(key)
-                                        scope.launch { listState.scrollToItem(at.index + leading) }
-                                    }
-                                },
-                                modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .padding(top = if (question == null) 0.dp else with(density) { strip.toDp() }),
-                            )
-                        }
-                        question?.let {
-                            PendingStrip(
-                                it,
-                                answering = answering(LocalConnectionStatus.current, pane.undelivered),
-                                onAnswer = { key -> io.send(ClientMsg.Answer(pane.id, key, it.id, reply = permissionReply(key))) },
-                                onSubmit = { io.send(ClientMsg.AnswerSubmit(pane.id, it.id)) },
-                                byKeys = info.paints,
-                                onWords = { key, words -> io.send(ClientMsg.Answer(pane.id, key, it.id, words)) },
-                                modifier = Modifier.onSizeChanged { size -> strip = size.height },
-                            )
-                        }
-                        // Pinned at the foot rather than in the turn that launched it: what is running
-                        // now is a fact about now, and the card in the transcript is only findable by
-                        // scrolling back to the moment of the launch. Under the question, which is the
-                        // one thing on this screen that outranks everything.
-                        //
-                        // Measured, and the list handed that much of its own box, for the reason the
-                        // question card above is: an overlay that takes nothing back does not sit
-                        // above the transcript, it sits *on* it — the last turn was under the strip
-                        // for as long as anything was running. The list's 16 dp of foot survives it
-                        // and becomes the gap between the two.
-                        //
-                        // Where the source names its tasks by id, the task panel takes the strip's
-                        // place: the same read, with rows that open the thing they name — a
-                        // subagent's conversation or a shell's output. A source that sends neither
-                        // gets neither, and the strip stands alone.
-                        if (pane.tasks.isNotEmpty()) {
-                            ActivityBar(
-                                pane,
-                                onOpenTask = { task ->
-                                    when (task.kind) {
-                                        "agent" -> openSub(Block.Sub(id = task.id, kind = task.kind, title = taskLabel(task)))
-                                        else -> taskSheet = task
-                                    }
-                                },
-                                Modifier.align(Alignment.BottomStart).onSizeChanged { size -> footPx = size.height },
-                                open = TASKS_OPEN in expanded,
-                                onFold = { toggle(TASKS_OPEN) },
-                                clock = clock,
-                            )
-                        } else {
-                            RunningStrip(
-                                pane.facets.running,
-                                Modifier.align(Alignment.BottomStart).onSizeChanged { size -> footPx = size.height },
-                                open = RUNNING_OPEN in expanded,
-                                onFold = { toggle(RUNNING_OPEN) },
-                                clock = clock,
-                            )
-                        }
-                        if (!following && rows.isNotEmpty()) {
-                            ToEnd(
-                                { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
-                                Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = with(density) { foot.toDp() } + 12.dp),
-                            )
+                            if (!following && rows.isNotEmpty()) {
+                                ToEnd(
+                                    { scope.launch { listState.scrollToItem(rows.lastIndex + leading, END_OF_THE_ITEM) } },
+                                    Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = with(density) { foot.toDp() } + 12.dp),
+                                )
+                            }
                         }
                     }
-                }
-            }, composer = {
-                val answer = answering(LocalConnectionStatus.current, pane.undelivered)
-                val type = { keys: List<String> -> keys.forEach { io.send(ClientMsg.InputText(pane.id, it)) } }
-                // What the operator is completing, where the source completes: a line that starts on
-                // a `/` it declared `slash` for, and a word after a `@` it declared `mention` for.
-                val token = suggestQuery(pane.draft, pane.abilities)
-                val suggestions = pane.suggested
-                    .takeIf { token != null && pane.suggestedKind == token.first && pane.suggestedQuery == token.second }
-                    .orEmpty()
-                Column(Modifier.fillMaxWidth()) {
-                    // The running turn's own row: stop it. The send-now stands beside the box, where
-                    // the line it sends is.
-                    ConvoSendBar(pane, io)
-                    SuggestStrip(
-                        suggestions,
-                        onPick = { s ->
-                            val (kind, _) = token ?: return@SuggestStrip
-                            val label = if (kind == "commands") s.label.removePrefix("/") else s.id
-                            pane.draft = if (kind == "commands") {
-                                "/$label "
-                            } else {
-                                val at = pane.draft.lastIndexOf('@')
-                                pane.draft.substring(0, at + 1) + label
-                            }
-                        },
-                    )
-                    Composer(
-                        agent = info?.agent,
-                        enabled = !io.readOnly,
-                        answering = answer,
-                        onSend = { text ->
-                            val said = pane.files.take(text)
-                            pane.sends.sent(said, pane.turns, pane.facets.queued, say(said), clock())
-                        },
-                        // While a turn runs, a send on a source that queues is a queue, and the
-                        // button says so; a source that can be steered gets the send-now beside it.
-                        sendLabel = if (pane.runState == "running" && pane.abilities.canQueue) {
-                            "Queue this reply to ${info?.agent ?: "the agent"}"
-                        } else {
-                            null
-                        },
-                        onSendNow = if (pane.runState == "running" && pane.abilities.canSendNow && !io.readOnly) {
-                            { text ->
-                                val said = pane.files.take(text)
-                                pane.sends.sent(said, pane.turns, pane.facets.queued, true, clock())
-                                io.send(ClientMsg.ConvoSteer(pane.id, "interrupt", said))
-                            }
-                        } else {
-                            null
-                        },
-                        mirror = pane.mirror,
-                        mirroring = mirroring,
-                        onKeys = type,
-                        onCaret = { pane.draftCaret = it },
-                        edits = pane.files.edits,
-                        onEdit = { pane.files.edits.remove(it) },
-                        onLabelGone = pane.files::gone,
-                        draft = pane.draft,
-                        onDraft = { pane.draft = it },
-                        onAttach = if (io.readOnly || !filePickAvailable) {
-                            null
-                        } else {
-                            {
-                                scope.launch {
-                                    val picked = pickFile() ?: return@launch
-                                    attach(pane, io, picked, typing)
+                }, composer = {
+                    val answer = answering(LocalConnectionStatus.current, pane.undelivered)
+                    val type = { keys: List<String> -> keys.forEach { io.send(ClientMsg.InputText(pane.id, it)) } }
+                    // What the operator is completing, where the source completes: a line that starts on
+                    // a `/` it declared `slash` for, and a word after a `@` it declared `mention` for.
+                    val token = suggestQuery(pane.draft, pane.abilities)
+                    val suggestions = pane.suggested
+                        .takeIf { token != null && pane.suggestedKind == token.first && pane.suggestedQuery == token.second }
+                        .orEmpty()
+                    Column(Modifier.fillMaxWidth()) {
+                        // The running turn's own row: stop it. The send-now stands beside the box, where
+                        // the line it sends is.
+                        ConvoSendBar(pane, io)
+                        SuggestStrip(
+                            suggestions,
+                            onPick = { s ->
+                                val (kind, _) = token ?: return@SuggestStrip
+                                val label = if (kind == "commands") s.label.removePrefix("/") else s.id
+                                pane.draft = if (kind == "commands") {
+                                    "/$label "
+                                } else {
+                                    val at = pane.draft.lastIndexOf('@')
+                                    pane.draft.substring(0, at + 1) + label
                                 }
-                            }
-                        },
-                        files = pane.files.all,
-                        onOpenFile = { file -> openHeld(file, pane.id, held, openPlace) },
-                        onRemoveFile = { file -> pane.files.remove(file.id) },
-                        desk = pane.desk,
-                        // The keystroke is the node's measurement and arrives with the line, so nothing
-                        // here decides what empties a box on a machine it has never seen. It goes as
-                        // ordinary `input`, which is the path a device that may not type is already
-                        // refused on.
-                        onTakeOver = { line -> line.clear?.let { io.send(ClientMsg.InputText(pane.id, it)) } },
-                    )
-                    // The facts under the composer: the header details in one line, and no room at
-                    // all where the source declares no drawn fact.
-                    FactsLine(pane, onOpen = { sessionOpen = true })
-                }
-            })
+                            },
+                        )
+                        Composer(
+                            agent = info?.agent,
+                            enabled = !io.readOnly,
+                            answering = answer,
+                            onSend = { text ->
+                                val said = pane.files.take(text)
+                                if (pane.abilities.canUnqueue) {
+                                    val id = newSendId()
+                                    pane.sends.sent(said, pane.turns, pane.facets.queued, tell(said, id), clock(), id)
+                                } else {
+                                    pane.sends.sent(said, pane.turns, pane.facets.queued, say(said), clock())
+                                }
+                            },
+                            // While a turn runs, a send on a source that queues is a queue, and the
+                            // button says so; a source that can be steered gets the send-now beside it.
+                            sendLabel = if (pane.runState == "running" && pane.abilities.canQueue) {
+                                "Queue this reply to ${info?.agent ?: "the agent"}"
+                            } else {
+                                null
+                            },
+                            onSendNow = if (pane.runState == "running" && pane.abilities.canSendNow && !io.readOnly) {
+                                { text ->
+                                    val said = pane.files.take(text)
+                                    pane.sends.sent(said, pane.turns, pane.facets.queued, true, clock())
+                                    io.send(ClientMsg.ConvoSteer(pane.id, "interrupt", said))
+                                }
+                            } else {
+                                null
+                            },
+                            mirror = pane.mirror,
+                            mirroring = mirroring,
+                            onKeys = type,
+                            onCaret = { pane.draftCaret = it },
+                            edits = pane.files.edits,
+                            onEdit = { pane.files.edits.remove(it) },
+                            onLabelGone = pane.files::gone,
+                            draft = pane.draft,
+                            onDraft = { pane.draft = it },
+                            onAttach = if (io.readOnly || !filePickAvailable || !pane.abilities.canAttach) {
+                                null
+                            } else {
+                                {
+                                    scope.launch {
+                                        val picked = pickFile() ?: return@launch
+                                        attach(pane, io, picked, typing)
+                                    }
+                                }
+                            },
+                            files = pane.files.all,
+                            onOpenFile = { file -> openHeld(file, pane.id, held, openPlace) },
+                            onRemoveFile = { file -> pane.files.remove(file.id) },
+                            desk = pane.desk,
+                            // The keystroke is the node's measurement and arrives with the line, so nothing
+                            // here decides what empties a box on a machine it has never seen. It goes as
+                            // ordinary `input`, which is the path a device that may not type is already
+                            // refused on.
+                            onTakeOver = { line -> line.clear?.let { io.send(ClientMsg.InputText(pane.id, it)) } },
+                        )
+                        // The facts under the composer: the header details in one line, and no room at
+                        // all where the source declares no drawn fact.
+                        FactsLine(pane, paneClock.now, onOpen = { sessionOpen = true })
+                    }
+                })
 
-            // The pane's sheets, drawn over it and dismissed by their own header. Both hold only
-            // what the source gave: a sheet with nothing to say is not offered, for the reason the
-            // pieces above are not drawn.
-            if (sessionOpen) {
-                SessionSheet(pane, io, breakpoint, onDismiss = { sessionOpen = false })
-            }
-            taskSheet?.let { task ->
-                TaskOutputSheet(pane, task, io, breakpoint, onDismiss = { taskSheet = null })
+                // The pane's sheets, drawn over it and dismissed by their own header. Both hold only
+                // what the source gave: a sheet with nothing to say is not offered, for the reason the
+                // pieces above are not drawn.
+                if (sessionOpen) {
+                    SessionSheet(pane, io, breakpoint, onDismiss = { sessionOpen = false }, now = paneClock.now)
+                }
+                taskSheet?.let { task ->
+                    TaskOutputSheet(pane, task, io, breakpoint, onDismiss = { taskSheet = null }, now = paneClock.now)
+                }
             }
         }
     }
@@ -988,7 +1059,7 @@ private fun SearchBar(
                 if (listing) "Back to the transcript" else "List the matches",
                 if (listing) tokens.color.accent else tokens.color.dim,
                 { onListing(!listing) },
-                target = LANDSCAPE_TOUCH,
+                target = LocalTouch.current,
                 glyph = 13.dp,
             )
         }
@@ -997,7 +1068,7 @@ private fun SearchBar(
             "Previous match",
             tokens.color.dim,
             { onStep(-1) },
-            target = LANDSCAPE_TOUCH,
+            target = LocalTouch.current,
             glyph = 13.dp,
         )
         GlyphTarget(
@@ -1005,7 +1076,7 @@ private fun SearchBar(
             "Next match",
             tokens.color.dim,
             { onStep(1) },
-            target = LANDSCAPE_TOUCH,
+            target = LocalTouch.current,
             glyph = 13.dp,
         )
         GlyphTarget(
@@ -1013,7 +1084,7 @@ private fun SearchBar(
             "Close search",
             tokens.color.mute,
             onClose,
-            target = LANDSCAPE_TOUCH,
+            target = LocalTouch.current,
             glyph = 13.dp,
         )
     }

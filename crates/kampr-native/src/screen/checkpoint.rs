@@ -1,3 +1,5 @@
+mod program;
+
 use super::Screen;
 use crate::answer;
 use crate::history::{History, Row as Rendered};
@@ -9,12 +11,12 @@ use alacritty_terminal::vte::ansi::{CharsetIndex, Color, CursorShape, StandardCh
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
-use kampr_core::provider::{ProgramState, ProgramStatus};
 use serde::{Deserialize, Serialize};
 use std::fmt::Write as _;
 use std::io::{Read as _, Write as _};
 
-const VERSION: u32 = 1;
+/// 2 moved the program records out of `Saved` into [`program::Tail`]; 1 is still read.
+const VERSION: u32 = 2;
 const MAGIC: &[u8] = b"kampr-screen\n";
 /// Indices a program can set: the 256 palette entries (`OSC 4`), then foreground, background and
 /// cursor (`OSC 10`/`11`/`12`).
@@ -43,17 +45,7 @@ struct Saved {
     history: Vec<(String, String, bool, u16)>,
     known: usize,
     rebase: bool,
-    program: Option<(u8, Option<String>, Option<String>)>,
-    program_reports: u64,
 }
-
-const PROGRAM_STATES: [ProgramState; 5] = [
-    ProgramState::Idle,
-    ProgramState::Working,
-    ProgramState::Blocked,
-    ProgramState::Done,
-    ProgramState::Error,
-];
 
 #[derive(Serialize, Deserialize)]
 struct Plane {
@@ -205,7 +197,8 @@ impl Screen {
             return None;
         }
         let saved = self.save();
-        let body = postcard::to_stdvec(&saved).ok()?;
+        let mut body = postcard::to_stdvec(&saved).ok()?;
+        body.extend(postcard::to_stdvec(&program::Tail::of(self)).ok()?);
         let mut out = ZlibEncoder::new(MAGIC.to_vec(), Compression::fast());
         out.write_all(&body).ok()?;
         out.finish().ok()
@@ -218,13 +211,16 @@ impl Screen {
             .take(LARGEST as u64 * 64)
             .read_to_end(&mut body)
             .ok()?;
-        let saved: Saved = postcard::from_bytes(&body).ok()?;
+        let (saved, rest) = postcard::take_from_bytes::<Saved>(&body).ok()?;
         if !valid(&saved) {
             return None;
         }
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| load(saved, scrollback_rows)))
-            .ok()
-            .flatten()
+        let tail = program::Tail::read(saved.version, rest)?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            load(saved, tail, scrollback_rows)
+        }))
+        .ok()
+        .flatten()
     }
 
     fn probe(&mut self, bytes: &[u8]) {
@@ -294,11 +290,6 @@ impl Screen {
                 .collect(),
             known: self.known,
             rebase: self.rebase,
-            program: self.program.as_ref().map(|p| {
-                let state = PROGRAM_STATES.iter().position(|s| *s == p.state).unwrap_or(0) as u8;
-                (state, p.kind.clone(), p.message.clone())
-            }),
-            program_reports: self.program_reports,
         }
     }
 
@@ -356,7 +347,7 @@ impl Screen {
 
 fn valid(saved: &Saved) -> bool {
     let (cols, rows) = (saved.cols, saved.rows);
-    saved.version == VERSION
+    (1..=VERSION).contains(&saved.version)
         && cols > 0
         && rows > 0
         && usize::from(cols) * usize::from(rows) <= LARGEST
@@ -376,7 +367,7 @@ fn valid(saved: &Saved) -> bool {
             .all(|&(i, _)| usize::from(i) < SETTABLE_COLOURS)
 }
 
-fn load(saved: Saved, scrollback_rows: usize) -> Option<Screen> {
+fn load(saved: Saved, tail: program::Tail, scrollback_rows: usize) -> Option<Screen> {
     let (cols, rows) = (saved.cols, saved.rows);
     let mut screen = Screen::new(cols, rows, scrollback_rows);
     let mode = TermMode::from_bits_truncate(saved.mode);
@@ -447,15 +438,7 @@ fn load(saved: Saved, scrollback_rows: usize) -> Option<Screen> {
     );
     screen.known = saved.known;
     screen.rebase = saved.rebase;
-    screen.program = match saved.program {
-        Some((state, kind, message)) => Some(ProgramStatus {
-            state: *PROGRAM_STATES.get(usize::from(state))?,
-            kind,
-            message,
-        }),
-        None => None,
-    };
-    screen.program_reports = saved.program_reports;
+    tail.put(&mut screen)?;
     screen.forget_sent();
     Some(screen)
 }

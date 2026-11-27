@@ -3,9 +3,11 @@ package dev.kampr.conversation
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.model.LIVE_TURN_ID
 import dev.kampr.shared.model.PaneState
@@ -38,10 +41,10 @@ import dev.kampr.shared.ui.IconGlyph
 import dev.kampr.shared.ui.KField
 import dev.kampr.shared.ui.KText
 import dev.kampr.shared.ui.KamprIcons
-import dev.kampr.shared.ui.LANDSCAPE_TOUCH
 import dev.kampr.shared.ui.LabelText
 import dev.kampr.shared.ui.Mark
 import dev.kampr.shared.ui.MarkShape
+import dev.kampr.shared.ui.PaneClock
 import dev.kampr.shared.ui.PaneIo
 import dev.kampr.shared.ui.PrimaryAction
 import dev.kampr.shared.ui.SheetHeader
@@ -52,8 +55,12 @@ import dev.kampr.shared.ui.edge
 import dev.kampr.shared.ui.edgeBottom
 import dev.kampr.shared.ui.readingOrder
 import dev.kampr.shared.ui.touchable
+import dev.kampr.shared.util.billingWord
 import dev.kampr.shared.util.elapsedSpan
+import dev.kampr.shared.util.limitsWord
 import dev.kampr.shared.util.parseIsoMillis
+import dev.kampr.shared.util.remainingSpan
+import dev.kampr.shared.util.untilWord
 import dev.kampr.shared.wire.Abilities
 import dev.kampr.shared.wire.AbilityWords
 import dev.kampr.shared.wire.Action
@@ -61,8 +68,8 @@ import dev.kampr.shared.wire.ArgSpec
 import dev.kampr.shared.wire.Billing
 import dev.kampr.shared.wire.Block
 import dev.kampr.shared.wire.ClientMsg
+import dev.kampr.shared.wire.ContextUse
 import dev.kampr.shared.wire.Control
-import dev.kampr.shared.wire.Limits
 import dev.kampr.shared.wire.LiveTurn
 import dev.kampr.shared.wire.Reply
 import dev.kampr.shared.wire.Suggestion
@@ -73,7 +80,6 @@ import dev.kampr.shared.wire.canInterrupt
 import dev.kampr.shared.wire.canMention
 import dev.kampr.shared.wire.canSendNow
 import dev.kampr.shared.wire.canSlash
-import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -93,31 +99,9 @@ fun compactTokens(n: Long): String = when {
     else -> n.toString()
 }
 
-// What the billing line says of a session. `provider` is who the session runs on, `key` is which
-// key pays, and `rateLimited` is the provider saying it is throttling: each is its own fact and
-// only the ones present are said.
-fun billingWord(billing: Billing): String? {
-    val who = billing.provider ?: billing.key?.let { "key $it" } ?: return null
-    return if (billing.rateLimited) "$who, rate-limited" else "billed by $who"
-}
-
-// The limits line, in the words the source gave. `usage` is an open value the provider counts in
-// its own units, so it is said only where it is a single readable number or word — an object the
-// client did not ask for is not one the client guesses at.
-fun limitsWord(limits: Limits): String? {
-    val parts = buildList {
-        limits.plan?.let { add(it) }
-        limits.usage?.let { u ->
-            when {
-                u is JsonPrimitive && u.isString -> add(u.content)
-                u is JsonPrimitive && u.contentOrNull?.toLongOrNull() != null -> add("${u.contentOrNull}%")
-                else -> Unit
-            }
-        }
-        limits.resetsAt?.let { add("resets $it") }
-    }
-    return parts.takeIf { it.isNotEmpty() }?.joinToString(" · ")
-}
+// A total of 0 is a source that knows the size used and not the window's (muffit before its
+// context strategy has a budget): it says the one number rather than "/0".
+fun contextWord(context: ContextUse): String = "context ${compactTokens(context.used)}" + if (context.total > 0) "/${compactTokens(context.total)}" else ""
 
 // The word a control's value is drawn as: a primitive is its content, and a structure the source
 // sent is said in its own JSON rather than guessed at.
@@ -141,7 +125,7 @@ fun liveTurnOf(live: LiveTurn?): Turn? {
     if (live == null) return null
     val blocks = buildList {
         if (live.text.isNotEmpty()) add(Block.Md(live.text))
-        live.tools.forEach { add(Block.Tool(it.tool, null, null, it.state)) }
+        live.tools.forEach { add(Block.Tool(it.tool, liveArgsSummary(it.args), null, it.state)) }
     }
     return if (blocks.isEmpty()) null else Turn(id = LIVE_TURN_ID, role = "assistant", blocks = blocks)
 }
@@ -177,6 +161,7 @@ fun suggestQuery(draft: String, abilities: Abilities): Pair<String, String>? = w
 @Composable
 fun TroubleBanner(
     pane: PaneState,
+    clock: PaneClock,
     onOpenSession: () -> Unit,
     onTerminal: () -> Unit,
     modifier: Modifier = Modifier,
@@ -184,10 +169,17 @@ fun TroubleBanner(
     val trouble = pane.trouble ?: return
     val tokens = Kampr.tokens
     val fix = trouble.fix
+    // `in_ms` is counted from the frame, which carries no time of its own, so the count runs from
+    // when this banner first drew it.
+    val seen = remember(trouble) { clock.now }
+    val now = clock.now
     val say = buildList {
-        add(trouble.text)
-        trouble.retry?.let { add("retry ${it.attempt} of ${it.of} in ${it.inMs / 1000}s") }
-        if (fix is TroubleFix.Wait) add("held until ${fix.until}")
+        add(trouble.text.trimEnd('.'))
+        trouble.retry?.let {
+            val left = it.inMs - (now - seen)
+            add("retry ${it.attempt} of ${it.of} " + if (left > 0) "in ${remainingSpan(left)}" else "now")
+        }
+        if (fix is TroubleFix.Wait) add("held until " + (parseIsoMillis(fix.until)?.let { untilWord(it, now) } ?: fix.until))
     }.joinToString(". ")
     Row(
         modifier
@@ -219,7 +211,7 @@ private fun FixButton(label: String, onFix: () -> Unit, tokens: KamprTokens) {
         tokens.color.onAccent,
         Modifier
             .background(tokens.color.blocked, shape)
-            .touchable(LANDSCAPE_TOUCH)
+            .touchable(LocalTouch.current)
             .action(label, onFix, shape)
             .padding(horizontal = 10.dp, vertical = 5.dp),
     )
@@ -231,16 +223,19 @@ private fun FixButton(label: String, onFix: () -> Unit, tokens: KamprTokens) {
 @Composable
 fun FactsLine(
     pane: PaneState,
+    now: Double,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val tokens = Kampr.tokens
     if (pane.abilities.facts.none { it in AbilityWords.FACTS_DRAWN }) return
+    // Who pays first: it is the fact a phone's one line must not cut off, and the model and the
+    // window are what the reader already knows best.
     val parts = buildList {
-        pane.session?.model?.let { add(it) }
-        pane.context?.let { add("context ${compactTokens(it.used)}/${compactTokens(it.total)}") }
-        pane.limits?.let { limitsWord(it) }?.let { add(it) }
         pane.session?.billing?.let { billingWord(it) }?.let { add(it) }
+        pane.session?.model?.let { add(it) }
+        pane.context?.let { add(contextWord(it)) }
+        pane.limits?.let { limitsWord(it, now) }?.let { add(it) }
     }
     if (parts.isEmpty()) return
     Row(
@@ -287,28 +282,25 @@ fun ActivityBar(
     modifier: Modifier = Modifier,
     open: Boolean = false,
     onFold: () -> Unit = {},
-    clock: () -> Double = ::wallClockMillis,
+    now: Double = wallClockMillis(),
+    maxHeight: Dp = Dp.Unspecified,
 ) {
     val tasks = pane.tasks
     if (tasks.isEmpty()) return
     val tokens = Kampr.tokens
-    var now by remember { mutableStateOf(clock()) }
-    LaunchedEffect(tasks.map { it.id }) {
-        now = clock()
-        while (true) {
-            delay(1000)
-            now = clock()
-        }
-    }
     val running = tasks.count { it.state != "ended" }
     val shape = RoundedCornerShape(tokens.radii.md)
     val foldable = tasks.size > 1
     val shown = if (foldable && !open) emptyList() else tasks
+    // Folded, the bar names the newest thing running: a count alone says something is happening
+    // and not what.
+    val newest = tasks.filter { it.state != "ended" }.maxByOrNull { parseIsoMillis(it.since) ?: 0.0 }
     DisableSelection {
         Column(
             modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 6.dp)
+                .heightIn(max = maxHeight)
                 .background(tokens.color.raise, shape)
                 .edge(tokens.card, shape)
                 .announce(
@@ -329,7 +321,7 @@ fun ActivityBar(
                             Modifier
                         } else {
                             Modifier
-                                .touchable(LANDSCAPE_TOUCH)
+                                .touchable(LocalTouch.current)
                                 .action(if (open) "Hide the tasks" else "Show the tasks", onFold, selected = open)
                         },
                     ),
@@ -340,8 +332,12 @@ fun ActivityBar(
                     if (running == 1) "1 running" else "$running running",
                     tokens.type.metaSmall,
                     tokens.color.mute,
-                    Modifier.weight(1f),
                 )
+                if (shown.isEmpty() && newest != null) {
+                    KText("· ${taskLabel(newest)}", tokens.type.meta, tokens.color.dim, Modifier.weight(1f), maxLines = 1)
+                } else {
+                    Box(Modifier.weight(1f))
+                }
                 if (foldable) {
                     IconGlyph(
                         if (open) ConversationIcons.chevronUp else ConversationIcons.chevronDown,
@@ -350,8 +346,17 @@ fun ActivityBar(
                     )
                 }
             }
-            shown.forEach { task ->
-                TaskRow(task, pane.tasks, now, onOpenTask)
+            // The rows scroll inside the panel rather than growing it: the panel stands over the
+            // transcript, and a long list of tasks would cover the conversation it belongs to.
+            if (shown.isNotEmpty()) {
+                Column(
+                    Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    shown.forEach { task ->
+                        TaskRow(task, pane.tasks, now, onOpenTask)
+                    }
+                }
             }
         }
     }
@@ -377,7 +382,7 @@ private fun TaskRow(
                     Modifier.padding(start = 20.dp)
                 },
             )
-            .touchable(LANDSCAPE_TOUCH)
+            .touchable(LocalTouch.current)
             .action(
                 "Open ${taskLabel(task)}",
                 { onOpen(task) },
@@ -422,6 +427,17 @@ private fun TaskRow(
     }
 }
 
+// What the task sheet says under its name: what kind of task, and whether it is still going.
+fun taskState(task: Task, ended: Boolean, nowMillis: Double): String {
+    val kind = task.kind.takeIf { it.isNotEmpty() }
+    val state = if (ended || task.state == "ended") {
+        "ended"
+    } else {
+        parseIsoMillis(task.since)?.let { elapsedSpan(nowMillis - it) }?.let { "running $it" } ?: "running"
+    }
+    return listOfNotNull(kind, state, "backgrounded".takeIf { task.backgrounded }).joinToString(" · ")
+}
+
 // The output of a watched task, on its own sheet: the lines the follow has brought, newest at
 // the foot, and the end once it arrives. The follow is asked for when the sheet opens, which is
 // also what a re-open re-asks for — the node owns the from-line and the sheet owns the reading.
@@ -432,11 +448,20 @@ fun TaskOutputSheet(
     io: PaneIo,
     breakpoint: Breakpoint,
     onDismiss: () -> Unit,
+    now: Double = wallClockMillis(),
 ) {
     val tokens = Kampr.tokens
     val listState = rememberLazyListState()
     BottomSheet(breakpoint, onDismiss) {
-        SheetHeader(taskLabel(task), "${task.kind} · ${pane.id}", null, onDismiss)
+        // A task is named by the command it runs, so it is set as one: in the sans face a
+        // `--workspace` reads as a single dash.
+        SheetHeader(
+            taskLabel(task),
+            taskState(task, pane.taskOutput[task.id]?.ended != null, now),
+            null,
+            onDismiss,
+            titleStyle = tokens.type.meta.copy(fontFamily = tokens.fonts.mono, fontSize = tokens.type.paneTitle.fontSize),
+        )
         LaunchedEffect(task.id) {
             io.send(ClientMsg.ConvoFollow(pane.id, task.id, 0))
         }
@@ -457,12 +482,13 @@ fun TaskOutputSheet(
                 .fillMaxWidth()
                 .weight(1f)
                 .padding(horizontal = 20.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
         ) {
             if (lines.isEmpty()) {
                 item { KText("waiting for output", tokens.type.meta, tokens.color.mute) }
             }
             items(lines, key = { at -> "line:$at" }) { line ->
-                KText(line, tokens.type.meta, tokens.color.text, maxLines = 8)
+                KText(line, tokens.type.meta.copy(lineHeight = tokens.type.meta.fontSize * 1.45f), tokens.color.text, maxLines = 8)
             }
             ended?.let {
                 item {
@@ -492,6 +518,7 @@ fun SessionSheet(
     io: PaneIo,
     breakpoint: Breakpoint,
     onDismiss: () -> Unit,
+    now: Double = wallClockMillis(),
 ) {
     var query by remember { mutableStateOf("") }
     var confirmControl by remember { mutableStateOf<Control?>(null) }
@@ -526,7 +553,7 @@ fun SessionSheet(
                             KText(it, Kampr.tokens.type.meta, Kampr.tokens.color.dim)
                         }
                     }
-                    pane.limits?.let { limitsWord(it) }?.let {
+                    pane.limits?.let { limitsWord(it, now) }?.let {
                         KText(it, Kampr.tokens.type.meta, Kampr.tokens.color.dim)
                     }
                 }
@@ -633,10 +660,10 @@ private fun ControlRow(
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 LabelText(control.label, tokens.type.metaSmall, tokens.color.mute)
-                KText(valueWord(control.value) ?: "—", tokens.type.meta, tokens.color.text, maxLines = 1)
+                KText(controlValueWord(control) ?: "—", tokens.type.meta, tokens.color.text, maxLines = 1)
             }
-            when (control.kind) {
-                "toggle" -> {
+            when {
+                control.kind == "toggle" -> {
                     val v = control.value
                     val on = v is JsonPrimitive && v.booleanOrNull == true
                     KText(
@@ -645,7 +672,7 @@ private fun ControlRow(
                         if (on) tokens.color.onAccent else tokens.color.dim,
                         Modifier
                             .background(if (on) tokens.color.accent else tokens.color.raise, shape)
-                            .touchable(LANDSCAPE_TOUCH)
+                            .touchable(LocalTouch.current)
                             .action(
                                 "Turn ${control.label} ${if (on) "off" else "on"}",
                                 { onPick(JsonPrimitive(!on)) },
@@ -656,6 +683,9 @@ private fun ControlRow(
                     )
                 }
 
+                // A choice lists its options under it, so there is nothing for a press to open.
+                control.choice -> Unit
+
                 else -> {
                     KText(
                         "Change",
@@ -664,7 +694,7 @@ private fun ControlRow(
                         Modifier
                             .background(tokens.color.raise, shape)
                             .edge(tokens.card, shape)
-                            .touchable(LANDSCAPE_TOUCH)
+                            .touchable(LocalTouch.current)
                             .action("Change ${control.label}", { editing = true }, shape)
                             .padding(horizontal = 12.dp, vertical = 6.dp),
                     )
@@ -674,7 +704,7 @@ private fun ControlRow(
         when {
             confirming -> Unit
 
-            control.kind == "choice" -> ChoiceOptions(control, onPick)
+            control.choice -> ChoiceOptions(control, onPick)
 
             editing -> KField(
                 "a value",
@@ -704,30 +734,46 @@ private fun valueElement(control: Control, text: String): JsonElement = if (cont
     JsonPrimitive(text)
 }
 
+// `kind` is an open string, so a control that lists options is a choice whatever word it came with.
+private val Control.choice: Boolean get() = kind == "choice" || (kind != "toggle" && options.isNotEmpty())
+
+// The option's own name for a control's value: the source's value is a word for the machine
+// (`acceptEdits`), and the label beside it is the word for the reader.
+fun controlValueWord(control: Control): String? {
+    if (control.kind == "toggle") return (control.value as? JsonPrimitive)?.booleanOrNull?.let { if (it) "on" else "off" }
+    val value = valueWord(control.value) ?: return null
+    return control.options.firstOrNull { it.value == value }?.label ?: value
+}
+
+// The current option is the one drawn strongest — ticked and edged in the accent — because it is
+// the answer to "what is it set to", and a faint tint read as the one option that was off.
 @Composable
 private fun ChoiceOptions(control: Control, onPick: (JsonElement) -> Unit) {
     val tokens = Kampr.tokens
+    val shape = RoundedCornerShape(tokens.radii.sm)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         control.options.forEach { option ->
             val current = control.value?.let(::valueWord) == option.value
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .background(if (current) tokens.color.accentSoft else tokens.color.surface2, RoundedCornerShape(tokens.radii.sm))
-                    .touchable(LANDSCAPE_TOUCH)
+                    .background(if (current) tokens.color.accentSoft else tokens.color.surface2, shape)
+                    .edge(if (current) BorderSpec(1.5.dp, tokens.color.accent) else tokens.card, shape)
+                    .touchable(LocalTouch.current)
                     .action(
                         "Set ${control.label} to ${option.label}",
                         { onPick(JsonPrimitive(option.value)) },
-                        RoundedCornerShape(tokens.radii.sm),
+                        shape,
                         selected = current,
                     )
                     .padding(horizontal = 10.dp, vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                KText(option.label, tokens.type.meta, tokens.color.text, Modifier.weight(1f))
+                KText(if (current) "✓" else "", tokens.type.buttonSmall, tokens.color.accent, Modifier.width(14.dp))
+                KText(option.label, if (current) tokens.type.buttonSmall else tokens.type.meta, tokens.color.text, Modifier.weight(1f))
                 option.detail?.let {
-                    KText(it, tokens.type.micro, tokens.color.mute, maxLines = 2)
+                    KText(it, tokens.type.micro, tokens.color.dim, maxLines = 2)
                 }
             }
         }
@@ -799,7 +845,7 @@ private fun ActionRow(
                 tokens.color.onAccent,
                 Modifier
                     .background(tokens.color.accent, shape)
-                    .touchable(LANDSCAPE_TOUCH)
+                    .touchable(LocalTouch.current)
                     .action(
                         "Run ${action.label}",
                         {
@@ -856,7 +902,7 @@ private fun ArgField(spec: ArgSpec, text: String, onChange: (String) -> Unit) {
                     if (picked) tokens.color.onAccent else tokens.color.text,
                     Modifier
                         .background(if (picked) tokens.color.accent else tokens.color.raise, shape)
-                        .touchable(LANDSCAPE_TOUCH)
+                        .touchable(LocalTouch.current)
                         .action("Set ${spec.label} to $option", { onChange(option) }, shape, selected = picked)
                         .padding(horizontal = 10.dp, vertical = 5.dp),
                 )
@@ -897,7 +943,7 @@ fun SuggestStrip(
                 Modifier
                     .background(tokens.color.raise, shape)
                     .edge(tokens.card, shape)
-                    .touchable(LANDSCAPE_TOUCH)
+                    .touchable(LocalTouch.current)
                     .action("Complete with ${s.label}", { onPick(s) }, shape)
                     .padding(horizontal = 10.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -956,7 +1002,7 @@ private fun SendBarButton(
         fg,
         Modifier
             .background(bg, shape)
-            .touchable(LANDSCAPE_TOUCH)
+            .touchable(LocalTouch.current)
             .action(say, onClick, shape)
             .padding(horizontal = 12.dp, vertical = 5.dp),
     )

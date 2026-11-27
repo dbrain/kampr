@@ -118,7 +118,7 @@ pub(super) fn prompt(pending: &Pending, theme: &Theme, width: u16) -> Strip {
                 .add_modifier(Modifier::BOLD),
         ),
     ])];
-    if let Some(context) = pending.context.as_deref().filter(|c| !c.trim().is_empty()) {
+    if let Some(context) = pending.described() {
         lines.push(context_line(context.trim(), theme, width));
     }
     // Only the keys the node offered. It decides whether a submit key follows, per harness —

@@ -13,11 +13,13 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.isNative
 import dev.kampr.shared.model.nativeActions
 import dev.kampr.shared.model.nativeFacts
@@ -28,13 +30,16 @@ import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.ZoomMode
+import dev.kampr.shared.wire.isHeadlessClaude
 import dev.kampr.shared.wire.isMuffit
+import dev.kampr.shared.wire.isTerminalClaude
 import kotlinx.serialization.json.JsonObject
 
 private sealed interface ActionStep {
     data class Rename(val kind: String, val name: String, val at: String, val clearable: Boolean) : ActionStep
     data class Close(val kind: String, val name: String, val holds: Int, val verb: String, val op: ManageOp) : ActionStep
     data class Focus(val kind: String, val name: String, val at: String) : ActionStep
+    data class Hand(val title: String, val name: String, val detail: String, val confirm: String, val op: ManageOp) : ActionStep
 }
 
 // The in-session sheet, which is the half of this that may talk about the desk at all: it is
@@ -52,6 +57,12 @@ fun PaneActionsSheet(
     onFiles: (() -> Unit)? = null,
     tools: @Composable () -> Unit = {},
     desk: Boolean = false,
+    // Whether the pane's node starts Claude with no terminal, so a terminal Claude can move there.
+    headless: Boolean = false,
+    // A hand-over makes the pane the conversation continues in, which is the one to look at next.
+    onCreated: (String) -> Unit = {},
+    // A hand-over carries a rid so that a second refusal, equal to the first, is still an ack.
+    onAsk: (ManageOp, rid: String) -> Unit = { op, _ -> onManage(op) },
 ) {
     val compact = breakpoint != Breakpoint.Portrait
     var refusal by remember { mutableStateOf<String?>(null) }
@@ -59,12 +70,30 @@ fun PaneActionsSheet(
     // Herdr's split tree, held exactly as it was handed over: the client never reads inside it,
     // it just gives the same bytes back to `layout.apply`.
     var snapshot by remember(pane.tabId) { mutableStateOf<JsonObject?>(null) }
+    // A second hand-over of the same conversation forks it, so one waits out the other's ack.
+    var handing by remember(pane.id) { mutableStateOf<String?>(null) }
+    var hands by remember { mutableIntStateOf(0) }
+    // An op that went out as the socket dropped is never answered, and the node refuses a repeat.
+    val live = LocalConnectionStatus.current is ConnectionStatus.Live
+    LaunchedEffect(live) {
+        if (!live) handing = null
+    }
 
     LaunchedEffect(outcome) {
         val ack = outcome ?: return@LaunchedEffect
+        if (ack.op == handing) handing = null
         when {
+            !ack.ok && ack.code == BUSY && ack.op in HANDING -> step = stopFirst(ack, pane)
+
             !ack.ok -> refusal = ack.message ?: ack.code
+
             ack.op == "layout.export" -> snapshot = ack.layout
+
+            ack.op in HANDING -> {
+                ack.id?.let(onCreated)
+                onDismiss()
+            }
+
             ack.op in DISMISSING -> onDismiss()
         }
     }
@@ -72,11 +101,16 @@ fun PaneActionsSheet(
     fun send(op: ManageOp) {
         refusal = null
         step = null
-        onManage(op)
+        if (op.op in HANDING) {
+            handing = op.op
+            onAsk(op, "hand-${++hands}")
+        } else {
+            onManage(op)
+        }
     }
 
     val back = { step = null }
-    val scopes = paneScopes(pane, panes, snapshot, desk, ::send, { step = it }, onDismiss, onFind, onFiles, tools)
+    val scopes = paneScopes(pane, panes, snapshot, desk, headless, handing, ::send, { step = it }, onDismiss, onFind, onFiles, tools)
     BottomSheet(breakpoint, onDismiss, wideWidth = if (step == null && scopes.size > 1) SHEET_WIDE_WIDTH else DIALOG_WIDTH) {
         when (val at = step) {
             is ActionStep.Rename -> RenamePage(at.kind, if (at.at == pane.id) paneTitle(pane) else at.name, at.name, at.clearable, compact, back, onDismiss) { send(ManageOp.Rename(at.at, it)) }
@@ -97,6 +131,17 @@ fun PaneActionsSheet(
                     onConfirm = { send(at.op) },
                 )
             }
+
+            is ActionStep.Hand -> ConfirmPage(
+                title = at.title,
+                subject = at.name,
+                detail = at.detail,
+                confirm = at.confirm,
+                compact = compact,
+                onBack = back,
+                onDismiss = onDismiss,
+                onConfirm = { send(at.op) },
+            )
 
             is ActionStep.Focus -> ConfirmPage(
                 title = "Focus at the desk?",
@@ -146,6 +191,8 @@ private fun paneScopes(
     panes: List<PaneInfo>,
     snapshot: JsonObject?,
     desk: Boolean,
+    headless: Boolean,
+    handing: String?,
     send: (ManageOp) -> Unit,
     ask: (ActionStep) -> Unit,
     onDismiss: () -> Unit,
@@ -172,6 +219,16 @@ private fun paneScopes(
             MenuRow("Browse files", leaving(it), KamprIcons.folder, label = "Browse the files where this $kind is working")
         }
         if (!pane.isMuffit) tools()
+        if (headless && pane.isTerminalClaude) {
+            MenuRow(
+                "Continue without terminal",
+                { send(ManageOp.ClaudeFromTerminal(pane.id)) },
+                KamprIcons.chat,
+                label = "Stop Claude in this terminal and continue its conversation with no terminal",
+                enabled = handing == null,
+                busy = handing == ManageOp.ClaudeFromTerminal.OP,
+            )
+        }
         if (native) {
             nativeActions(pane, desk).filterNot { it.confirm }.forEach { action ->
                 MenuRow(action.verb.replaceFirstChar(Char::uppercase), { send(action.op) }, KamprIcons.desk, label = action.spoken)
@@ -203,6 +260,7 @@ private fun paneScopes(
         val facts = if (native && !pane.isMuffit) nativeFacts(pane) else emptyList()
         if (facts.isNotEmpty()) Note(facts.joinToString(" · "))
     }
+    if (pane.isHeadlessClaude) return listOf(headlessScope(pane, name, handing, send, ask))
     if (pane.isMuffit) return listOf(own)
     // A Kampr session's tab and workspace are its node's own, so they close and rename as herdr's
     // do, and only herdr's can be put on the desk.
@@ -273,7 +331,37 @@ private fun CloseRow(kind: String, name: String, holds: Int, verb: String, op: M
     )
 }
 
-private val DISMISSING = setOf("close", "native.close", "native.forget")
+private val DISMISSING = setOf("close", "native.close", "native.forget", ManageOp.ClaudeEnd.OP)
+
+private val HANDING = setOf(ManageOp.ClaudeToTerminal.OP, ManageOp.ClaudeFromTerminal.OP)
+
+private const val BUSY = "busy"
+
+// A Claude at rest moves on one press; a busy one is refused with the node's sentence naming what
+// would stop, which is what the operator confirms before the op goes again with `interrupt`.
+private fun stopFirst(ack: ServerMsg.Managed, pane: PaneInfo): ActionStep.Hand {
+    val name = pane.label ?: pane.id.substringAfter('/')
+    val detail = ack.message ?: "Claude is busy: moving it now stops what it is doing."
+    return if (ack.op == ManageOp.ClaudeToTerminal.OP) {
+        ActionStep.Hand("Stop Claude and open in a terminal?", name, detail, "Stop and open in terminal", ManageOp.ClaudeToTerminal(pane.id, interrupt = true))
+    } else {
+        ActionStep.Hand("Stop Claude and continue without the terminal?", name, detail, "Stop and continue", ManageOp.ClaudeFromTerminal(pane.id, interrupt = true))
+    }
+}
+
+// A Claude with no terminal has no tab, workspace or desk: it moves to a terminal or it ends.
+private fun headlessScope(pane: PaneInfo, name: String, handing: String?, send: (ManageOp) -> Unit, ask: (ActionStep) -> Unit): Scope = {
+    SheetSection("This conversation")
+    MenuRow(
+        "Open in terminal",
+        { send(ManageOp.ClaudeToTerminal(pane.id)) },
+        KamprIcons.shell,
+        label = "Continue this conversation in a terminal",
+        enabled = handing == null,
+        busy = handing == ManageOp.ClaudeToTerminal.OP,
+    )
+    CloseRow("session", name, 0, "end", ManageOp.ClaudeEnd(pane.id), ask)
+}
 
 private fun held(kind: String, name: String, holds: Int): String = when {
     kind == "pane" || kind == "session" || holds <= 0 -> name

@@ -1,3 +1,4 @@
+use crate::reach::Reach;
 use crate::wire::{Image, SessionInfo, TranscriptPage};
 use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
@@ -10,6 +11,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use url::Url;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -78,6 +80,23 @@ impl Client {
         Ok(body)
     }
 
+    pub fn base(&self) -> &Url {
+        &self.base
+    }
+
+    /// Whether the daemon takes this node's token, asked of its session list.
+    pub async fn reach(&self) -> Reach {
+        let request = self.http.get(self.url("/sessions")).timeout(PROBE_TIMEOUT);
+        match self.send(request).await {
+            Err(e) => Reach::Away(format!("{e:#}")),
+            Ok(response) => {
+                let status = response.status().as_u16();
+                let body: Value = response.json().await.unwrap_or(Value::Null);
+                Reach::from_status(status, &body)
+            }
+        }
+    }
+
     pub async fn sessions(&self) -> Result<Vec<SessionInfo>> {
         let body = self
             .ok_json(self.http.get(self.url("/sessions")), "listing sessions")
@@ -144,25 +163,36 @@ impl Client {
     }
 
     async fn control(&self, id: &str, verb: &str, body: Option<Value>) -> Result<()> {
-        self.control_verb(id, verb, body).await.map(|_| ())
+        self.post_session(id, verb, body).await.map(|_| ())
     }
 
-    /// A control verb over REST, with the daemon's answer body.
-    pub async fn control_verb(&self, id: &str, verb: &str, body: Option<Value>) -> Result<Value> {
+    /// A POST to one of the session's REST routes, with the daemon's answer body.
+    pub async fn post_session(&self, id: &str, route: &str, body: Option<Value>) -> Result<Value> {
         let mut request = self
             .http
-            .post(self.url(&format!("/sessions/{}/{verb}", segment(id))));
+            .post(self.url(&format!("/sessions/{}/{route}", segment(id))));
         if let Some(body) = &body {
             request = request.json(body);
         }
-        self.ok_json(request, verb).await
+        self.ok_json(request, route).await
     }
 
     pub async fn answer(&self, id: &str, prompt: u64, answer: Answer) -> Result<Answered> {
+        self.post_answer(id, "permission", json!({ "id": prompt, "answer": answer.word() }))
+            .await
+    }
+
+    /// The model's question (wire 3.4): `answer` is an option's index, or words.
+    pub async fn answer_question(&self, id: &str, question: u64, answer: Value) -> Result<Answered> {
+        self.post_answer(id, "question", json!({ "id": question, "answer": answer }))
+            .await
+    }
+
+    async fn post_answer(&self, id: &str, what: &str, body: Value) -> Result<Answered> {
         let request = self
             .http
-            .post(self.url(&format!("/sessions/{}/permission", segment(id))))
-            .json(&json!({ "id": prompt, "answer": answer.word() }));
+            .post(self.url(&format!("/sessions/{}/{what}", segment(id))))
+            .json(&body);
         let response = self.send(request).await?;
         let status = response.status();
         if status == reqwest::StatusCode::CONFLICT {
@@ -171,7 +201,7 @@ impl Client {
         let body: Value = response.json().await.unwrap_or(Value::Null);
         if !status.is_success() {
             bail!(
-                "answering a prompt: muffit answered {status}: {}",
+                "answering a {what}: muffit answered {status}: {}",
                 error_of(&body)
             );
         }
@@ -214,7 +244,7 @@ pub async fn next(socket: &mut Socket) -> Option<crate::wire::ServerFrame> {
         match socket.next().await? {
             Ok(Message::Text(text)) => match serde_json::from_str(&text) {
                 Ok(frame) => return Some(frame),
-                Err(e) => tracing::debug!(error = %e, "skipping a muffit frame"),
+                Err(e) => unreadable(&text, &e),
             },
             Ok(Message::Close(_)) | Err(_) => return None,
             Ok(_) => {}
@@ -222,7 +252,23 @@ pub async fn next(socket: &mut Socket) -> Option<crate::wire::ServerFrame> {
     }
 }
 
-fn error_of(body: &Value) -> String {
+/// A status frame skipped freezes the pane's status, so it is said aloud, once each time the
+/// failure changes rather than on every push.
+fn unreadable(text: &str, error: &serde_json::Error) {
+    static LAST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    if serde_json::from_str::<Value>(text).map_or(true, |frame| frame["type"] != "status") {
+        tracing::debug!(error = %error, "skipping a muffit frame");
+        return;
+    }
+    let said = error.to_string();
+    let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if last.as_deref() != Some(said.as_str()) {
+        tracing::warn!(error = %said, "muffit sent a status frame this node cannot read; the pane's status stands still");
+        *last = Some(said);
+    }
+}
+
+pub(crate) fn error_of(body: &Value) -> String {
     body["error"]
         .as_str()
         .map_or_else(|| body.to_string(), str::to_string)

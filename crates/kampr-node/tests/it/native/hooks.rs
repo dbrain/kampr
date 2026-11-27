@@ -342,6 +342,7 @@ async fn a_permission_request_is_a_hook_card_and_each_answer_is_its_decision() {
         let name = c.fire(bash_request(Some(suggestions())));
         let card = c.question().await;
         assert_eq!(card["source"], "hook", "{card}");
+        assert_eq!(card["kind"], "permission", "{card}");
         assert_eq!(card["header"], "Bash", "{card}");
         assert_eq!(card["question"], "Write a probe file", "{card}");
         assert_eq!(card["context"], "echo probe > probe.txt", "{card}");
@@ -450,6 +451,7 @@ async fn a_question_is_asked_one_at_a_time_and_answered_with_its_labels() {
     let name = c.fire(ask(false));
     let first = c.question().await;
     assert_eq!(first["source"], "hook", "{first}");
+    assert_eq!(first["kind"], "question", "{first}");
     assert_eq!(first["question"], "Which colour?", "{first}");
     assert_eq!(first["header"], "Colour · 1 of 2", "{first}");
     assert_eq!(first["options"][1]["label"], "Green", "{first}");
@@ -1375,6 +1377,7 @@ async fn a_plan_is_approved_with_its_own_input_and_a_mode_or_sent_back_with_word
         let name = c.fire(plan_request(&plan));
         let card = c.question().await;
         assert_eq!(card["header"], "Plan", "{card}");
+        assert_eq!(card["kind"], "plan", "{card}");
         assert_eq!(card["question"], "Approve Claude's plan?", "{card}");
         assert_eq!(card["context"], json!(plan), "the plan was cut short");
         let options: Vec<(&str, &str, bool)> = card["options"]
@@ -1591,6 +1594,11 @@ async fn an_elicitation_is_never_held_and_is_shown_as_answered_at_the_terminal()
         let card = c.question().await;
         assert_eq!(card["source"], "hook", "{card}");
         assert_eq!(card["header"], "probe · MCP", "{card}");
+        assert_eq!(card["kind"], "form", "{card}");
+        assert!(
+            card.get("fields").is_none(),
+            "a hooked form is the desk's: {card}"
+        );
         assert_eq!(card["question"], "Pick a colour and a count", "{card}");
         assert!(card.get("options").is_none_or(|o| o == &json!([])), "{card}");
         assert_eq!(

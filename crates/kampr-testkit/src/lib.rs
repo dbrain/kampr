@@ -16,6 +16,7 @@ pub mod elf;
 mod keeper;
 mod keepers;
 pub mod release;
+pub mod resume;
 mod static_kampr;
 
 pub use keeper::{kampr, keeper, target_binary};

@@ -1,5 +1,5 @@
 use super::App;
-use crate::host::{HostMenu, Took};
+use crate::host::{HostMenu, Offers, Took};
 use crate::keymap::Action;
 use crate::sidebar::{self, Area};
 use crossterm::event::KeyEvent;
@@ -35,16 +35,33 @@ impl App {
     }
 
     pub(super) fn host_key(&mut self, key: KeyEvent) {
-        let Some(menu) = self.host.as_ref() else {
+        let Some(mut menu) = self.host.take() else {
             return;
         };
-        match menu.key(key) {
-            Took::Stay => {}
-            Took::Close => self.host = None,
+        let node = menu.node.clone();
+        let records = self.resumes.get(&node).cloned().unwrap_or_default();
+        let offers = Offers {
+            claude: self.offers_claude(&node),
+            records: &records,
+        };
+        match menu.key(key, &offers) {
+            Took::Stay => self.host = Some(menu),
+            Took::Close => {}
             Took::New => {
-                self.host = None;
                 self.router.leave();
                 self.act(Action::NewWorkspace);
+            }
+            Took::Claude => {
+                self.router.leave();
+                self.new_claude = Some(crate::headless::NewClaude::new(&node));
+            }
+            Took::Resume(id) => {
+                self.router.leave();
+                self.spend_record(&node, &id, "native.resume");
+            }
+            Took::Dismiss(id) => {
+                self.spend_record(&node, &id, "native.resume.dismiss");
+                self.host = Some(menu);
             }
         }
     }
@@ -53,7 +70,21 @@ impl App {
         let Some(menu) = self.host.as_ref() else {
             return;
         };
+        let offers = Offers {
+            claude: self.offers_claude(&menu.node),
+            records: self
+                .resumes
+                .get(&menu.node)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+        };
         let state = self.client.state();
-        menu.render(state.herd.node(&menu.node), area, buf, &self.options.theme);
+        menu.render(
+            state.herd.node(&menu.node),
+            &offers,
+            area,
+            buf,
+            &self.options.theme,
+        );
     }
 }

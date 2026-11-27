@@ -1,10 +1,11 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use kampr_core::provider::{AgentStatus, Input, PaneInfo, PaneStream, Provider, RawScrollback};
+use kampr_keep::{Mode, SessionDir};
 use tokio::sync::watch;
 
 pub const PREFIX: &str = "c:";
@@ -27,12 +28,22 @@ pub struct Herd {
 }
 
 impl Herd {
-    pub fn new() -> (Self, watch::Receiver<u64>) {
+    /// The herd of a node that starts with sessions already running: every live pipe-mode keeper
+    /// session under `root` is a headless Claude, since nothing else is started in pipe mode.
+    /// The keeper outlives the node, so the panes must too.
+    pub fn at(root: &Path) -> (Self, watch::Receiver<u64>) {
         let (topology, rx) = watch::channel(0);
+        let running = kampr_keep::list(root)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(SessionDir::alive)
+            .filter(|s| s.spec().is_ok_and(|spec| spec.mode == Mode::Pipe))
+            .map(|s| s.id().to_string())
+            .collect();
         (
             Self {
                 topology,
-                sessions: Mutex::new(HashSet::new()),
+                sessions: Mutex::new(running),
             },
             rx,
         )

@@ -40,8 +40,18 @@ fun SendingCard(
     attachments: AttachmentStore,
     onResend: () -> Unit,
     onDismiss: () -> Unit,
+    onUnqueue: (() -> Unit)? = null,
 ) {
     val turn = sendingTurn(send)
+    if (onUnqueue != null) {
+        TurnView(turn, "", emptyList(), {}, attachments = attachments, now = now, agent = agent, edge = BlockEdge.Head)
+        BlockFrame(speakerSkin(speakerOf(turn), agent), BlockEdge.Foot) {
+            DisableSelection {
+                QuietAction("Remove", onUnqueue, label = "Take this queued message back")
+            }
+        }
+        return
+    }
     if (send.state == PendingSend.State.Sending || send.state == PendingSend.State.Delivered) {
         TurnView(turn, "", emptyList(), {}, attachments = attachments, now = now, agent = agent)
         return

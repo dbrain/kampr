@@ -132,14 +132,20 @@ pub fn overage_decision(policy: Overage, is_using_overage: bool) -> OverageDecis
     }
 }
 
-/// Guard 7: a turn the model started for itself, not one the operator asked for.
-pub fn is_self_started(origin: Option<&str>) -> bool {
-    origin.is_some_and(|o| {
-        !o.is_empty()
-            && o != "user"
-            && o != "prompt"
-            && (o.contains("task") || o == "schedule" || o == "cron" || o == "loop")
-    })
+/// Guard 7: a turn the session started for itself, not one the operator asked for. A person's
+/// turn carries no `origin` at all (#682), or `{kind: "human"}`; every other kind — a task
+/// notification, a schedule, a peer, an auto-continuation — is somebody else's word, so any
+/// origin the binary names that is not the person's counts.
+pub fn is_self_started(origin: Option<&serde_json::Value>) -> bool {
+    match origin {
+        None | Some(serde_json::Value::Null) => false,
+        Some(origin) => origin.get("kind").and_then(serde_json::Value::as_str) != Some("human"),
+    }
+}
+
+/// Guard 10: has a window of the plan run out? `get_usage` reports each as a percent.
+pub fn window_exhausted(percent: Option<f64>) -> bool {
+    percent.is_some_and(|p| p >= 100.0)
 }
 
 /// Guard 9: where this session's usage is billed, for the pane's header.
@@ -234,15 +240,28 @@ mod tests {
         );
     }
 
-    // guard 7: a task or schedule origin is self-started; an operator prompt is not.
+    // guard 7, on the shapes the binary sends (#682): an object with a kind, or nothing.
     #[test]
     fn a_task_origin_is_self_started_and_a_prompt_is_not() {
-        assert!(is_self_started(Some("task_notification")));
-        assert!(is_self_started(Some("schedule")));
-        assert!(is_self_started(Some("cron")));
+        let task = json!({"kind": "task-notification", "producer": "session-task", "runId": "0mwy"});
+        assert!(is_self_started(Some(&task)));
+        assert!(is_self_started(Some(
+            &json!({"kind": "task-notification", "subkind": "scheduled-trigger"})
+        )));
+        assert!(is_self_started(Some(&json!({"kind": "auto-continuation"}))));
+        assert!(is_self_started(Some(&json!({"kind": "something-new"}))));
+        assert!(is_self_started(Some(&json!("task_notification"))));
         assert!(!is_self_started(None));
-        assert!(!is_self_started(Some("user")));
-        assert!(!is_self_started(Some("")));
+        assert!(!is_self_started(Some(&json!(null))));
+        assert!(!is_self_started(Some(&json!({"kind": "human"}))));
+    }
+
+    #[test]
+    fn a_window_at_a_hundred_percent_is_exhausted() {
+        assert!(window_exhausted(Some(100.0)));
+        assert!(window_exhausted(Some(120.5)));
+        assert!(!window_exhausted(Some(94.0)));
+        assert!(!window_exhausted(None));
     }
 
     // guard 9: the billing facts name the plan, a key, and an overage.

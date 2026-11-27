@@ -81,7 +81,9 @@ impl Conn {
                 .await
                 .expect("the client sent no manage op")
                 .expect("the scripted node lost its client");
-            if frame["t"] == "manage" {
+            // A node that keeps sessions is asked on its own what to resume after a reboot
+            // (docs/25), which is no op the operator chose.
+            if frame["t"] == "manage" && frame["op"] != "native.resumable" {
                 return frame;
             }
         }
@@ -93,8 +95,8 @@ impl Conn {
     async fn sent_nothing(&mut self) {
         let until = tokio::time::Instant::now() + HUSH;
         while let Ok(Some(frame)) = tokio::time::timeout_at(until, self.from_client.recv()).await {
-            assert_ne!(
-                frame["t"], "manage",
+            assert!(
+                frame["t"] != "manage" || frame["op"] == "native.resumable",
                 "an op went out with no confirmation: {frame}"
             );
         }

@@ -1798,39 +1798,61 @@ impl Session {
             && !ref_.terminal
             && kampr_claude::provider::session_of(&local).is_some()
         {
-            let text = match &input {
-                Input::Bytes(bytes) => String::from_utf8_lossy(bytes).to_string(),
-                Input::Paste(text) => text.clone(),
-                Input::Keys(keys) => keys.join(" "),
+            use kampr_core::conversation::composer::Step;
+            // The composer sends a whole message; named keys are a line the conversation model
+            // reads, where Enter sends it and a key with no text meaning is dropped.
+            let steps = match input {
+                Input::Bytes(bytes) => vec![Step::Submit(String::from_utf8_lossy(&bytes).to_string())],
+                Input::Paste(text) => vec![Step::Submit(text)],
+                Input::Keys(keys) => self
+                    .lines
+                    .entry((pane.to_string(), None))
+                    .or_default()
+                    .keys(&keys),
             };
-            // A paste the composer held is a path in the text: the image becomes a content
-            // block, and what is left is a file the agent reads by its @-ref.
-            let (text, images) = crate::paste::lift_images(&self.node.state_dir, &text);
-            let files = crate::paste::paste_files(&self.node.state_dir, &text);
-            self.convo_command(
-                pane,
-                kampr_core::conversation::Command::Input {
-                    text,
-                    // The id the client minted is the one an `input.unqueue` can name.
-                    msg_id: id.unwrap_or_else(|| ulid::Ulid::generate().to_string()),
-                    images: images
-                        .into_iter()
-                        .map(|image| kampr_core::conversation::Image {
-                            mime: image.mime,
-                            data: image.data,
-                        })
-                        .collect(),
-                    files: files
-                        .into_iter()
-                        .map(|path| kampr_core::conversation::FileRef { path: path.into() })
-                        .collect(),
-                    when: match when.as_deref() {
-                        Some("now") => kampr_core::conversation::When::Now,
-                        Some("next") => kampr_core::conversation::When::Next,
-                        _ => kampr_core::conversation::When::Idle,
+            for step in steps {
+                let text = match step {
+                    Step::Submit(text) => text,
+                    Step::Interrupt => {
+                        self.convo_command(
+                            pane,
+                            kampr_core::conversation::Command::Steer(
+                                kampr_core::conversation::Steer::Interrupt,
+                                None,
+                            ),
+                        );
+                        continue;
+                    }
+                };
+                // A paste the composer held is a path in the text: the image becomes a content
+                // block, and what is left is a file the agent reads by its @-ref.
+                let (text, images) = crate::paste::lift_images(&self.node.state_dir, &text);
+                let files = crate::paste::paste_files(&self.node.state_dir, &text);
+                self.convo_command(
+                    pane,
+                    kampr_core::conversation::Command::Input {
+                        text,
+                        // The id the client minted is the one an `input.unqueue` can name.
+                        msg_id: id.clone().unwrap_or_else(|| ulid::Ulid::generate().to_string()),
+                        images: images
+                            .into_iter()
+                            .map(|image| kampr_core::conversation::Image {
+                                mime: image.mime,
+                                data: image.data,
+                            })
+                            .collect(),
+                        files: files
+                            .into_iter()
+                            .map(|path| kampr_core::conversation::FileRef { path: path.into() })
+                            .collect(),
+                        when: match when.as_deref() {
+                            Some("now") => kampr_core::conversation::When::Now,
+                            Some("next") => kampr_core::conversation::When::Next,
+                            _ => kampr_core::conversation::When::Idle,
+                        },
                     },
-                },
-            );
+                );
+            }
             return true;
         }
         let source = if typed { Source::Terminal } else { Source::Reply };
@@ -2166,38 +2188,33 @@ impl Session {
             }
             return;
         }
-        // A headless Claude pane answers through its conversation, not a terminal keystroke. A muffit
-        // session pane is also terminal-less, so the Claude pane id is the discriminator.
-        if let Some(ref_) = session.conversation(&local)
-            && !ref_.terminal
-            && kampr_claude::provider::session_of(&local).is_some()
-        {
-            let reply = reply.cloned().unwrap_or(match key {
-                "1" => Reply::Allow {
-                    input: None,
-                    remember: false,
-                },
-                "2" => Reply::Allow {
-                    input: None,
-                    remember: true,
-                },
-                "3" => Reply::Deny { message: None },
-                _ => {
-                    self.wire.error(
-                        ErrorCode::BadRequest,
-                        "this conversation takes no such answer key",
-                        Some(pane),
-                    );
-                    return;
+        if headless_claude(&session, &local) {
+            let ask = id.unwrap_or_default().to_string();
+            // Clients send beside every press the permission reply its key would mean, so a bare
+            // allow or deny is the key, and only the conversation knows what the key means there.
+            let command = match reply {
+                Some(Reply::Allow { input: None, .. } | Reply::Deny { message: None }) | None => {
+                    kampr_core::conversation::Command::Press {
+                        ask,
+                        key: key.to_string(),
+                        text: text.map(str::to_string),
+                    }
                 }
-            });
-            self.convo_command(
-                pane,
-                kampr_core::conversation::Command::Answer {
-                    ask: id.unwrap_or_default().to_string(),
-                    reply,
+                Some(reply) => kampr_core::conversation::Command::Answer {
+                    ask,
+                    reply: reply.clone(),
                 },
+            };
+            self.convo_command(pane, command);
+            return;
+        }
+        if let Some(link) = session.muffit_link(&local) {
+            self.audit(
+                "answer",
+                Some(pane),
+                Some(json!({ "key": key, "id": id, "convo": true })),
             );
+            crate::muffit::answer(&link, &self.conversations, &self.wire, pane, key, id, text, reply).await;
             return;
         }
         if text.is_some_and(|t| !t.trim().is_empty()) {
@@ -2211,12 +2228,6 @@ impl Session {
                 "an answer key is one or two characters",
                 Some(pane),
             );
-            return;
-        }
-        let key = reply.and_then(crate::muffit::key_of).unwrap_or(key);
-        if let Some(result) = session.answer(&local, key).await {
-            self.audit("answer", Some(pane), Some(json!({ "key": key, "convo": true })));
-            crate::muffit::answer_result(&self.wire, pane, result);
             return;
         }
         // The node decides whether a submit key follows, per harness — the client sends only the
@@ -2303,6 +2314,15 @@ impl Session {
             self.relay_to_peer(pane, relayed);
             return;
         };
+        if headless_claude(&session, &local) {
+            self.convo_command(
+                pane,
+                kampr_core::conversation::Command::Submit {
+                    ask: id.unwrap_or_default().to_string(),
+                },
+            );
+            return;
+        }
         if let Some(submitted) = self.node.hooks.submit(pane, id) {
             self.audit(
                 "answer.submit",
@@ -2546,6 +2566,7 @@ impl Session {
             op.cwd = Some(self.node.config.journal_home().display().to_string());
         }
         let claude_settings = self.node.hooks.launch_settings();
+        let journals = self.node.journals();
         let manager = Manager {
             herdr: &session.herdr,
             node_id: &session.node_id,
@@ -2557,6 +2578,8 @@ impl Session {
             // session is still created by the primary's provider and named under its id.
             native: primary.native.as_ref(),
             muffit: primary.muffit.as_ref(),
+            claude: primary.claude.as_ref(),
+            journals: &journals,
             muffit_tui: self.node.config.muffit.tui_command(),
             docker: primary.docker.as_ref(),
             holder: &kampr_keep::view_holder(&self.device.name),
@@ -3753,10 +3776,19 @@ async fn send_pending(
         multi: found.as_ref().is_some_and(|f| f.multi),
         context: None,
         id: None,
+        kind: None,
+        fields: Vec::new(),
         options: found.map(|f| f.options).unwrap_or_default(),
         source: PendingSource::Screen,
     });
     sent.then_some(true)
+}
+
+/// A headless Claude pane answers through its conversation, not a terminal keystroke. A muffit
+/// session pane is also terminal-less, so the Claude pane id is the discriminator.
+fn headless_claude(session: &crate::sessions::SessionNode, local: &str) -> bool {
+    session.conversation(local).is_some_and(|c| !c.terminal)
+        && kampr_claude::provider::session_of(local).is_some()
 }
 
 /// What the node sends after the answer key, per harness — the wire says the node decides and a

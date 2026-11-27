@@ -66,6 +66,7 @@ impl Ask {
             header,
             multi,
             cursor: None,
+            kind: None,
             context: None,
             id: None,
         }

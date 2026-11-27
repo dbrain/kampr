@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::debug;
 
+mod claude;
+
 /// Everything you would do at the keyboard. Every field is optional at this layer so an unknown
 /// or malformed op is a `bad_request` to one client rather than a decode failure that kills the
 /// connection.
@@ -99,6 +101,9 @@ pub struct ManageOp {
     /// A container, by id or name, for the `docker.*` ops.
     #[serde(default)]
     pub id: Option<String>,
+    /// A Claude hand-over the operator confirmed after a `busy` refusal: stop what it named.
+    #[serde(default)]
+    pub interrupt: Option<bool>,
 }
 
 const MUFFIT_LISTED: Duration = Duration::from_secs(3);
@@ -207,7 +212,7 @@ fn is_native_op(op: &str) -> bool {
 
 /// `command` is a line for the login shell, `args` an argv; neither is the login shell itself.
 pub fn native_argv(op: &ManageOp, claude_settings: Option<&str>) -> Vec<String> {
-    let shell = kampr_native::login_shell();
+    let shell = kampr_core::login::shell();
     if let Some(line) = op.command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
         return vec![shell, "-lc".into(), launch::line(line, claude_settings)];
     }
@@ -259,6 +264,8 @@ pub enum ManageError {
     Herdr(String),
     #[error("{0}")]
     GroupCloseRequired(String),
+    #[error("{0}")]
+    Busy(String),
 }
 
 impl ManageError {
@@ -269,6 +276,7 @@ impl ManageError {
             Self::UnknownTarget(_) => ErrorCode::UnknownPane,
             Self::Herdr(_) => ErrorCode::HerdrUnavailable,
             Self::GroupCloseRequired(_) => ErrorCode::WorkspaceGroupCloseRequired,
+            Self::Busy(_) => ErrorCode::Busy,
         }
     }
 }
@@ -318,6 +326,8 @@ pub struct Manager<'a> {
     pub provider: &'a std::sync::Arc<kampr_core::HerdrProvider>,
     pub native: Option<&'a std::sync::Arc<NativeProvider>>,
     pub muffit: Option<&'a std::sync::Arc<kampr_muffit::MuffitProvider>>,
+    pub claude: Option<&'a std::sync::Arc<kampr_claude::ClaudeSource>>,
+    pub journals: &'a kampr_journal::Registry,
     pub muffit_tui: &'a str,
     pub docker: Option<&'a std::sync::Arc<kampr_docker::Directory>>,
     /// Who a native `pane.size` names as the size's holder, `phone:<device>`.
@@ -379,6 +389,10 @@ impl Manager<'_> {
             }),
             _ if crate::docker::is_docker_op(&op.op) => Ok(Managed {
                 reply: self.docker_op(op).await?,
+                settle: None,
+            }),
+            _ if claude::is_claude_op(&op.op) => Ok(Managed {
+                reply: self.claude_op(op).await?,
                 settle: None,
             }),
             _ if op.op.starts_with("muffit.") || self.muffit_target(op).is_some() => Ok(Managed {
@@ -522,7 +536,7 @@ impl Manager<'_> {
         let line = format!("exec {} --resume {session}", self.muffit_tui);
         let pane = native
             .create(NewSession {
-                argv: vec![kampr_native::login_shell(), "-lc".into(), line],
+                argv: vec![kampr_core::login::shell(), "-lc".into(), line],
                 cwd: Some(cwd.to_string()),
                 label: op.label.clone(),
                 cols,
@@ -550,6 +564,31 @@ impl Manager<'_> {
         let native = self
             .native
             .ok_or_else(|| ManageError::BadRequest("this node does not keep native sessions".into()))?;
+        match op.op.as_str() {
+            "native.resumable" => return Ok(json!({ "resumable": resumable(&native.resumable()) })),
+            "native.resume" => {
+                let id = op
+                    .id
+                    .as_deref()
+                    .ok_or_else(|| ManageError::BadRequest("native.resume needs `id`".into()))?;
+                let pane = native
+                    .resume(id)
+                    .await
+                    .map_err(|e| ManageError::BadRequest(format!("{e:#}")))?;
+                return Ok(json!({ "pane_id": pane }));
+            }
+            "native.resume.dismiss" => {
+                let id = op
+                    .id
+                    .as_deref()
+                    .ok_or_else(|| ManageError::BadRequest("native.resume.dismiss needs `id`".into()))?;
+                native
+                    .dismiss(id)
+                    .map_err(|e| ManageError::BadRequest(format!("{e:#}")))?;
+                return Ok(json!({}));
+            }
+            _ => {}
+        }
         if op.op == "native.create" {
             let place = match op.desk {
                 Some(true) => {
@@ -1502,8 +1541,22 @@ fn layout_root(layout: Option<&Value>) -> Result<Value, ManageError> {
 /// sits at the top level rather than inside a record. It is keyed on the op rather than found by
 /// widening the search, because `pane.size` answers a top-level `pane_id` too and it creates
 /// nothing — an `id` there would tell a client to wait for a herd patch that is never coming.
+/// What a boot left that a person may start again (docs/25): each command as the list it runs as,
+/// for a client to escape before it shows one.
+fn resumable(records: &[kampr_native::Resumable]) -> Value {
+    records
+        .iter()
+        .map(|r| json!({ "id": r.id, "label": r.label, "argv": r.command.argv, "cwd": r.command.cwd }))
+        .collect()
+}
+
 pub fn created_id(op: &str, reply: &Value) -> Option<String> {
-    if op == "fleet.run" || op == "native.create" || op == "muffit.create" {
+    if op == "fleet.run"
+        || op == "native.create"
+        || op == "native.resume"
+        || op == "muffit.create"
+        || claude::is_claude_op(op)
+    {
         return reply["pane_id"].as_str().map(str::to_string);
     }
     for (record, field) in [
@@ -1546,6 +1599,7 @@ pub fn measured(op: &str, reply: &Value) -> Vec<(&'static str, Value)> {
     ];
     let fields: &[&'static str] = match op {
         "pane.size" => SIZE,
+        "native.resumable" | "claude.resumable" => &["resumable"],
         _ => &[],
     };
     fields

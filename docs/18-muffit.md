@@ -2,7 +2,7 @@
 
 [muffit](../../muffit) is a coding agent with its own daemon. It has no terminal: a session is a
 structured conversation (messages, tool calls, permission prompts, workers) served over REST and a
-websocket. Its contract is `../muffit/docs/api/kampr.md` (wire 3.3) with the frame types in
+websocket. Its contract is `../muffit/docs/api/kampr.md` (wire 3.3, read up to 3.9) with the frame types in
 `../muffit/docs/api/events.schema.json`. This brief is how Kampr shows one.
 
 ## The shape
@@ -13,13 +13,20 @@ pane, because `convo`, `convo.turn`, `pending` and `convo.facets` already pass t
 pane id and `input`/`answer` are relayed back. Muffit's own hub (`muffit.oldug.com`) is never needed:
 its `remote` rows would show every session twice.
 
-- **Reaching it.** `[muffit]` in the node's config: `url` (default `http://127.0.0.1:7891`),
+- **Reaching it.** `[muffit]` in the node's config: `url` (default: `[server] host` and `port` from muffit's
+  own config, found as muffit finds it — `$MUFFIT_CONFIG_FILE`, else `$XDG_CONFIG_HOME/muffit/config.toml`,
+  else `~/.config/muffit/config.toml` — and `http://127.0.0.1:7891` when that says nothing),
   `token` or `token_file` (default `$MUFFIT_SERVER_TOKEN`, else `$MUFFIT_HOME/server.token`, else
   `~/.local/share/muffit/server.token`), `enabled` (default: on when a token is found). Every
   request sends `Authorization: Bearer` and **no `Origin` header**: muffit refuses browser-style
   requests with a 403 (kampr.md §1), which is also why a browser cannot reach it without the node.
 - **A muffit daemon that is down is a supported state.** The provider lists nothing and retries;
   it never fails the herd and never marks the node offline.
+- **A daemon that answers and refuses the token is not.** Two daemons can share a host (a container's
+  holds 7891 while the operator's listens on 7892, as on giftofthemagi2), and the node's token opens only
+  one of them. A 401 or 403 on the session stream is a `WARN` naming the url and status, once per change
+  of state rather than once per retry, and `kampr doctor`'s `muffit` check fails on it with the line to
+  set. The node's start-up line says where the url came from (`from=`).
 
 ## Panes
 
@@ -105,10 +112,31 @@ A permission prompt is a `pending` with `source: "transcript"`:
                { "key": "3", "label": "Deny" } ] }
 ```
 
-`answer {key}` on a muffit pane posts `allow`/`always`/`deny` to
-`POST /sessions/{id}/permission` with the prompt's id; it is never keystrokes. A 409 (answered
+`answer {key}` on a muffit pane goes to its open conversation, or straight to the daemon when
+nobody is watching it, and posts `allow`/`always`/`deny` to `POST /sessions/{id}/permission` with
+the prompt's id; it is never keystrokes. A 409 (answered
 elsewhere) clears the strip. The prompt reaches the herd too, so push names it the way it names a
 screen-read question.
+
+## What a newer daemon adds
+
+The attach's `hello` names the daemon's wire version, and the pane declares only what that version
+serves (`kampr_muffit::abilities`): a 3.3 daemon gets exactly the pane described above. The node
+greets as 3.9 and always asks for `events`.
+
+| Since | The daemon gives | The pane gets |
+|---|---|---|
+| 3.4 | `question` on the snapshot and session list | A `pending` with id `q<n>`, an option per answer and `Type something` (`text: true`) when `free_text`. An answer goes as the option's index, or the words, to `POST /sessions/{id}/question`; a `reply` beside the key is ignored, since every client sends the permission shape. The pane is `blocked` while one waits |
+| 3.5 | A worker's `attach?observe=true` | Opened beside `convo.sub`; each event it pushes re-reads the worker's transcript at once. The 1.5 s poll stays as the floor |
+| 3.6 | `shell_tasks`, `job.stop` | `convo.tasks` rows `kind: "shell"`, titled by the command; `stoptask` sends `job.stop` with the id as a string (`"job1"`, whatever kampr.md's example shows). Their output is not on the wire |
+| 3.7 | `tool_call_delta`; `rename`, `clear`, `queue.unqueue`, `fork` | The call being typed in `convo.live`; the verbs as steers and actions |
+| 3.8 | `commands.list` | The session sheet's actions (controls, answers and `commands.list` itself left out; arguments from `handle_control`), `/` completion, and a `/<action> words` line run as that verb instead of being sent to the model. Before 3.8 the seven verbs every 3.x takes |
+| 3.9 | `billed_to`, `rate_limit` | `convo.session` billing (the catalog name) and `rate_limited`; `convo.limits` says `rate-limited` and when it lifts |
+| 3.10 | `PromptRaised` / `PromptSettled` events | The `pending` raised and cleared without waiting for the next status push. The daemon that records them still greets as 309, so this is read whatever the version says |
+
+`context` carries the strategy's budget (`pressure.budget`) as the total; with none the facts line
+says the size alone. Pause, resume and stop are REST verbs only: the socket's `handle_control`
+answers them `unknown verb`.
 
 ## Input
 

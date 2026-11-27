@@ -1,8 +1,10 @@
 use crate::alarm::Alarm;
 use crate::procs;
 use crate::replay::{self, Origin};
+use crate::resume::{Intake, Resume};
 use crate::screen::{Feed, Screen};
-use kampr_core::provider::{AgentStatus, PaneEvent, ProgramState, ProgramStatus};
+use kampr_core::program::{ProgramRecords, ProgramState};
+use kampr_core::provider::{AgentStatus, PaneEvent};
 use kampr_core::push::{PaneChanges, Pulse};
 use kampr_keep::{Replay, SessionDir, SizedReader};
 use std::os::fd::OwnedFd;
@@ -48,6 +50,8 @@ pub(crate) struct Live {
     /// Taken when the node starts following, not when its tail thread first reads: the program
     /// can write in between, and what it writes then is asked of this node.
     replay_end: Option<u64>,
+    resume: Option<Resume>,
+    intake: Mutex<Option<Arc<Intake>>>,
 }
 
 #[derive(Default)]
@@ -114,10 +118,16 @@ pub(crate) struct Joined {
 }
 
 impl Live {
-    pub fn start(dir: SessionDir, topology: watch::Sender<u64>) -> Arc<Self> {
+    pub fn start(
+        dir: SessionDir,
+        topology: watch::Sender<u64>,
+        resume: Option<Resume>,
+        token: Option<kampr_core::resume::Token>,
+    ) -> Arc<Self> {
         let (cols, rows) = size_of(&dir);
         let typed_at_report = read_at(&dir);
         let replay_end = dir.log_end().ok();
+        let intake = Intake::open(resume.as_ref(), &dir, token);
         let live = Arc::new(Self {
             dir,
             state: Mutex::new(State {
@@ -142,6 +152,8 @@ impl Live {
             jobs: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             replay_end,
+            intake: Mutex::new(intake),
+            resume,
         });
         let tail = live.clone();
         std::thread::Builder::new()
@@ -157,6 +169,9 @@ impl Live {
     }
 
     pub fn stop(&self) {
+        if let Some(intake) = self.intake.lock().unwrap().as_ref() {
+            intake.stop();
+        }
         self.stop.store(true, Ordering::Relaxed);
         self.alarm.ring();
     }
@@ -250,18 +265,35 @@ impl Live {
         Ok(())
     }
 
-    pub fn program(&self) -> Option<ProgramStatus> {
-        self.state.lock().unwrap().screen.program().cloned()
+    /// The keeper writes `exit.json` after the child's last byte reached the log, and nothing wakes
+    /// the tail for it, so whoever reads the program settles it: what ran or waited on the child
+    /// is over once the screen has read to the log's end.
+    fn settle_exit(&self) {
+        if self.dir.exit().is_none() {
+            return;
+        }
+        let mut state = self.state.lock().unwrap();
+        if self.dir.log_end().is_ok_and(|end| end <= state.offset) {
+            state.screen.process_ended();
+        }
+    }
+
+    pub fn program(&self) -> Option<ProgramRecords> {
+        self.settle_exit();
+        let state = self.state.lock().unwrap();
+        let records = state.screen.program();
+        (!records.is_empty()).then(|| records.clone())
     }
 
     /// The harness's own report when it makes them (#600), the output window otherwise. Its `done`
     /// is read, as the window's is, once somebody types; it has no error word, so an error is idle.
     pub fn status(&self) -> AgentStatus {
+        self.settle_exit();
         let exited = self.dir.exit().is_some();
         let (program, reports) = {
             let state = self.state.lock().unwrap();
             (
-                state.screen.program().map(|p| p.state),
+                state.screen.program().fold().map(|p| p.state),
                 state.screen.program_reports(),
             )
         };
@@ -478,8 +510,10 @@ impl Live {
                     let split = replay_end.saturating_sub(from).min(n as u64) as usize;
                     if split > 0 {
                         let mut state = self.state.lock().unwrap();
-                        state.screen.feed(&buf[..split]);
+                        let fed = state.screen.feed(&buf[..split]);
                         state.offset = from + split as u64;
+                        drop(state);
+                        self.resumed(from, &fed, true);
                     }
                     if split < n {
                         self.feed_live(from + split as u64, &buf[split..n]);
@@ -497,12 +531,15 @@ impl Live {
                 }
                 Ok(Replay::CaughtUp) => {
                     let replayed = self.caught_up();
+                    let finished =
+                        self.dir.exit().is_some() && reader.end().is_ok_and(|end| end <= reader.offset());
+                    self.settle_exit();
                     self.tick();
                     if replayed {
                         self.publish();
                     }
                     self.checkpoint(false);
-                    if self.dir.exit().is_some() && reader.end().is_ok_and(|end| end <= reader.offset()) {
+                    if finished {
                         self.checkpoint(true);
                         return;
                     }
@@ -607,6 +644,26 @@ impl Live {
     /// Only bytes the program writes from now on are answered: a query in the replayed log was
     /// asked of whoever was there when it was written, and answering it again types the answer
     /// into whatever is reading the terminal today.
+    /// A session another process made (`kampr new`, a node before a restart) has its token only in
+    /// `resume.token`, which may land after this node first looked; each report looks again.
+    fn resumed(&self, from: u64, fed: &Feed, replayed: bool) {
+        if fed.resume.is_empty() {
+            return;
+        }
+        let intake = {
+            let mut held = self.intake.lock().unwrap();
+            if held.is_none() {
+                *held = Intake::open(self.resume.as_ref(), &self.dir, None);
+            }
+            held.clone()
+        };
+        if let Some(intake) = intake {
+            for resumed in &fed.resume {
+                intake.report(&resumed.body, from + resumed.end as u64, replayed);
+            }
+        }
+    }
+
     fn feed_live(&self, at: u64, bytes: &[u8]) {
         let (fed, moved) = {
             let mut state = self.state.lock().unwrap();
@@ -642,6 +699,7 @@ impl Live {
             }
             activity.settle = Some(now + WORKING);
         }
+        self.resumed(at, &fed, false);
         let replies = self.ours(at, &fed);
         if !replies.is_empty()
             && let Err(e) = self.write_master(&replies)

@@ -77,7 +77,7 @@ impl SessionNode {
     ) -> Arc<Self> {
         let (docker, adopted) = docker.unzip();
         let herdr = Herdr::new(&sockets.herdr);
-        let native = primary.then(|| native_provider(config, &sockets.hooks)).flatten();
+        let native = primary.then(|| native_provider(config, &sockets)).flatten();
         let muffit = primary.then(|| muffit_provider(config)).flatten();
         let (claude, claude_provider) = if primary {
             claude_source(config)
@@ -225,12 +225,6 @@ impl SessionNode {
         })
     }
 
-    /// The pane's waiting prompt, answered with the key through its daemon's REST.
-    pub async fn answer(&self, local: &str, key: &str) -> Option<crate::muffit::AnswerResult> {
-        let link = self.muffit_link(local)?;
-        Some(crate::muffit::answer(&link.provider, &link.session, key).await)
-    }
-
     pub fn online(&self) -> bool {
         self.provider.health().online
     }
@@ -256,8 +250,16 @@ impl SessionNode {
 
 /// A node whose native root cannot be made still serves its herd; it only has no sessions of
 /// its own.
-fn native_provider(config: &Config, hook_socket: &Path) -> Option<Arc<NativeProvider>> {
+fn native_provider(config: &Config, sockets: &Sockets) -> Option<Arc<NativeProvider>> {
+    let hook_socket = &sockets.hooks;
     let built = config.native.resolve().and_then(|mut native| {
+        native.resume = match config.native.resume_in(&sockets.state) {
+            Ok(resume) => Some(resume),
+            Err(e) => {
+                warn!(error = %format!("{e:#}"), "[native] resume is not understood, so nothing is resumed");
+                None
+            }
+        };
         native.send_argv = config.naming.send_argv;
         native.forget_ended = true;
         native.blocked = Some(Arc::new(|agent: Option<&str>, screen: &str| {
@@ -280,6 +282,12 @@ fn native_provider(config: &Config, hook_socket: &Path) -> Option<Arc<NativeProv
         Ok(native) => {
             let native = Arc::new(native);
             upgrade_keepers(&native);
+            if config.native.resume.trim() == "auto"
+                && let Ok(runtime) = tokio::runtime::Handle::try_current()
+            {
+                let resuming = native.clone();
+                runtime.spawn(async move { resuming.resume_all().await });
+            }
             Some(native)
         }
         Err(e) => {
@@ -296,6 +304,8 @@ type DockerHost = (Arc<kampr_docker::Directory>, Arc<crate::adopt::Ledger>);
 struct Sockets {
     herdr: PathBuf,
     hooks: PathBuf,
+    /// The node's state directory, where what must outlive a boot is kept; empty on a sibling.
+    state: PathBuf,
 }
 
 fn docker_source(config: &Config, state_dir: &Path) -> Option<DockerHost> {
@@ -315,7 +325,7 @@ fn muffit_provider(config: &Config) -> Option<Arc<MuffitProvider>> {
     let endpoint = config.muffit.resolve(&config.journal_home())?;
     match kampr_muffit::Client::new(&endpoint.url, &endpoint.token) {
         Ok(client) => {
-            info!(url = %endpoint.url, "serving the muffit daemon's sessions");
+            info!(url = %endpoint.url, from = %endpoint.from, "serving the muffit daemon's sessions");
             Some(Arc::new(MuffitProvider::new(client)))
         }
         Err(e) => {
@@ -333,6 +343,9 @@ fn claude_source(
     Option<Arc<kampr_claude::ClaudeSource>>,
     Option<Arc<kampr_claude::ClaudeProvider>>,
 ) {
+    if !config.claude.headless {
+        return (None, None);
+    }
     let root = match kampr_keep::root() {
         Ok(root) => root,
         Err(e) => {
@@ -354,13 +367,14 @@ fn claude_source(
             }
         },
     };
-    let (herd, _topology) = kampr_claude::Herd::new();
+    let (herd, _topology) = kampr_claude::Herd::at(&root);
     let herd = Arc::new(herd);
     let source = Arc::new(kampr_claude::ClaudeSource::new(
         config.claude.clone(),
         herd.clone(),
         root.clone(),
         keeper.clone(),
+        kampr_core::login::shell(),
     ));
     let provider = Arc::new(kampr_claude::ClaudeProvider::new(herd, root));
     (Some(source), Some(provider))
@@ -429,6 +443,7 @@ impl Sessions {
             Sockets {
                 herdr: socket,
                 hooks: crate::hooks::socket(config, state_dir),
+                state: state_dir.to_path_buf(),
             },
             true,
             None,
@@ -522,6 +537,7 @@ impl Sessions {
                 Sockets {
                     herdr: socket,
                     hooks: PathBuf::new(),
+                    state: PathBuf::new(),
                 },
                 false,
                 self.primary.native.clone(),
@@ -701,6 +717,7 @@ mod tests {
             Sockets {
                 herdr: "/nowhere/herdr.sock".into(),
                 hooks: PathBuf::new(),
+                state: PathBuf::new(),
             },
             primary,
             None,

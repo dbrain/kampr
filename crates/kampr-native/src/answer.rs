@@ -4,8 +4,7 @@ use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::vte::{Params, Perform};
-use base64::Engine as _;
-use kampr_core::provider::{ProgramState, ProgramStatus};
+use kampr_core::program::{self, Event};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Ask {
@@ -34,8 +33,11 @@ pub(crate) enum Ask {
 pub(crate) struct Found {
     pub asks: Vec<Ask>,
     pub cleared: bool,
-    /// The last `OSC 7501` report in the piece; `Some(None)` is `state=clear`, the harness gone.
-    pub program: Option<Option<ProgramStatus>>,
+    /// What the piece did to the program records, in the order it did it (docs/24): every
+    /// `OSC 7501` report, each `OSC 133 A` and each `RIS`.
+    pub program: Vec<Event>,
+    /// Every `OSC 7577` body, which only whoever holds the session's token can read (docs/25).
+    pub resume: Vec<Vec<u8>>,
 }
 
 /// A second `vte` parser over the same bytes, stopping right after each sequence the screen must
@@ -93,6 +95,7 @@ impl Perform for Scan {
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
         if intermediates.is_empty() && byte == b'c' {
             self.found.cleared = true;
+            self.found.program.push(Event::Reset);
             self.stop = true;
         }
     }
@@ -113,10 +116,11 @@ impl Perform for Scan {
                 }
             }
             [b"7501", b"?"] => self.ask(Ask::Program),
-            [b"7501", report] => {
-                if let Some(report) = program(report) {
-                    self.found.program = Some(report);
-                }
+            [b"7501", report] => self.found.program.extend(program::parse(report)),
+            [b"133", b"A", ..] => self.found.program.push(Event::Prompt),
+            [b"7577", body] => {
+                self.found.resume.push(body.to_vec());
+                self.stop = true;
             }
             [code, rest @ ..] if matches!(*code, b"10" | b"11" | b"12") => {
                 let Some(mut code) = number(code) else { return };
@@ -141,40 +145,6 @@ impl Perform for Scan {
     fn terminated(&self) -> bool {
         self.stop
     }
-}
-
-/// `state=…:app=claude-code[:id=…][:kind=…][:progress=…][:title=…][:msg=<base64>]` (#600). A
-/// report with an `id` is one of the session's subagents, not the session.
-fn program(report: &[u8]) -> Option<Option<ProgramStatus>> {
-    let report = std::str::from_utf8(report).ok()?;
-    let mut state = None;
-    let mut kind = None;
-    let mut message = None;
-    for field in report.split(':') {
-        let (key, value) = field.split_once('=')?;
-        match key {
-            "id" => return None,
-            "state" => state = Some(value),
-            "kind" => kind = Some(value.to_string()),
-            "msg" => {
-                message = base64::engine::general_purpose::STANDARD
-                    .decode(value)
-                    .ok()
-                    .map(|m| String::from_utf8_lossy(&m).into_owned())
-            }
-            _ => {}
-        }
-    }
-    let state = match state? {
-        "idle" => ProgramState::Idle,
-        "working" => ProgramState::Working,
-        "blocked" => ProgramState::Blocked,
-        "done" => ProgramState::Done,
-        "error" => ProgramState::Error,
-        "clear" => return Some(None),
-        _ => return None,
-    };
-    Some(Some(ProgramStatus { state, kind, message }))
 }
 
 fn number(bytes: &[u8]) -> Option<usize> {

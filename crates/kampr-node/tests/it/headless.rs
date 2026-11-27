@@ -1,327 +1,376 @@
-//! A headless Claude pane's composer send and ask-dock answer reach the conversation, not a
-//! terminal there is none behind (docs/21 Phase 5b-1). The node routes the pane's input and
-//! answer to the conversation; a send that bailed to `write_pane` would come back as a wire
-//! error, because a headless pane has no terminal to write to. No test reaches the real API:
-//! the session runs under a keeper against the mock, and `KAMPR_KEEP_EXE` points the node at the
-//! keeper this build made.
+//! A headless Claude pane's composer send and ask-dock answer reach the child, not a terminal
+//! there is none behind (docs/21 Phase 5b). The child is kampr-claude's stand-in
+//! (`tests/support/fake-claude.py`), so no turn is spent and nothing reaches Anthropic, and what
+//! it records is what the node really sent it.
 
 use crate::live::Harness;
 use crate::native::Client;
 use kampr_auth::Role;
-use kampr_core::conversation::{NewSession, Source};
-use serde_json::json;
-use std::process::{Child, Command as StdCommand};
+use kampr_core::conversation::{Ending, NewSession, Source};
+use serde_json::{Value, json};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
-const CLAUDE: &str = "/home/dbrain/.local/bin/claude";
-const MOCK: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../research/probe/claude-stream-json/mock.py"
-);
-
-struct Mock {
-    port: u16,
-    child: Child,
-    _dir: tempfile::TempDir,
-}
-
-impl Mock {
-    fn start() -> Self {
-        let dir = tempfile::tempdir().expect("a mock control dir");
-        let port = free_port();
-        let child = StdCommand::new("python3")
-            .args([MOCK, &port.to_string(), &dir.path().display().to_string()])
-            .spawn()
-            .expect("the mock endpoint");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                break;
-            }
-            assert!(Instant::now() < deadline, "the mock never came up");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Mock {
-            port,
-            child,
-            _dir: dir,
-        }
-    }
-
-    fn url(&self) -> String {
-        format!("http://127.0.0.1:{}", self.port)
-    }
-}
-
-impl Drop for Mock {
-    fn drop(&mut self) {
-        self.child.kill().ok();
-        self.child.wait().ok();
-    }
-}
-
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("a free port")
-        .local_addr()
-        .unwrap()
-        .port()
-}
+const FAKE: &str = include_str!("../../../kampr-claude/tests/support/fake-claude.py");
 
 async fn eventually(what: &str, mut found: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(45);
-    loop {
-        if found() {
-            return;
-        }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !found() {
         assert!(Instant::now() < deadline, "{what} never happened");
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
-/// The wire frames that are refusals: a composer send or answer that bailed to a terminal there
-/// is none behind comes back as one of these.
-fn errors(client: &Client) -> Vec<serde_json::Value> {
+fn recorded(dir: &Path, name: &str) -> Vec<String> {
+    std::fs::read_to_string(dir.join(name))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn words(dir: &Path) -> Vec<Value> {
+    recorded(dir, "stdin.log")
+        .iter()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|l| l["type"] == "user")
+        .collect()
+}
+
+fn errors(client: &Client) -> Vec<Value> {
     client
         .others
         .iter()
-        .filter(|m| m["t"].as_str() == Some("error"))
+        .filter(|m| m["t"] == "error")
         .cloned()
         .collect()
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_terminal() {
-    let mock = Mock::start();
-    let keep = tempfile::tempdir().expect("a throwaway CLAUDE_CONFIG_DIR");
-    let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
-    for (k, v) in [
-        ("KAMPR_TEST", "1"),
-        ("KAMPR_KEEP_LAUNCH", "detached"),
-        ("ANTHROPIC_BASE_URL", mock.url().as_str()),
-        ("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"),
-        (
-            "KAMPR_KEEP_EXE",
-            kampr_testkit::keeper().display().to_string().as_str(),
-        ),
-        ("KAMPR_KEEP_ROOT", keep_root.path().display().to_string().as_str()),
-    ] {
-        unsafe { std::env::set_var(k, v) };
-    }
-    let _h = Harness::start_with("headless-convo", |config| {
-        config.claude.binary = CLAUDE.into();
-        config.claude.config_dir = keep.path().display().to_string();
-        config.claude.mode = "default".into();
-    })
-    .await;
+// Each test points the process-wide keeper variables at its own root.
+static ONE_AT_A_TIME: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    // Create a headless Claude pane through the node's own source: the herd lists it.
-    let source = _h
-        .node
-        .sessions
-        .claude_source()
-        .expect("the node's headless Claude source");
-    let session_id = source
-        .create(NewSession {
-            cwd: Some(keep.path().to_path_buf()),
-            prompt: None,
+struct Headless {
+    _turn: tokio::sync::MutexGuard<'static, ()>,
+    dir: tempfile::TempDir,
+    _keep_root: tempfile::TempDir,
+    _h: Harness,
+    source: std::sync::Arc<kampr_claude::ClaudeSource>,
+    session_id: String,
+    pane: String,
+    client: Client,
+}
+
+impl Headless {
+    async fn start(tag: &str, turn: Value) -> Self {
+        let turn_lock = ONE_AT_A_TIME.lock().await;
+        let dir = tempfile::tempdir().expect("a scratch dir");
+        let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
+        let fake = dir.path().join("fake-claude.py");
+        std::fs::write(&fake, FAKE).unwrap();
+        std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let account =
+            json!({"email": "o@x.dev", "subscriptionType": "Claude Max", "apiProvider": "firstParty"});
+        std::fs::write(
+            dir.path().join("script.json"),
+            json!({"initialize": {"account": account, "commands": [], "models": []}, "turn": turn})
+                .to_string(),
+        )
+        .unwrap();
+        for (k, v) in [
+            ("KAMPR_KEEP_LAUNCH", "detached"),
+            (
+                "KAMPR_KEEP_EXE",
+                kampr_testkit::keeper().display().to_string().as_str(),
+            ),
+            ("KAMPR_KEEP_ROOT", keep_root.path().display().to_string().as_str()),
+        ] {
+            unsafe { std::env::set_var(k, v) };
+        }
+        let config_dir = dir.path().join("claude");
+        let h = Harness::start_with(tag, |config| {
+            config.claude.binary = fake.display().to_string();
+            config.claude.config_dir = config_dir.display().to_string();
         })
-        .await
-        .expect("the headless session to start");
-    let pane = format!("{}/c:{session_id}", _h.node.node_id());
-    eventually("the herd lists the headless pane", || {
-        _h.node.herd().pane(&pane).is_some()
-    })
-    .await;
-
-    let token = _h.token(Role::Full).await;
-    let socket = _h.connect(&token).await;
-    let mut client = Client::over(socket, token);
-
-    // Watching a headless pane opens its conversation (the watch handler routes it straight to
-    // watch_conversation); the abilities frame is the proof it opened.
-    client
-        .send(json!({ "t": "watch", "pane": pane, "conversation": true }))
         .await;
-    client
-        .until("the conversation to open", |c| {
-            c.others
+
+        let source = h
+            .node
+            .sessions
+            .claude_source()
+            .expect("the node's headless Claude source");
+        let session_id = source
+            .create(NewSession {
+                cwd: Some(dir.path().to_path_buf()),
+                prompt: None,
+            })
+            .await
+            .expect("the headless session to start");
+        let pane = format!("{}/c:{session_id}", h.node.node_id());
+        eventually("the herd lists the headless pane", || {
+            h.node.herd().pane(&pane).is_some()
+        })
+        .await;
+
+        let token = h.token(Role::Full).await;
+        let socket = h.connect(&token).await;
+        let client = Client::over(socket, token);
+        Self {
+            _turn: turn_lock,
+            dir,
+            _keep_root: keep_root,
+            _h: h,
+            source,
+            session_id,
+            pane,
+            client,
+        }
+    }
+
+    async fn open(&mut self) -> Value {
+        self.client
+            .send(json!({ "t": "watch", "pane": self.pane, "conversation": true }))
+            .await;
+        self.client
+            .until("the conversation to open", |c| {
+                c.others.iter().find(|m| m["t"] == "convo.abilities").cloned()
+            })
+            .await
+    }
+
+    async fn say(&mut self, text: &str) {
+        self.client
+            .send(json!({ "t": "input", "pane": self.pane, "text": text }))
+            .await;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while words(self.dir.path()).is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the composer send never reached the child: {:?}",
+                errors(&self.client)
+            );
+            self.client.pump(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn asked(&mut self, id: &str, want: impl Fn(&Value) -> bool) -> Value {
+        self.client
+            .until(id, |c| {
+                c.others
+                    .iter()
+                    .rev()
+                    .find(|m| m["t"] == "pending" && m["id"] == id && want(m))
+                    .cloned()
+            })
+            .await
+    }
+
+    async fn send(&mut self, mut frame: Value) {
+        frame["pane"] = json!(self.pane);
+        self.client.send(frame).await;
+    }
+
+    /// The body the source wrote back for this request, once it has.
+    async fn responded(&mut self, request: &str) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let responses: Vec<Value> = recorded(self.dir.path(), "stdin.log")
                 .iter()
-                .find(|m| m["t"].as_str() == Some("convo.abilities"))
-                .cloned()
-        })
-        .await;
-
-    // The composer send: routed to the conversation, so it does not bail to a terminal (no
-    // wire error). A send that went to `write_pane` would come back as one.
-    client
-        .send(json!({ "t": "input", "pane": pane, "text": "say hello" }))
-        .await;
-    let settle = tokio::time::Instant::now() + Duration::from_secs(3);
-    while tokio::time::Instant::now() < settle {
-        client.pump(Duration::from_millis(100)).await;
+                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+                .filter(|l| l["type"] == "control_response")
+                .collect();
+            let judged = recorded(self.dir.path(), "answers.log").len() >= responses.len();
+            let found = responses.iter().find(|l| l["response"]["request_id"] == request);
+            if let Some(line) = found.filter(|_| judged) {
+                return line["response"]["response"].clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "{request} was never answered: {:?}",
+                errors(&self.client)
+            );
+            self.client.pump(Duration::from_millis(100)).await;
+        }
     }
-    assert!(
-        errors(&client).is_empty(),
-        "the composer send bailed to a terminal there is none behind: {:?}",
-        errors(&client)
-    );
 
-    // The ask-dock answer: routed to the conversation the same way, so it too does not bail to
-    // a terminal.
-    client
-        .send(json!({
-            "t": "answer", "pane": pane, "key": "1",
-            "reply": { "allow": { "input": null, "remember": false } }
-        }))
-        .await;
-    let settle = tokio::time::Instant::now() + Duration::from_secs(3);
-    while tokio::time::Instant::now() < settle {
-        client.pump(Duration::from_millis(100)).await;
-    }
-    assert!(
-        errors(&client).is_empty(),
-        "the ask-dock answer bailed to a terminal there is none behind: {:?}",
-        errors(&client)
-    );
-
-    // Close the socket, then end the conversation: the keeper kills the `claude -p` process, so
-    // the node's teardown does not wait on a conversation task that is still reading the pipe-log.
-    drop(client);
-    let _ = source
-        .end(&format!("c:{session_id}"), kampr_core::conversation::Ending::End)
-        .await;
-
-    for k in [
-        "KAMPR_TEST",
-        "KAMPR_KEEP_LAUNCH",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_API_KEY",
-        "KAMPR_KEEP_EXE",
-        "KAMPR_KEEP_ROOT",
-    ] {
-        unsafe { std::env::remove_var(k) };
+    async fn end(self) {
+        drop(self.client);
+        let _ = self
+            .source
+            .end(&format!("c:{}", self.session_id), Ending::End)
+            .await;
+        for k in ["KAMPR_KEEP_LAUNCH", "KAMPR_KEEP_EXE", "KAMPR_KEEP_ROOT"] {
+            unsafe { std::env::remove_var(k) };
+        }
     }
 }
 
-/// The headless pane carries the seam's full control surface (docs/21 Phase 5b-2): the
-/// abilities frame declares what the pane draws, and each declared word reaches the `claude -p`
-/// child — the interrupt, the context reads, the completions, the queue and the files.
+fn init() -> Value {
+    json!({"type":"system","subtype":"init","session_id":"s","apiKeySource":"none","model":"m"})
+}
+
+fn done() -> Value {
+    json!({"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.0,"result":"done"})
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn a_headless_pane_carries_the_seams_full_control_surface() {
-    let mock = Mock::start();
-    let keep = tempfile::tempdir().expect("a throwaway CLAUDE_CONFIG_DIR");
-    let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
-    for (k, v) in [
-        ("KAMPR_TEST", "1"),
-        ("KAMPR_KEEP_LAUNCH", "detached"),
-        ("ANTHROPIC_BASE_URL", mock.url().as_str()),
-        ("ANTHROPIC_API_KEY", "sk-ant-api03-bogus"),
-        (
-            "KAMPR_KEEP_EXE",
-            kampr_testkit::keeper().display().to_string().as_str(),
-        ),
-        ("KAMPR_KEEP_ROOT", keep_root.path().display().to_string().as_str()),
-    ] {
-        unsafe { std::env::set_var(k, v) };
-    }
-    // Under the api policy the key the mock expects may cross to the child; under the plan
-    // default it is scrubbed and the binary has nothing to start with.
-    let _h = Harness::start_with("headless-controls", |config| {
-        config.claude.binary = CLAUDE.into();
-        config.claude.config_dir = keep.path().display().to_string();
-        config.claude.mode = "default".into();
-        config.claude.billing = kampr_claude::config::Billing::Api;
-    })
-    .await;
-
-    let source = _h
-        .node
-        .sessions
-        .claude_source()
-        .expect("the node's headless Claude source");
-    let session_id = source
-        .create(NewSession {
-            cwd: Some(keep.path().to_path_buf()),
-            prompt: None,
-        })
-        .await
-        .expect("the headless session to start");
-    let pane = format!("{}/c:{session_id}", _h.node.node_id());
-    eventually("the herd lists the headless pane", || {
-        _h.node.herd().pane(&pane).is_some()
-    })
-    .await;
-
-    let token = _h.token(Role::Full).await;
-    let socket = _h.connect(&token).await;
-    let mut client = Client::over(socket, token);
-
-    client
-        .send(json!({ "t": "watch", "pane": pane, "conversation": true }))
-        .await;
-    let abilities = client
-        .until("the conversation to open", |c| {
-            c.others
-                .iter()
-                .find(|m| m["t"].as_str() == Some("convo.abilities"))
-                .cloned()
-        })
-        .await;
-    // What the pane draws is what the source declared: the stop control, the completions, the
-    // queue words and the context bar.
-    let declared = &abilities["abilities"];
-    {
-        let word = "interrupt";
+async fn a_headless_panes_composer_send_and_answer_reach_the_child() {
+    let turn = json!([
+        init(),
+        {"type":"control_request","request_id":"tool1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"permission_suggestions":[]}},
+        {"wait": "answer"},
+        done(),
+    ]);
+    let mut s = Headless::start("headless-convo", turn).await;
+    let abilities = s.open().await;
+    for word in ["slash", "queuenext", "sendnow", "unqueue", "files", "images"] {
         assert!(
-            declared["steer"]
+            abilities["abilities"]["input"]
                 .as_array()
                 .is_some_and(|s| s.iter().any(|w| w == word)),
-            "steer declares {word}: {declared}"
+            "input declares {word}: {abilities}"
         );
     }
-    for word in [
-        "slash",
-        "mention",
-        "queuenext",
-        "sendnow",
-        "unqueue",
-        "files",
-        "images",
-    ] {
-        assert!(
-            declared["input"]
-                .as_array()
-                .is_some_and(|s| s.iter().any(|w| w == word)),
-            "input declares {word}: {declared}"
-        );
-    }
-    assert!(
-        declared["facts"]
-            .as_array()
-            .is_some_and(|s| s.iter().any(|w| w == "context")),
-        "facts declare context: {declared}"
+
+    // Under the default plan policy: the account check allows it, and the word reaches the child.
+    s.say("say hello").await;
+    assert_eq!(words(s.dir.path())[0]["message"]["content"], "say hello");
+
+    let asked = s.asked("tool1", |_| true).await;
+    assert_eq!(asked["kind"], "permission", "{asked}");
+    s.send(json!({
+        "t": "answer", "key": "1", "id": "tool1",
+        "reply": { "allow": { "input": null, "remember": false } }
+    }))
+    .await;
+    s.responded("tool1").await;
+    assert_eq!(
+        recorded(s.dir.path(), "answers.log"),
+        ["ok"],
+        "the child rejected the answer's shape"
+    );
+    assert!(errors(&s.client).is_empty(), "{:?}", errors(&s.client));
+    s.end().await;
+}
+
+fn allow(remember: bool) -> Value {
+    json!({ "allow": { "input": null, "remember": remember } })
+}
+
+/// Every frame here is one the web client sends: a press carries the permission-shaped reply its
+/// key would mean on a permission (keys 1 to 3), words carry none, and a form carries its values.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_headless_question_plan_and_form_are_answered_with_what_the_clients_send() {
+    let questions = json!([
+        {"question": "Which fruit?", "header": "Fruit", "multiSelect": false,
+         "options": [{"label": "Apple", "description": "red"}, {"label": "Pear"}]},
+        {"question": "Which suites?", "header": "Tests", "multiSelect": true,
+         "options": [{"label": "unit"}, {"label": "live"}, {"label": "e2e"}]},
+        {"question": "Anything else?", "header": "More", "multiSelect": false,
+         "options": [{"label": "No"}]},
+    ]);
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "description": "how many"},
+            "colour": {"type": "string", "title": "Colour", "enum": ["red", "teal"]},
+        },
+        "required": ["colour"],
+    });
+    let turn = json!([
+        init(),
+        {"type":"control_request","request_id":"ask1","request":{"subtype":"can_use_tool","tool_name":"AskUserQuestion","input":{"questions": questions}}},
+        {"wait": "answer"},
+        {"type":"control_request","request_id":"plan1","request":{"subtype":"can_use_tool","tool_name":"ExitPlanMode","input":{"plan":"# Split the router"}}},
+        {"wait": "answer"},
+        {"type":"control_request","request_id":"form1","request":{"subtype":"elicitation","mcp_server_name":"probe","message":"Pick a colour","mode":"form","requested_schema": schema,"property_order":["colour","count"]}},
+        {"wait": "answer"},
+        done(),
+    ]);
+    let mut s = Headless::start("headless-asks", turn).await;
+    s.open().await;
+    s.say("go").await;
+
+    let fruit = s.asked("ask1#0", |_| true).await;
+    assert_eq!(fruit["kind"], "question", "{fruit}");
+    let labels: Vec<&str> = fruit["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(labels, ["Apple", "Pear", "Type something"], "{fruit}");
+    assert_eq!(fruit["options"][2]["text"], true, "{fruit}");
+    s.send(json!({ "t": "answer", "key": "2", "id": "ask1#0", "reply": allow(true) }))
+        .await;
+
+    let suites = s.asked("ask1#1", |_| true).await;
+    assert_eq!(suites["multi"], true, "{suites}");
+    s.send(json!({ "t": "answer", "key": "1", "id": "ask1#1", "reply": allow(false) }))
+        .await;
+    s.send(json!({ "t": "answer", "key": "3", "id": "ask1#1", "reply": { "deny": { "message": null } } }))
+        .await;
+    s.asked("ask1#1", |p| {
+        p["options"][0]["chosen"] == true && p["options"][2]["chosen"] == true
+    })
+    .await;
+    s.send(json!({ "t": "answer.submit", "id": "ask1#1" })).await;
+
+    s.asked("ask1#2", |_| true).await;
+    s.send(json!({ "t": "answer", "key": "2", "id": "ask1#2", "text": "ship it" }))
+        .await;
+
+    let chosen = s.responded("ask1").await;
+    assert_eq!(chosen["behavior"], "allow", "{chosen}");
+    assert_eq!(
+        chosen["updatedInput"]["answers"],
+        json!({ "Which fruit?": "Pear", "Which suites?": "unit, e2e", "Anything else?": "ship it" }),
+        "{chosen}"
     );
 
-    // The remaining control words (interrupt, context, queue, files) are verified by the
-    // kampr-claude lib tests against the mock: each sends its control request to the child's
-    // stdin and the lib test asserts the line appears in the pipe log. The wire-level proof
-    // here is that the source declares them, so the pane draws the controls.
-    // Close the socket, then end the conversation: the keeper kills the `claude -p` process, so
-    // the node's teardown does not wait on a conversation task that is still reading the pipe-log.
-    drop(client);
-    let _ = source
-        .end(&format!("c:{session_id}"), kampr_core::conversation::Ending::End)
+    let plan = s.asked("plan1", |_| true).await;
+    assert_eq!(plan["kind"], "plan", "{plan}");
+    let revise = plan["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["text"] == true)
+        .unwrap_or_else(|| panic!("an option that takes what to change: {plan}"))
+        .clone();
+    s.send(json!({ "t": "answer", "key": revise["key"], "id": "plan1", "text": "smaller steps" }))
         .await;
+    let revised = s.responded("plan1").await;
+    assert_eq!(
+        (&revised["behavior"], &revised["message"]),
+        (&json!("deny"), &json!("smaller steps")),
+        "{revised}"
+    );
 
-    for k in [
-        "KAMPR_TEST",
-        "KAMPR_KEEP_LAUNCH",
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_API_KEY",
-        "KAMPR_KEEP_EXE",
-        "KAMPR_KEEP_ROOT",
-    ] {
-        unsafe { std::env::remove_var(k) };
-    }
+    let form = s.asked("form1", |_| true).await;
+    assert_eq!(form["kind"], "form", "{form}");
+    assert_eq!(
+        form["fields"],
+        json!([
+            {"name": "colour", "title": "Colour", "type": "string", "required": true, "choices": ["red", "teal"]},
+            {"name": "count", "detail": "how many", "type": "integer"},
+        ]),
+        "{form}"
+    );
+    s.send(json!({
+        "t": "answer", "key": "1", "id": "form1",
+        "reply": { "form": { "values": { "colour": "teal", "count": 3 } } }
+    }))
+    .await;
+    let filled = s.responded("form1").await;
+    assert_eq!(
+        filled,
+        json!({ "action": "accept", "content": { "colour": "teal", "count": 3 } })
+    );
+
+    assert!(
+        recorded(s.dir.path(), "answers.log").iter().all(|l| l == "ok"),
+        "{:?}",
+        recorded(s.dir.path(), "answers.log")
+    );
+    assert!(errors(&s.client).is_empty(), "{:?}", errors(&s.client));
+    s.end().await;
 }

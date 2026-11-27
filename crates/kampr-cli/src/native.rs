@@ -1,3 +1,5 @@
+mod resumed;
+
 use crate::dirs::Dirs;
 use anyhow::{Context, Result, bail};
 use kampr_keep::{Ending, Launch, SessionDir, Spec};
@@ -24,7 +26,7 @@ fn configured(dirs: &Dirs) -> Result<NativeConfig> {
 pub fn new(dirs: &Dirs, new: New) -> Result<()> {
     let native = configured(dirs)?;
     let argv = if new.argv.is_empty() {
-        vec![kampr_fleet::env::login_shell()]
+        vec![kampr_core::login::shell()]
     } else {
         new.argv
     };
@@ -50,8 +52,15 @@ pub fn new(dirs: &Dirs, new: New) -> Result<()> {
     attach_to(&session)
 }
 
-pub fn attach(dirs: &Dirs, query: &str) -> Result<()> {
-    attach_to(&resolve(&configured(dirs)?.root, query)?)
+pub fn attach(dirs: &Dirs, query: &str, restored: bool) -> Result<()> {
+    match find(&configured(dirs)?.root, query)? {
+        Some(session) => attach_to(&session),
+        None if restored => match resumed::offer(dirs, query)? {
+            Some(session) => attach_to(&session),
+            None => crate::restored::into_shell(query),
+        },
+        None => bail!("no session matches {query:?}"),
+    }
 }
 
 fn attach_to(session: &SessionDir) -> Result<()> {
@@ -69,15 +78,15 @@ fn attach_to(session: &SessionDir) -> Result<()> {
     std::process::exit(code)
 }
 
-fn resolve(root: &std::path::Path, query: &str) -> Result<SessionDir> {
+fn find(root: &std::path::Path, query: &str) -> Result<Option<SessionDir>> {
     let sessions = kampr_keep::list(root)?;
     if let Some(exact) = sessions.iter().find(|s| s.id() == query) {
-        return Ok(exact.clone());
+        return Ok(Some(exact.clone()));
     }
     let matching: Vec<&SessionDir> = sessions.iter().filter(|s| s.id().starts_with(query)).collect();
     match matching.as_slice() {
-        [one] => Ok((*one).clone()),
-        [] => bail!("no session matches {query:?}"),
+        [one] => Ok(Some((*one).clone())),
+        [] => Ok(None),
         many => bail!(
             "{query:?} matches {} sessions: {}",
             many.len(),

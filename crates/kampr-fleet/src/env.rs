@@ -10,59 +10,15 @@
 //!
 //! **Read once, hand it to a shell that reads no profile at all.** Running every command under
 //! `sh -lc` would work and costs two things this does not: whatever the profile prints lands in
-//! the middle of the run's output, and a slow profile is paid on every host on every run —
-//! measured here at 107 ms for `-lc` and 398 ms for `-lic`, per command. Capturing the value once
-//! per node process and putting it in the child's environment pays it once, and [`crate::job`]
-//! holds why the shell that then runs the command is neither a login nor an interactive one.
-//!
-//! **And the reading is interactive, which is #419 closing.** `-l` reads `.bash_profile` and
-//! `.profile`; `~/.local/bin` — where `kampr` and `herdr` are installed on all four hosts in this
-//! herd — is added by `.bashrc`, which only an interactive shell reads. Measured on this machine
-//! from `env -i`, which is the environment a service manager actually presents:
-//!
-//! | invocation | answers |
-//! |---|---|
-//! | `bash -c` | `/usr/local/sbin:/usr/local/bin:/usr/bin` — the service manager's (#392) |
-//! | `bash -lc` | that, plus `~/.local/bin`, flatpak, jvm, perl, rustup, Toolbox |
-//! | `bash -ic` | `~/.local/bin`, **`~/.nvm/.../bin`, `~/go/bin`, `~/dev/houseofdoge/hod-scripts`**, the Android SDK, then the system three |
-//! | `bash -lic` | the union of both, and the only reading that is a superset of the shell the operator types into |
-//!
-//! So `-lic` is asked first and `-lc` is the fallback for a shell that will not take it. `-ic` is
-//! asked as well and whatever it adds is appended, because the union above is a distribution's
-//! doing: Arch's `.bash_profile` sources `.bashrc`, and a Mac's does not, so there a login shell
-//! never reads it and CI's macOS runner resolves directories in its terminal that `-lic` lacks.
-//! All three run concurrently under one deadline, because a fallback that only starts when the
-//! first has given up doubles the worst case at node start.
-//!
-//! The stderr of an interactive shell with no tty is noisy — `cannot set terminal process group`,
-//! `no job control in this shell`, `stty: standard input` — and it is discarded, as it already
-//! was. Its **stdout** was measured clean, and the NUL markers below hold either way.
+//! the middle of the run's output, and a slow profile is paid on every host on every run.
+//! Capturing the value once per node process ([`kampr_core::login`], which also says why the
+//! reading is interactive) and putting it in the child's environment pays it once, and
+//! [`crate::job`] holds why the shell that then runs the command is neither a login nor an
+//! interactive one.
 
+use kampr_core::login::once_each;
 use std::sync::OnceLock;
-use std::sync::mpsc;
-use std::time::{Duration, Instant};
 use tracing::{debug, warn};
-
-/// How long the login shell is given to say what its `PATH` is. A profile that waits on something
-/// is a profile that would otherwise hang the first fleet run on that host for ever; overrunning
-/// this is not fatal, it just means the run gets this process's `PATH`, which is what it got
-/// before any of this existed.
-///
-/// One deadline for both readings rather than one each — see the module header.
-const CAPTURE_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// How the operator's shell is asked, best answer first.
-///
-/// `-lic` reads the profile **and** `.bashrc`, and `.bashrc` is where `~/.local/bin` comes from on
-/// half this herd (#419). `-lc` is what answers on a shell that refuses `-i` with no tty, and it
-/// is what this read has always done.
-const READINGS: [&str; 2] = ["-lic", "-lc"];
-
-/// Asked beside them, and only ever added to the answer.
-const INTERACTIVE: &str = "-ic";
-
-/// Asked between NUL markers, because a profile prints things and an interactive one prints more.
-const PROBE: &str = "printf '\\0%s\\0' \"$PATH\"";
 
 /// Every place a fleet `PATH` can come from, as values rather than environment reads, so the order
 /// is a table test rather than a process the suite has to fork. Same shape, and the same reason,
@@ -139,18 +95,6 @@ pub fn choose(search: &PathSearch) -> Option<FleetPath> {
     })
 }
 
-/// A login shell run from a shell that already had a `PATH` appends to it rather than replacing
-/// it, so an operator's own reads back with `~/.local/bin` in it three times. A later duplicate is
-/// never reached — a lookup takes the first match — so dropping it changes nothing except whether
-/// a person can read the line `kampr doctor` prints.
-fn once_each(path: &str) -> String {
-    let mut seen = std::collections::HashSet::new();
-    path.split(':')
-        .filter(|entry| seen.insert(*entry))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
 /// What a fleet run on this host will actually be given.
 pub fn fleet_path(configured: Option<String>) -> Option<FleetPath> {
     choose(&PathSearch {
@@ -176,114 +120,17 @@ fn own_bin() -> Option<String> {
 pub fn login_path() -> &'static Option<String> {
     static CAPTURED: OnceLock<Option<String>> = OnceLock::new();
     CAPTURED.get_or_init(|| {
-        let shell = login_shell();
-        let captured = capture(&shell);
+        let shell = kampr_core::login::shell();
+        let captured = kampr_core::login::capture(&shell)
+            .as_deref()
+            .and_then(kampr_core::login::path_of)
+            .map(str::to_string);
         match &captured {
             Some(path) => debug!(%shell, %path, "read the login shell's PATH"),
             None => warn!(%shell, "could not read the login shell's PATH; fleet runs get this process's"),
         }
         captured
     })
-}
-
-/// `$SHELL`, then the passwd entry, then `/bin/sh`. A service manager often sets no `$SHELL` at
-/// all, which is exactly the case this has to answer.
-///
-/// This names two things: the shell whose `PATH` is read, and the shell a fleet run's command line
-/// is handed to. The operator's own, so the bashisms they type work — see [`crate::job`] for the
-/// flags it is *not* given.
-pub fn login_shell() -> String {
-    std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(passwd_shell)
-        .unwrap_or_else(|| "/bin/sh".to_string())
-}
-
-fn passwd_shell() -> Option<String> {
-    // SAFETY: `getpwuid` returns a pointer into a static buffer this reads and copies before
-    // anything else can call it — a `OnceLock` initialiser, once per process.
-    unsafe {
-        let entry = libc::getpwuid(libc::getuid());
-        if entry.is_null() {
-            return None;
-        }
-        let shell = (*entry).pw_shell;
-        if shell.is_null() {
-            return None;
-        }
-        std::ffi::CStr::from_ptr(shell).to_str().ok().map(str::to_string)
-    }
-}
-
-/// The marker exists because a profile prints things — a message of the day, a version notice, a
-/// `direnv` line, and an interactive shell's own hello. What is wanted is between the two NULs and
-/// everything else on the stream is somebody saying hello.
-fn capture(shell: &str) -> Option<String> {
-    capture_with(shell, ask)
-}
-
-fn capture_with(shell: &str, ask: fn(&str, &str) -> Option<String>) -> Option<String> {
-    let (tx, rx) = mpsc::channel();
-    // On threads, and abandoned rather than killed if they overrun: `output()` drains the child's
-    // pipes, which is what stops a chatty profile from deadlocking the read, and a child left to
-    // finish a profile costs one short-lived process against a node that hangs.
-    for (rank, flags) in READINGS.iter().chain([&INTERACTIVE]).enumerate() {
-        let shell = shell.to_string();
-        let flags = flags.to_string();
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send((rank, ask(&shell, &flags)));
-        });
-    }
-    drop(tx);
-
-    let deadline = Instant::now() + CAPTURE_TIMEOUT;
-    let mut best: Option<(usize, String)> = None;
-    let mut interactive: Option<String> = None;
-    for _ in 0..=READINGS.len() {
-        let Ok((rank, answer)) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) else {
-            break;
-        };
-        let Some(answer) = answer else { continue };
-        if rank == READINGS.len() {
-            interactive = Some(answer);
-        } else if best.as_ref().is_none_or(|(seen, _)| rank < *seen) {
-            best = Some((rank, answer));
-        }
-        // Nothing can beat the first reading, and the interactive one only adds to it.
-        if best.as_ref().is_some_and(|(rank, _)| *rank == 0) && interactive.is_some() {
-            break;
-        }
-    }
-    let Some((rank, mut path)) = best else {
-        return interactive;
-    };
-    debug!(%shell, flags = READINGS[rank], "read a PATH");
-    if let Some(interactive) = interactive {
-        path = once_each(&format!("{path}:{interactive}"));
-    }
-    Some(path)
-}
-
-fn ask(shell: &str, flags: &str) -> Option<String> {
-    let out = std::process::Command::new(shell)
-        .args([flags, PROBE])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    between_markers(&String::from_utf8_lossy(&out.stdout))
-}
-
-fn between_markers(text: &str) -> Option<String> {
-    let mut parts = text.split('\0');
-    parts.next()?;
-    let path = parts.next()?.trim();
-    (!path.is_empty()).then(|| path.to_string())
 }
 
 #[cfg(test)]
@@ -359,15 +206,6 @@ mod tests {
         })
         .expect("something to run with");
         assert_eq!(chosen.value, "/home/u/.local/bin:/usr/bin:/usr/local/bin");
-    }
-
-    #[test]
-    fn the_path_is_taken_from_between_the_markers_and_not_from_the_profiles_hello() {
-        assert_eq!(
-            between_markers("Welcome to node-07\n\0/home/u/.local/bin:/usr/bin\0"),
-            Some("/home/u/.local/bin:/usr/bin".to_string()),
-        );
-        assert_eq!(between_markers("no markers at all"), None);
     }
 
     /// Measured on the operator's own herd: two of four hosts install `kampr` and `herdr` into
@@ -458,75 +296,5 @@ mod tests {
     fn a_running_node_knows_which_directory_it_was_started_from() {
         let own = own_bin().expect("a running test binary has a parent directory");
         assert!(std::path::Path::new(&own).is_dir(), "{own} is not a directory");
-    }
-
-    /// Not a fixed string: a machine's login shell is whatever it is. What has to hold is that
-    /// something is always named, because the fallback is what a service manager with no `$SHELL`
-    /// gets.
-    #[test]
-    fn a_shell_is_always_named_even_with_nothing_in_the_environment() {
-        assert!(!login_shell().is_empty());
-    }
-
-    /// **#419 closed, on this machine, against this machine's own shell.**
-    ///
-    /// A tool the operator installed works in their terminal and was invisible to a fleet run,
-    /// because the reading was `-lc` and the directory is added by `.bashrc`. So the assertion is
-    /// about *their* shell rather than about a string: whatever an interactive shell has and a
-    /// login shell does not, the reading a run is given must carry.
-    ///
-    /// **From a cleared environment, which is the whole point.** A shell inherits the `PATH` it
-    /// was started with and appends to it, so asking any of these from a terminal answers with the
-    /// terminal's own value and every reading looks identical. #392 measured the difference from
-    /// `env -i`, which is what a service manager actually presents, and so does this.
-    ///
-    /// It skips loudly rather than passing quietly when there is nothing to prove — a machine
-    /// whose `.bashrc` adds no directory cannot fail this however it is broken, and a test that
-    /// says `ok` for that reason is the [#233](../../../docs/03-probe-log.md) shape again.
-    #[test]
-    fn the_reading_a_run_is_given_carries_what_the_operators_own_terminal_resolves() {
-        fn from_a_service_manager(shell: &str, flags: &str) -> Option<String> {
-            let out = std::process::Command::new(shell)
-                .env_clear()
-                .env("HOME", std::env::var("HOME").unwrap_or_default())
-                .args([flags, PROBE])
-                .stdin(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .output()
-                .ok()?;
-            out.status
-                .success()
-                .then(|| between_markers(&String::from_utf8_lossy(&out.stdout)))
-                .flatten()
-        }
-        let shell = login_shell();
-        let (Some(first), Some(interactive), Some(login)) = (
-            capture_with(&shell, from_a_service_manager),
-            from_a_service_manager(&shell, INTERACTIVE),
-            from_a_service_manager(&shell, "-lc"),
-        ) else {
-            eprintln!("SKIPPED: {shell} did not answer all three readings; nothing was asserted");
-            return;
-        };
-        let only_interactive: Vec<&str> = interactive
-            .split(':')
-            .filter(|dir| !login.split(':').any(|d| d == *dir))
-            .collect();
-        if only_interactive.is_empty() {
-            eprintln!(
-                "SKIPPED: this machine's interactive shell adds no directory a login shell lacks, \
-                 so nothing was asserted"
-            );
-            return;
-        }
-        let missing: Vec<&str> = only_interactive
-            .into_iter()
-            .filter(|dir| !first.split(':').any(|d| d == *dir))
-            .collect();
-        assert!(
-            missing.is_empty(),
-            "a fleet run cannot resolve anything in {missing:?}, which {shell} resolves when the \
-             operator types into it",
-        );
     }
 }

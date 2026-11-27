@@ -332,6 +332,67 @@ in the node's `conversations.rs`, and lifts muffit's existing capabilities into 
 pieces in `client/conversation/` (controls sheet, actions palette, task panel, trouble banner,
 billing/limits in the header) — nothing the source doesn't declare is drawn.
 
+## Review fixes and docs sweep (2026-11-27)
+
+A review of the merged headless Claude source found ten defects, fixed in one pass (each red first,
+each mutation-checked):
+
+1. Guards 4, 6 and 7 raised trouble and let the turn run on. All stopping guards now go through
+   `end_session` (`conversation/guards.rs`): interrupt, hang up on the child, `Ended`. `overage =
+   "ask"` holds the words until allowed.
+2. Guards 6 and 7 read shapes the binary never sends: `rate_limit_event.rate_limit_info` and
+   `result.origin` as an object (#682).
+3. Every Allow sent `updatedInput: null`, which the binary's schema rejects; Always ignored its
+   suggestions; questions, plans and forms all became Deny. `strict.rs` now holds the answer schema
+   and the stand-in child checks it.
+4. The keeper id was used as Claude's session id, so history, Older and Find were always empty. Each
+   session gets a `--session-id` UUID.
+5. A watch replayed the log from 0 and re-asked answered requests, wrote control requests to the live
+   child, and never saw a dead one end. Replay is now silent.
+6. `set_fast_mode` does not exist (`apply_flag_settings`); slash commands go in as text (#677); the
+   model control lists `initialize.models`; task output is emitted.
+7. `c:` panes vanished on node restart; `Herd::at(root)` rebuilds them, and `NativeProvider` skips
+   pipe sessions.
+8. The env allow-list was layered over the keeper's whole environment; a pipe child now starts from
+   the spec's env alone (`kampr-keep/tests/pipe_env.rs`).
+9. Tests that passed with the defect now run against `tests/support/fake-claude.py`, which records
+   argv, env, stdin and schema validity.
+10. `conversation.rs` (1,796 lines) split into small modules; `create` sends its prompt; bypass is
+    a confirmed toggle.
+
+The gap pass after it added:
+
+- **The New sheet's resume list ignored a refusal and could show an older answer.**
+  `claude.resumable`'s ack was read without checking `ok`, so a refusal read as "No conversation
+  to resume here", and the reply names no directory, so an older reply could overwrite a newer one.
+  Each ask now carries an `rid` (`ClientMsg.Manage`'s existing echo); a reply that is not the
+  latest ask's is dropped, and a refusal shows its `message` (`NewSheetClaudeTest`, red first,
+  both halves mutation-checked).
+- **`[claude] binary`** is resolved through the login shell when not set (`kampr-claude`).
+- **Docs drift:** docs/22's headless "(gap)" cells that `kampr-claude/src/conversation/` now closes
+  (send, answer, interrupt, context usage, unqueue and `when`, files, find and older, `/` and `@`
+  completion, the model list, questions, plans, forms, subagent asks) are flipped, each checked
+  against the code; docs/21 states `from_terminal`'s real rule (`idle` or no status) and that the
+  TUI sends manage ops but not `claude.*`; docs/04's `claude.to_terminal` shows `cols`/`rows`;
+  docs/24 and docs/25 record their decisions as taken.
+
+**Entry points for headless Claude:** the phone's New sheet, Kampr side (`claude.create`,
+`claude.resumable`, `claude.resume`); a pane's actions (`claude.to_terminal`,
+`claude.from_terminal`, `claude.end`); the node routes a `c:` pane's input, answers, find,
+older and suggest to its conversation. `kampr attach --restored` is the only place a 7577 record
+runs from under `[native] resume = "ask"`.
+
+**muffit:** the node consumes wire 3.4 to 3.10, each gated on the daemon's greeting.
+
+**Guard 10 is built:** `get_usage` is read before a word is sent; a spent window of the plan
+holds the turn under `overage = "ask"` and refuses it under `"refuse"` (`billing.rs`,
+`conversation/guards.rs`).
+
+**What remains:** the `kampr-tui` mirror of the conversation vocabulary; the client UI for
+`OSC 7501` records (it parses `program[]` and draws nothing) and for resume (the herd's
+**Resume after reboot** group, the only sender `native.resumable`/`native.resume` would have);
+the environment scrub for `kampr-codex`, which the Claude source has and Codex does not.
+
 ## Phase 1 — the seam, and muffit on it — DONE (s1)
 
 Built as the plan's "The seam" section, verbatim for the trait shapes:
@@ -388,7 +449,7 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 **Billing guards — verified against the operator's real plan login** (manual probe `crates/kampr-claude/examples/plan-probe.rs`, a script a person runs — never part of `make check`, guard 11; the child is launched by the guard's own `launch::argv`/`launch::env` under policy `plan` on the operator's own `~/.claude`, `--model haiku`, Claude Code 2.1.326):
 - **Guards 3, 6, 9 — verified against the real login, no turn spent (probe row 685).** `initialize`: `account {subscriptionType: "Claude Pro", apiProvider: "firstParty", …}` with **no `apiKeySource`** — the account the guard-3 check accepts, read live. `get_usage`: `subscription_type "pro"`, `rate_limits_available: true`, `extra_usage: null` (no overage) — the billing facts guard 9 reports (`paid_by: Plan`) and the overage state guard 6 acts on, as of 2026-11-27T04:34Z (5-hour window 94%, 7-day 50%).
-- **Guards 2, 4 — the turn-side half NOT yet verified against real Claude.** Both need one haiku turn (guard 2: a key in the *parent* environment blanked by the scrub, the plan login still paying; guard 4: the turn's `system/init` `apiKeySource: "none"`). The 5-hour window was at 94% (above the ~90% line), so per the money discipline the turn was **held**, not spent. The probe is ready: `cargo run -p kampr-claude --example plan-probe -- turn --with-key` — run it once the window has dropped (resets 2026-11-27T07:09:59Z) and log the `system/init` line. The mock coverage stands in the meantime: e2e `the_billing_guards_against_the_mock` (`tests/guards.rs`) plus the unit tests `the_scrubbed_env_keeps_only_the_allow_list_under_plan`, `a_stray_base_url_is_blanked_under_plan_without_a_mock`, `a_key_in_the_environment_is_refused_under_plan_and_named` and the `turn_key_source_ok` cases.
+- **Guards 2, 4 — the turn-side half NOT yet verified against real Claude.** Both need one haiku turn (guard 2: a key in the *parent* environment blanked by the scrub, the plan login still paying; guard 4: the turn's `system/init` `apiKeySource: "none"`). The 5-hour window was at 94% (above the ~90% line), so per the money discipline the turn was **held**, not spent. The probe is ready: `cargo run -p kampr-claude --example plan-probe -- turn --with-key` — run it once the window has dropped (resets 2026-11-27T07:09:59Z) and log the `system/init` line. The mock coverage stands in the meantime: the stand-in child in `crates/kampr-claude/tests/fake.rs` (`a_key_beside_the_login_ends_the_session_before_a_word_is_sent`, `a_turn_paid_by_a_key_is_stopped_for_real`, `an_overage_is_stopped_for_real`) plus the unit tests in `src/billing.rs` (`a_key_in_the_environment_is_refused_under_plan_and_named`, `a_plan_turn_with_a_key_source_is_refused`).
 - **Negative cases — mock-tested, all passing** (`cargo test -p kampr-claude`: 55 unit + e2e; `cargo test -p kampr-testkit --test guards`: 10, including the probe-log numbering/citation guards): a key in the environment refused under plan, a logged-out config refused, the bare default (`tokenSource: "none"`) refused, an `isUsingOverage` event mid-turn, the unattended cap, and the launcher refusing under `KAMPR_TEST=1` with no mock (guard 11).
 
 ## Phase 6 — Claude in a terminal, the gaps that need no trait — COMMITTED (18c61685, 13 files +1638/−34): trouble parsing (6-kind classify, `StopFailure.error`), 14 hooks installed (PreToolUse/SubagentStart/SubagentStop/`Stop.background_tasks`), fork-aware transcript read, live shell output + live subagent conversations — all through **existing** frames (`convo.trouble`/`convo.task`/`convo.tasks`/`convo.sub`), no wire/client edits. Measured red tests (8/11 trouble, both fork, live shell+subagent). **Review s17: DEFECTS FOUND** (1 blocking: `tasks_tick` wrong shell-task dir; its test passed with the defect) → **fixed 7c164f14** (real dir + `bind()` `facts.bg` exclusion + test to the real path + probe row 673) → **re-reviewed s20: FIXED** (both reds measured). **Phase 6 review loop CLOSED.** Sibling-limits side-channel (guard 10/#658) deferred to Phase 5.

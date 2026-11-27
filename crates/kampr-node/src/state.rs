@@ -3,6 +3,7 @@ use crate::herd::{HerdModel, Stamps};
 use crate::sessions::{SessionNode, Sessions};
 use anyhow::{Context, Result};
 use kampr_auth::{AuditLog, Auth, NodeIdentity, Store, Tier};
+use kampr_core::program::ProgramRecords;
 use kampr_core::provider::{AgentStatus, PaneInfo};
 use kampr_core::wire::{NodeEntry, PaneEntry};
 use kampr_journal::{FacetFold, Harness, Ledger, Registry as Journals, SessionMarker, SessionRef, Titles};
@@ -833,6 +834,8 @@ async fn build_model(
             reachable: Some(true),
             native: session.native.as_ref().map(|_| true),
             muffit: session.muffit.as_ref().map(|_| true),
+            claude: session.claude.as_ref().map(|_| true),
+            resume: session.native.as_ref().map(|_| true),
             herdr: Some(session.provider.enabled()),
             // **Not a call of its own.** The provider's sweep round-trips this herdr already, so
             // the number is read rather than asked for — one `ping` per session per rebuild was
@@ -931,7 +934,13 @@ async fn build_model(
             if let Some(tui) = &tui {
                 entry.agent = Some(kampr_muffit::AGENT.into());
                 entry.agent_status = kampr_muffit::agent_status(tui);
-            } else if info.native.as_ref().is_none_or(|n| n.program.is_none()) {
+            } else if info
+                .native
+                .as_ref()
+                .and_then(|n| n.program.as_ref())
+                .and_then(ProgramRecords::fold)
+                .is_none()
+            {
                 let said = kampr_journal::title_status(info.agent.as_deref(), info.terminal_title.as_deref());
                 entry.agent_status = settled_status(entry.agent_status, marker.as_ref(), said);
             }

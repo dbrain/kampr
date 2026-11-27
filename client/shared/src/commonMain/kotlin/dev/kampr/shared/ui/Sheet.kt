@@ -36,6 +36,7 @@ import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.kampr.shared.theme.BorderSpec
@@ -176,8 +177,10 @@ fun SheetHeader(
     // A sheet titled with a pane's name would otherwise offer "Close <pane>" twice: the dismiss
     // and the destructive command in its list.
     dismiss: String = "Close $title",
+    titleStyle: TextStyle? = null,
 ) {
     val tokens = Kampr.tokens
+    val heading = titleStyle ?: tokens.type.paneTitle
     val target = if (compact) LANDSCAPE_TOUCH else TOUCH
     Row(
         Modifier
@@ -189,12 +192,12 @@ fun SheetHeader(
         if (onBack != null) BackAction("Back", onBack, target = target)
         if (compact) {
             Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                KText(title, tokens.type.paneTitle, tokens.color.text, Modifier.weight(1f, fill = false).asHeading())
+                KText(title, heading, tokens.color.text, Modifier.weight(1f, fill = false).asHeading())
                 if (subtitle != null) LabelText(subtitle, tokens.type.micro, tokens.color.mute, Modifier.weight(1f, fill = false))
             }
         } else {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                KText(title, tokens.type.paneTitle, tokens.color.text, Modifier.asHeading(), maxLines = 2)
+                KText(title, heading, tokens.color.text, Modifier.asHeading(), maxLines = 2)
                 if (subtitle != null) LabelText(subtitle, tokens.type.micro, tokens.color.mute)
             }
         }

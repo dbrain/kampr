@@ -505,8 +505,17 @@ fn spawn_pty_child(spec: &Spec, program: &str) -> Result<Started> {
     })
 }
 
+// A pipe child is a program that speaks lines, not a shell: its environment is the spec's alone.
+// The keeper's own is systemd's user manager or the node's, and neither is the child's to read
+// (a headless Claude paid for by a key the manager exported is what docs/21 guard 2 prevents).
 fn child_env(spec: &Spec) -> Vec<(OsString, OsString)> {
-    let mut env: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+    let mut env: Vec<(OsString, OsString)> = match spec.mode {
+        Mode::Pipe => Vec::new(),
+        Mode::Pty => std::env::vars_os().collect(),
+    };
+    // Only the session's own token, from the spec: a keeper started from a terminal that has one
+    // would otherwise hand it to every child that was given none.
+    env.retain(|(have, _)| have != "OSC7577_TOKEN");
     for (k, v) in &spec.env {
         env.retain(|(have, _)| have != k.as_str());
         env.push((k.into(), v.into()));

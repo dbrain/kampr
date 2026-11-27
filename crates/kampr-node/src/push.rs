@@ -416,7 +416,10 @@ async fn question_for(
     let session = sessions.route(global)?;
     let local = session.local_pane(global)?;
     if let Some(link) = session.muffit_link(&local) {
-        return crate::muffit::prompt(&link.provider, &link.session).map(|p| p.action);
+        return crate::muffit::standing(&link)
+            .into_iter()
+            .next()
+            .map(|ask| ask.question);
     }
     let screen = pending::Screen::of(&session, &local);
     if let Some(found) = pending::read(&screen, &local, agent).await {
@@ -425,7 +428,7 @@ async fn question_for(
     match screen {
         pending::Screen::Native(native) => native
             .program(&local)
-            .filter(|p| p.state == kampr_core::provider::ProgramState::Blocked)
+            .filter(|p| p.state == kampr_core::program::ProgramState::Blocked)
             .and_then(|p| p.message),
         pending::Screen::Herdr(_) => None,
     }
@@ -538,9 +541,81 @@ mod tests {
                 "printf '\\033]7501;state=blocked:app=claude-code:kind=question:msg=YW5zd2VyOiBQaWNrIG9uZQ==\\007'; exec sleep 600",
                 "answer: Pick one",
             ),
+            (
+                "printf '\\033]7501;state=working:app=claude-code\\007\\033]7501;state=blocked:id=agent-1:kind=permission:msg=YXBwcm92ZSBCYXNo\\007'; exec sleep 600",
+                "approve Bash",
+            ),
         ] {
             assert_eq!(asked_of_native(script).await.as_deref(), Some(want), "{script}");
         }
+    }
+
+    /// docs/24 test 4: a worker's `blocked` is the pane's, and the pane going blocked is one push
+    /// however many records then say so, re-say it, or clear while another still asks.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_workers_block_raises_one_push_whatever_its_records_do_after() {
+        let root = tempfile::Builder::new().prefix("kp").tempdir_in("/tmp").unwrap();
+        let mut config = Config::bootstrap("push");
+        config.muffit.enabled = Some(false);
+        config.docker.enabled = Some(false);
+        config.herdr.socket = "/nowhere/kampr-push-test.sock".into();
+        config.herdr.binary = "/nowhere/kampr-push-test-herdr".into();
+        config.native.root = root.path().join("native").display().to_string();
+        config.native.keeper = kampr_testkit::keeper().display().to_string();
+        config.native.launch = "detached".into();
+        config.journals.home = root.path().display().to_string();
+        config.hooks.socket = root.path().join("hooks.sock").display().to_string();
+        let node = crate::state::Node::start(config, &root.path().join("state"))
+            .await
+            .expect("a node");
+        let (feeds, mut queues) = feeds(16);
+        let watcher = tokio::spawn(watch_herd(
+            node.subscribe_herd(),
+            node.sessions.clone(),
+            node.hooks.clone(),
+            feeds,
+        ));
+        let report = |fields: &str| format!("printf '\\033]7501;{fields}\\007'; sleep 1; ");
+        let script = [
+            "state=working:app=claude-code",
+            "state=blocked:id=agent-1:kind=permission:msg=YXBwcm92ZQ==",
+            "state=blocked:id=agent-1:kind=permission:msg=YXBwcm92ZSBhZ2Fpbg==",
+            "state=blocked:id=agent-2:kind=permission:msg=c2Vjb25k",
+            "state=clear:id=agent-1",
+            "state=blocked:id=agent-1:kind=permission:msg=dGhpcmQ=",
+        ]
+        .map(report)
+        .concat()
+            + "exec sleep 600";
+        let native = node.sessions.primary().native.clone().expect("a native provider");
+        let pane = native
+            .create(kampr_native::NewSession {
+                argv: ["sh", "-c", &script].map(String::from).to_vec(),
+                cols: 80,
+                rows: 24,
+                ..Default::default()
+            })
+            .await
+            .expect("a session");
+        let global = node.sessions.primary().global_pane(&pane);
+
+        let first = next(&mut queues.blocked, "the worker's block").await;
+        assert!(first.fresh.contains(&global), "{:?}", first.fresh);
+        assert_eq!(
+            first
+                .outstanding
+                .iter()
+                .find(|a| a.pane == global)
+                .and_then(|a| a.detail.as_deref()),
+            Some("approve")
+        );
+        let rest = tokio::time::timeout(Duration::from_secs(7), queues.blocked.recv()).await;
+        native.close(&pane).expect("hung up");
+        watcher.abort();
+        assert!(
+            rest.is_err(),
+            "a record that changed while the pane stayed blocked raised another push: {rest:?}"
+        );
     }
 
     #[tokio::test]

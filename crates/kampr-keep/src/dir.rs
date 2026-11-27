@@ -86,6 +86,8 @@ const SESSION_SCOPED: &[&str] = &[
     "CLAUDE_CODE_SESSION_ID",
     "CLAUDE_CODE_SSE_PORT",
     "KAMPR_SESSION_ID",
+    // The token `OSC 7577` reports are signed with is one session's (docs/25).
+    "OSC7577_TOKEN",
     // The journal names an omp/pi pane's conversation by these, read live out of
     // `/proc/<pid>/environ`: inherited, a shell would be taken for the conversation it came from.
     "PI_SESSION_FILE",
@@ -370,10 +372,13 @@ impl SessionDir {
 
 pub fn list(root: &Path) -> io::Result<Vec<SessionDir>> {
     check_private(root)?;
+    // A Mac's /tmp sweep deletes a file nobody touched in three days, and spec.json is written
+    // once: a session whose keeper still runs is listed without it, or `[native] resume = "auto"`
+    // would start a second copy of it.
     let mut found: Vec<SessionDir> = fs::read_dir(root)?
         .flatten()
-        .filter(|e| e.path().join(SPEC).is_file())
         .map(|e| SessionDir::at(e.path()))
+        .filter(|s| s.path().join(SPEC).is_file() || s.alive())
         .collect();
     found.sort_by(|a, b| a.id().cmp(b.id()));
     Ok(found)
@@ -495,6 +500,7 @@ mod tests {
             "TMUX",
             "TMUX_PANE",
             "KAMPR_SESSION_ID",
+            "OSC7577_TOKEN",
             "HERDR_PANE_ID",
             "ATUIN_SESSION",
             "BLE_SESSION_ID",

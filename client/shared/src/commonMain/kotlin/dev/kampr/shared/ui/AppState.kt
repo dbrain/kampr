@@ -11,6 +11,7 @@ import dev.kampr.shared.model.Fold
 import dev.kampr.shared.model.Folds
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
+import dev.kampr.shared.model.ResumeOffers
 import dev.kampr.shared.model.SeenDone
 import dev.kampr.shared.model.anyAdoptionFailing
 import dev.kampr.shared.model.closed
@@ -216,6 +217,12 @@ class AppState(
     val containers = ContainerWatch(scope, { connection.manage(it) }) {
         opening(it)
         closeSheet()
+    }
+
+    val resumes = ResumeOffers({ connection.send(it) }, { opening(it) }, { store.noteRefusal(it) })
+
+    private fun askResumes(herd: Herd) {
+        if (store.status.value is ConnectionStatus.Live && store.canManage) resumes.herd(herd.nodes)
     }
 
     private fun show(which: Sheet?) {
@@ -807,16 +814,25 @@ class AppState(
     // come round again, and an intent nobody cancelled would one day open a pane the operator did
     // not ask for.
     fun opening(id: String?) {
-        creating = id?.let { Creating(it, wallClockMillis() + CREATE_OPEN_WINDOW_MS) }
+        expect(id?.let { Creating(it, wallClockMillis() + CREATE_OPEN_WINDOW_MS) })
     }
 
     fun openingSplit(source: String, created: String, direction: SplitDirection) {
-        creating = Creating(
-            created,
-            wallClockMillis() + CREATE_OPEN_WINDOW_MS,
-            splitFrom = source,
-            stacked = direction == SplitDirection.Down,
+        expect(
+            Creating(
+                created,
+                wallClockMillis() + CREATE_OPEN_WINDOW_MS,
+                splitFrom = source,
+                stacked = direction == SplitDirection.Down,
+            ),
         )
+    }
+
+    // A session op settles the herd before it acks (`spawn_settle`), so the pane may already be in
+    // hand, and no later frame is owed to open it.
+    private fun expect(wanted: Creating?) {
+        creating = wanted
+        openWhenItArrives(store.herd.value)
     }
 
     private fun openWhenItArrives(herd: Herd) {
@@ -896,6 +912,9 @@ class AppState(
                 if (it !is ConnectionStatus.Live) {
                     matches.disconnected()
                     toldNode.clear()
+                    resumes.disconnected()
+                } else {
+                    askResumes(store.herd.value)
                 }
             }
         }
@@ -911,10 +930,12 @@ class AppState(
                 followLaunchedAgent(it)
                 openWhenItArrives(it)
                 reconcileNotifications(it)
+                askResumes(it)
             }
         }
         scope.launch { store.managed.collect { ack -> ack?.let(::quickSessionAcked) } }
         scope.launch { store.acks.collect(containers::acked) }
+        scope.launch { store.acks.collect(resumes::acked) }
     }
 }
 

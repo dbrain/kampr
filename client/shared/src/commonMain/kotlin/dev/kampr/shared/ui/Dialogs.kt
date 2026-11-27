@@ -76,6 +76,7 @@ fun MenuRow(
     label: String = text,
     enabled: Boolean = true,
     detail: String? = null,
+    busy: Boolean = false,
 ) {
     val tokens = Kampr.tokens
     val tone = when {
@@ -93,7 +94,11 @@ fun MenuRow(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Box(Modifier.defaultMinSize(minWidth = 18.dp), contentAlignment = Alignment.Center) {
-            if (icon != null) IconGlyph(icon, 16.dp, if (danger && enabled) tokens.color.blocked else tokens.color.dim)
+            if (busy) {
+                Spinner("Waiting for the node", 16.dp)
+            } else if (icon != null) {
+                IconGlyph(icon, 16.dp, if (danger && enabled) tokens.color.blocked else tokens.color.dim)
+            }
         }
         DisableSelection {
             KText(text, tokens.type.body, tone, Modifier.weight(1f))

@@ -1,10 +1,16 @@
+use crate::abilities::{self, abilities};
+use crate::answers;
+use crate::catalog;
 use crate::client::{self, Client, Socket};
 use crate::live::Live;
 use crate::mapper::{self, Workers};
-use crate::wire::{Image, PermissionPrompt, ServerFrame, StatusSnapshot, TranscriptEntry, TranscriptPage};
+use crate::wire::{
+    BASELINE, Image, PermissionPrompt, Question, ServerFrame, StatusSnapshot, TranscriptEntry, TranscriptPage,
+};
 use kampr_core::conversation::{
-    Action, ArgSpec, ContextUse, Control, ControlKind, ControlOption, Cost, Live as SeamLive, LiveTool,
-    RunState, SessionFacts, Steer, Task, TaskEnd, TaskState, Trouble,
+    Abilities, Action, Billing, ContextUse, Control, ControlKind, ControlOption, Cost, Limits,
+    Live as SeamLive, LiveTool, Reply, RunState, SessionFacts, Steer, SuggestKind, Suggestion, Task, TaskEnd,
+    TaskState, Trouble,
 };
 use kampr_journal::facet::{Running, Title, TitleSource};
 use kampr_journal::{ConvoFound, Facets, Page, Turn};
@@ -20,7 +26,8 @@ const READ_ALL: u32 = 500;
 const HANDSHAKE: Duration = Duration::from_secs(10);
 const FIRST_RETRY: Duration = Duration::from_millis(250);
 const LAST_RETRY: Duration = Duration::from_secs(5);
-// A worker can't be attached (kampr.md §6), so an open one is polled.
+// An open worker is polled: before 3.5 it can't be attached, and its observe socket (kampr.md §6)
+// only says when it records something, which brings the next read forward.
 const WORKER_POLL: Duration = Duration::from_millis(1500);
 pub(crate) const CAPABILITIES: &[&str] = &[
     "input",
@@ -29,6 +36,7 @@ pub(crate) const CAPABILITIES: &[&str] = &[
     "status",
     "subscribe",
     "permissions",
+    "events",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -68,15 +76,30 @@ pub enum Command {
     Unfollow {
         id: String,
     },
+    Answer {
+        ask: String,
+        reply: Reply,
+    },
+    Suggest {
+        kind: SuggestKind,
+        query: String,
+    },
+    Unqueue {
+        msg_id: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub enum Update {
+    Abilities(Abilities),
     Page(Page),
     Turns(Vec<Turn>),
     Older(Page),
     Facets(Facets),
-    Pending(Option<PermissionPrompt>),
+    Asks {
+        permission: Option<PermissionPrompt>,
+        question: Option<Question>,
+    },
     Found {
         query: String,
         found: ConvoFound,
@@ -102,8 +125,14 @@ pub enum Update {
     Controls(Vec<Control>),
     Actions(Vec<Action>),
     Context(ContextUse),
+    Limits(Limits),
     Cost(Cost),
     Live(SeamLive),
+    Suggested {
+        kind: SuggestKind,
+        query: String,
+        items: Vec<Suggestion>,
+    },
     Acted {
         action: String,
         ok: bool,
@@ -221,8 +250,14 @@ struct State<E> {
     seam_live: SeamLive,
     workers: Workers,
     facets: Option<Facets>,
-    pending: Option<Option<PermissionPrompt>>,
+    pending: Option<(Option<PermissionPrompt>, Option<Question>)>,
     worker: Option<Worker>,
+    worker_socket: Option<Socket>,
+    version: u32,
+    abilities: Abilities,
+    actions: Vec<Action>,
+    catalog: bool,
+    limits: Option<Limits>,
     run_state: Option<RunState>,
     tasks: Option<Vec<Task>>,
     facts: Option<SessionFacts>,
@@ -257,6 +292,12 @@ impl Follow {
             facets: None,
             pending: None,
             worker: None,
+            worker_socket: None,
+            version: BASELINE,
+            abilities: abilities(BASELINE),
+            actions: catalog::fallback(),
+            catalog: false,
+            limits: None,
             run_state: None,
             tasks: None,
             facts: None,
@@ -268,6 +309,11 @@ impl Follow {
             trouble: None,
             last: None,
         };
+        if !(state.emit)(Update::Abilities(state.abilities.clone()))
+            || !(state.emit)(Update::Actions(state.actions.clone()))
+        {
+            return;
+        }
         let mut retry = FIRST_RETRY;
         let mut paged = false;
         let mut socket: Option<Socket> = None;
@@ -288,7 +334,7 @@ impl Follow {
                 next_try = Instant::now() + LAST_RETRY;
             }
             if paged && socket.is_none() && Instant::now() >= next_try {
-                match state.attach().await {
+                match state.attach(false).await {
                     Ok(Some(opened)) => {
                         retry = FIRST_RETRY;
                         socket = Some(opened);
@@ -336,6 +382,19 @@ impl Follow {
                         next_try = next_try.min(Instant::now());
                     }
                 }
+                frame = next_frame(&mut state.worker_socket) => {
+                    let keep = match frame {
+                        Some(ServerFrame::Event { .. }) => state.poll_worker().await,
+                        Some(_) => true,
+                        None => {
+                            state.worker_socket = None;
+                            true
+                        }
+                    };
+                    if !keep {
+                        return;
+                    }
+                }
                 _ = poll.tick(), if state.worker.is_some() => {
                     if !state.poll_worker().await {
                         return;
@@ -369,21 +428,26 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     }
 
     /// `Ok(None)` when the client is gone.
-    async fn attach(&mut self) -> anyhow::Result<Option<Socket>> {
+    async fn attach(&mut self, hold: bool) -> anyhow::Result<Option<Socket>> {
         let path = format!("/sessions/{}/attach", self.session);
-        // Watching never holds the session: leaving can't end somebody else's (kampr.md §3).
-        let mut socket = self
-            .client
-            .socket(&path, Some("observe=true"), CAPABILITIES)
-            .await?;
+        // Watching never holds the session: leaving can't end somebody else's (kampr.md §3). Only a
+        // verb the operator chose holds it, restoring a stored one the way typing does.
+        let query = (!hold).then_some("observe=true");
+        let mut socket = self.client.socket(&path, query, CAPABILITIES).await?;
         let cursor = loop {
             let frame = tokio::time::timeout(HANDSHAKE, client::next(&mut socket))
                 .await
                 .map_err(|_| anyhow::anyhow!("muffit sent no hello"))?
                 .ok_or_else(|| anyhow::anyhow!("muffit closed the attach before its hello"))?;
             match frame {
-                ServerFrame::Hello { cursor, session } => {
-                    if !self.prompt(session.permission) {
+                ServerFrame::Hello {
+                    version,
+                    cursor,
+                    session,
+                } => {
+                    if !self.greeted(version.unwrap_or(BASELINE))
+                        || !self.prompt(session.permission, session.question)
+                    {
                         return Ok(None);
                     }
                     if self.facets.is_none() && !self.facets(session.title.as_deref(), &[]) {
@@ -405,7 +469,42 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
             &json!({ "type": "control", "verb": "models.list", "args": {} }),
         )
         .await?;
+        if self.version >= abilities::CATALOG {
+            client::send(
+                &mut socket,
+                &json!({ "type": "control", "verb": "commands.list", "args": {} }),
+            )
+            .await?;
+        }
         Ok(Some(socket))
+    }
+
+    /// The daemon's version, and what the pane may draw for it.
+    fn greeted(&mut self, version: u32) -> bool {
+        self.version = version;
+        let abilities = abilities(version);
+        if abilities == self.abilities {
+            return true;
+        }
+        self.abilities = abilities.clone();
+        (self.emit)(Update::Abilities(abilities))
+    }
+
+    /// The daemon's own record of a prompt raised and settled (wire 3.10), which can beat the
+    /// next status push to the pane.
+    fn event(&mut self, event: &Value) -> bool {
+        let (permission, question) = self.pending.clone().unwrap_or_default();
+        if let Some(raised) = event.get("PromptRaised") {
+            return match serde_json::from_value::<PermissionPrompt>(raised.clone()) {
+                Ok(prompt) => self.prompt(Some(prompt), question),
+                Err(_) => true,
+            };
+        }
+        let settled = event["PromptSettled"]["prompt"]["id"].as_u64();
+        match (settled, &permission) {
+            (Some(id), Some(standing)) if standing.id == id => self.prompt(None, question),
+            _ => true,
+        }
     }
 
     async fn frame(&mut self, frame: ServerFrame) -> bool {
@@ -424,6 +523,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 (self.emit)(Update::Trouble(self.trouble.clone()))
             }
             ServerFrame::CommandResult { verb, ok, payload } => self.command_result(verb, ok, payload),
+            ServerFrame::Event { event } => self.event(&event),
             _ => true,
         }
     }
@@ -467,12 +567,28 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                     crate::wire::ToolCallStatus::Unknown => kampr_journal::ToolState::Running,
                 };
                 match self.seam_live.tools.iter_mut().find(|tool| tool.id == *id) {
-                    Some(tool) => tool.state = state,
+                    Some(held) => {
+                        held.state = state;
+                        if !args.is_empty() {
+                            held.args = args.clone();
+                        }
+                    }
                     None => self.seam_live.tools.push(LiveTool {
                         id: id.clone(),
                         tool: tool.clone(),
                         args: args.clone(),
                         state,
+                    }),
+                }
+            }
+            crate::wire::ContentBlock::ToolCallDelta { call_id, tool, delta } => {
+                match self.seam_live.tools.iter_mut().find(|held| held.id == *call_id) {
+                    Some(held) => held.args.push_str(delta),
+                    None => self.seam_live.tools.push(LiveTool {
+                        id: call_id.clone(),
+                        tool: tool.clone(),
+                        args: delta.clone(),
+                        state: kampr_journal::ToolState::Running,
                     }),
                 }
             }
@@ -514,7 +630,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     }
 
     fn status(&mut self, snapshot: StatusSnapshot) -> bool {
-        if !self.prompt(snapshot.permission.clone()) {
+        if !self.prompt(snapshot.permission.clone(), snapshot.question.clone()) {
             return false;
         }
         if !self.facets(snapshot.title.as_deref(), &snapshot.subagents) {
@@ -531,7 +647,7 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 return false;
             }
         }
-        let tasks = tasks_of(&snapshot.subagents);
+        let tasks = tasks_of(&snapshot.subagents, &snapshot.shell_tasks);
         if self.tasks.as_ref() != Some(&tasks) {
             self.tasks = Some(tasks.clone());
             if !(self.emit)(Update::Tasks(tasks)) {
@@ -545,9 +661,11 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 return false;
             }
         }
+        // muffit names no model window; the budget its context strategy cuts back from is the
+        // size it keeps the window to. With no budget the total is 0, which the pane leaves out.
         let context = snapshot.context.as_ref().map(|c| ContextUse {
             used: c.measured_prompt_tokens.unwrap_or(0) as u64,
-            total: 0,
+            total: c.pressure.as_ref().and_then(|p| p.budget).unwrap_or(0) as u64,
         });
         if self.context != context {
             self.context = context;
@@ -565,6 +683,16 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
         if self.cost != Some(cost) {
             self.cost = Some(cost);
             if !(self.emit)(Update::Cost(cost)) {
+                return false;
+            }
+        }
+        if let Some(limits) = snapshot
+            .rate_limit
+            .map(limits_of)
+            .filter(|limits| self.limits.as_ref() != Some(limits))
+        {
+            self.limits = Some(limits.clone());
+            if !(self.emit)(Update::Limits(limits)) {
                 return false;
             }
         }
@@ -655,6 +783,20 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
             }
             return true;
         }
+        if verb == "commands.list" {
+            if ok && let Some(actions) = catalog::from_catalog(&payload) {
+                self.catalog = true;
+                self.actions = actions.clone();
+                return (self.emit)(Update::Actions(actions));
+            }
+            return true;
+        }
+        if !ok && verb.starts_with("question.") {
+            let permission = self.pending.clone().unwrap_or_default().0;
+            if !self.prompt(permission, None) {
+                return false;
+            }
+        }
         let text = payload
             .as_str()
             .map(str::to_string)
@@ -666,12 +808,16 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
         })
     }
 
-    fn prompt(&mut self, prompt: Option<PermissionPrompt>) -> bool {
-        if self.pending.as_ref() == Some(&prompt) {
+    fn prompt(&mut self, permission: Option<PermissionPrompt>, question: Option<Question>) -> bool {
+        let pending = (permission, question);
+        if self.pending.as_ref() == Some(&pending) {
             return true;
         }
-        self.pending = Some(prompt.clone());
-        (self.emit)(Update::Pending(prompt))
+        self.pending = Some(pending.clone());
+        (self.emit)(Update::Asks {
+            permission: pending.0,
+            question: pending.1,
+        })
     }
 
     fn facets(&mut self, title: Option<&str>, subagents: &[crate::wire::Subagent]) -> bool {
@@ -734,24 +880,23 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     async fn command(&mut self, command: Command, socket: &mut Option<Socket>) -> bool {
         match command {
             Command::Input { text, msg_id, images } => {
+                if self.catalog
+                    && images.is_empty()
+                    && let Some((action, args)) = catalog::slash(&self.actions, &text)
+                {
+                    return self.act(action, args, socket).await;
+                }
                 let mut frame = json!({ "type": "input", "text": text, "msg_id": msg_id });
                 if !images.is_empty() {
                     frame["images"] = json!(images);
                 }
                 // Typing into a finished conversation is what restores it (docs/18), and over the
                 // socket the message keeps its msg_id.
-                if socket.is_none() {
-                    match self.attach().await {
-                        Ok(Some(opened)) => {
-                            *socket = Some(opened);
-                            if !self.reread().await {
-                                return false;
-                            }
-                        }
-                        Ok(None) => return false,
-                        Err(e) => {
-                            debug!(session = %self.session, error = %format!("{e:#}"), "attaching to send")
-                        }
+                match self.attached(socket, false).await {
+                    Ok(true) => {}
+                    Ok(false) => return false,
+                    Err(e) => {
+                        debug!(session = %self.session, error = %format!("{e:#}"), "attaching to send")
                     }
                 }
                 let sent = match socket.as_mut() {
@@ -783,13 +928,21 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                     text: Some("no such control".into()),
                 }),
             },
-            Command::Act { action, args } => match act_verb(&action, &args) {
-                Some((verb, verb_args)) => self.control_verb(&verb, verb_args, socket).await,
-                None => (self.emit)(Update::Acted {
-                    action,
-                    ok: false,
-                    text: Some("no such action".into()),
-                }),
+            Command::Act { action, args } => self.act(action, args, socket).await,
+            Command::Answer { ask, reply } => self.answer(ask, reply, socket).await,
+            Command::Suggest { kind, query } => {
+                let items = match kind {
+                    SuggestKind::Commands if self.catalog => catalog::suggestions(&self.actions, &query),
+                    _ => Vec::new(),
+                };
+                (self.emit)(Update::Suggested { kind, query, items })
+            }
+            Command::Unqueue { msg_id } => match self.version >= abilities::VERBS {
+                true => {
+                    self.control_verb("queue.unqueue", json!({ "msg_id": msg_id }), socket)
+                        .await
+                }
+                false => self.refused("queue.unqueue"),
             },
             Command::FollowTask { id, from } => {
                 self.followed = Some((id, from));
@@ -808,21 +961,63 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
         }
     }
 
-    async fn steer(&mut self, kind: Steer, _text: Option<String>, socket: &mut Option<Socket>) -> bool {
+    async fn act(&mut self, action: String, args: Value, socket: &mut Option<Socket>) -> bool {
+        if !self.actions.iter().any(|a| a.id == action) {
+            return (self.emit)(Update::Acted {
+                action,
+                ok: false,
+                text: Some("no such action".into()),
+            });
+        }
+        self.control_verb(catalog::verb_of(&action), args, socket).await
+    }
+
+    fn refused(&mut self, action: &str) -> bool {
+        (self.emit)(Update::Acted {
+            action: action.into(),
+            ok: false,
+            text: Some("this muffit daemon is too old for that".into()),
+        })
+    }
+
+    /// An answer to whichever ask stands (`answers::reply_of` named it). Withdrawing the model's
+    /// question has no REST form, so it goes over the socket.
+    async fn answer(&mut self, ask: String, reply: Reply, socket: &mut Option<Socket>) -> bool {
+        let (permission, question) = self.pending.clone().unwrap_or_default();
+        if let (Reply::Dismiss, Some(asked)) = (&reply, &question)
+            && ask == format!("q{}", asked.id)
+        {
+            return self
+                .control_verb("question.withdraw", json!({ "id": asked.id }), socket)
+                .await;
+        }
+        let posted = answers::post(&self.client, &self.session, question.as_ref(), &ask, &reply).await;
+        match posted {
+            answers::Outcome::Taken => true,
+            answers::Outcome::Gone => {
+                self.pending = None;
+                match ask.starts_with('q') {
+                    true => self.prompt(permission, None),
+                    false => self.prompt(None, question),
+                }
+            }
+            answers::Outcome::Refused(why) => (self.emit)(Update::Failed(why)),
+        }
+    }
+
+    async fn steer(&mut self, kind: Steer, text: Option<String>, socket: &mut Option<Socket>) -> bool {
         let frame = match kind {
             Steer::Interrupt => Some(json!({ "type": "interrupt" })),
             Steer::Continue => Some(json!({ "type": "continue" })),
             _ => None,
         };
         if let Some(frame) = frame {
-            if socket.is_none() {
-                match self.attach().await {
-                    Ok(Some(opened)) => *socket = Some(opened),
-                    Ok(None) => return false,
-                    Err(e) => {
-                        debug!(session = %self.session, error = %format!("{e:#}"), "attaching to steer");
-                        return (self.emit)(Update::Failed(format!("muffit did not take the steer: {e:#}")));
-                    }
+            match self.attached(socket, false).await {
+                Ok(true) => {}
+                Ok(false) => return false,
+                Err(e) => {
+                    debug!(session = %self.session, error = %format!("{e:#}"), "attaching to steer");
+                    return (self.emit)(Update::Failed(format!("muffit did not take the steer: {e:#}")));
                 }
             }
             return match socket.as_mut() {
@@ -833,12 +1028,38 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 None => (self.emit)(Update::Failed("no socket to steer on".into())),
             };
         }
-        // pause, resume and stop have no socket form; the daemon takes them over REST only.
-        let verb = match kind {
-            Steer::Pause => "pause",
-            Steer::Resume => "resume",
-            Steer::Stop => "stop",
-            Steer::Compact => "context.compact",
+        // pause, resume and stop have no socket form: `handle_control` answers them `unknown verb`.
+        if let Some(verb) = match kind {
+            Steer::Pause => Some("pause"),
+            Steer::Resume => Some("resume"),
+            Steer::Stop => Some("stop"),
+            _ => None,
+        } {
+            return match self.client.post_session(&self.session, verb, None).await {
+                Ok(body) => self.acted(verb, true, body),
+                Err(e) => (self.emit)(Update::Acted {
+                    action: verb.into(),
+                    ok: false,
+                    text: Some(format!("{e:#}")),
+                }),
+            };
+        }
+        let since = match kind {
+            Steer::StopTask => abilities::SHELL_TASKS,
+            Steer::Rename | Steer::Clear | Steer::Fork => abilities::VERBS,
+            _ => BASELINE,
+        };
+        if self.version < since {
+            return self.refused(&format!("{kind:?}").to_lowercase());
+        }
+        let text = text.unwrap_or_default();
+        let (verb, args) = match kind {
+            Steer::Compact => ("context.compact", json!({})),
+            // `job.stop` reads its id as a string ("job1"), whatever kampr.md's example shows.
+            Steer::StopTask => ("job.stop", json!({ "id": text })),
+            Steer::Rename => ("rename", json!({ "title": text })),
+            Steer::Clear => ("clear", json!({})),
+            Steer::Fork => ("fork", json!({})),
             _ => {
                 return (self.emit)(Update::Acted {
                     action: format!("{kind:?}").to_lowercase(),
@@ -847,27 +1068,89 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
                 });
             }
         };
-        self.control_verb(verb, json!({}), socket).await
+        self.control_verb(verb, args, socket).await
     }
 
-    /// A control verb on the attached socket, where the daemon answers `command_result`, over
-    /// REST when there is no socket.
+    /// A control verb on the session's socket, attached for it if need be, where the daemon answers
+    /// `command_result`. Without one, only a verb the daemon also routes over REST can go.
     async fn control_verb(&mut self, verb: &str, args: Value, socket: &mut Option<Socket>) -> bool {
-        if let Some(socket) = socket.as_mut() {
-            match client::send(socket, &json!({ "type": "control", "verb": verb, "args": args })).await {
+        let frame = json!({ "type": "control", "verb": verb, "args": args });
+        if let Some(open) = socket.as_mut() {
+            match client::send(open, &frame).await {
                 Ok(()) => return true,
                 Err(e) => {
                     debug!(session = %self.session, verb, error = %format!("{e:#}"), "control verb over the socket");
+                    *socket = None;
                 }
             }
         }
-        match self.client.control_verb(&self.session, verb, Some(args)).await {
+        match self.attached(socket, true).await {
+            Ok(false) => return false,
+            Ok(true) => {
+                if let Some(open) = socket.as_mut()
+                    && client::send(open, &frame).await.is_ok()
+                {
+                    return true;
+                }
+            }
+            Err(e) => {
+                debug!(session = %self.session, verb, error = %format!("{e:#}"), "attaching for a control verb")
+            }
+        }
+        let Some((route, body)) = self.rest_form(verb, &args) else {
+            return (self.emit)(Update::Acted {
+                action: verb.into(),
+                ok: false,
+                text: Some(format!(
+                    "muffit takes {verb} only on the session's socket, and this pane is not attached to it"
+                )),
+            });
+        };
+        match self.client.post_session(&self.session, route, Some(body)).await {
             Ok(body) => self.acted(verb, true, body),
             Err(e) => (self.emit)(Update::Acted {
                 action: verb.into(),
                 ok: false,
                 text: Some(format!("{e:#}")),
             }),
+        }
+    }
+
+    /// The daemon's REST route for a socket verb, where `muffit-server/src/lib.rs` has one.
+    fn rest_form(&self, verb: &str, args: &Value) -> Option<(&'static str, Value)> {
+        match verb {
+            "rename" => Some(("title", json!({ "title": args["title"] }))),
+            // The socket's fork branches from the head by default; REST must name the point.
+            "fork" => {
+                let from_seq = args
+                    .get("to_seq")
+                    .and_then(Value::as_u64)
+                    .or(self.transcript.watermark)?;
+                Some(("fork", json!({ "from_seq": from_seq })))
+            }
+            _ => None,
+        }
+    }
+
+    /// The session's socket, attached if there is none: watched, or held when `hold` and the
+    /// daemon will not let it be watched (a stored session). `Ok(false)` when the client is gone.
+    async fn attached(&mut self, socket: &mut Option<Socket>, hold: bool) -> anyhow::Result<bool> {
+        if socket.is_some() {
+            return Ok(true);
+        }
+        let opened = match self.attach(false).await {
+            Err(e) if hold => {
+                debug!(session = %self.session, error = %format!("{e:#}"), "not watchable; holding it");
+                self.attach(true).await?
+            }
+            watched => watched?,
+        };
+        match opened {
+            Some(opened) => {
+                *socket = Some(opened);
+                Ok(self.reread().await)
+            }
+            None => Ok(false),
         }
     }
 
@@ -929,6 +1212,10 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
         let mut transcript = Transcript::default();
         transcript.absorb(page, true);
         let page = transcript.page(&Workers::default());
+        self.worker_socket = match self.version >= abilities::SUB_LIVE {
+            true => observe_worker(&self.client, &id).await,
+            false => None,
+        };
         self.worker = Some(Worker {
             id: id.clone(),
             transcript,
@@ -954,6 +1241,38 @@ impl<E: FnMut(Update) -> bool + Send> State<E> {
     }
 }
 
+/// A worker's own observe socket (wire 3.5), which pushes each event the worker records, so
+/// its transcript is re-read when it moves rather than at the next poll. `None` leaves the poll.
+async fn observe_worker(daemon: &Client, id: &str) -> Option<Socket> {
+    let path = format!("/sessions/{id}/attach");
+    let opened = async {
+        let mut socket = daemon
+            .socket(&path, Some("observe=true"), &["status", "subscribe"])
+            .await?;
+        let cursor = loop {
+            match tokio::time::timeout(HANDSHAKE, client::next(&mut socket)).await? {
+                Some(ServerFrame::Hello { cursor, .. }) => break cursor,
+                Some(ServerFrame::Error { message }) => anyhow::bail!("{message}"),
+                Some(_) => {}
+                None => anyhow::bail!("closed before its hello"),
+            }
+        };
+        client::send(
+            &mut socket,
+            &json!({ "type": "subscribe", "events_after": cursor }),
+        )
+        .await?;
+        anyhow::Ok(socket)
+    };
+    match opened.await {
+        Ok(socket) => Some(socket),
+        Err(e) => {
+            debug!(worker = id, error = %format!("{e:#}"), "observing a muffit worker; polling it");
+            None
+        }
+    }
+}
+
 fn run_state(state: crate::wire::SessionState) -> RunState {
     match state {
         crate::wire::SessionState::Running
@@ -969,7 +1288,24 @@ fn run_state(state: crate::wire::SessionState) -> RunState {
     }
 }
 
-fn tasks_of(subagents: &[crate::wire::Subagent]) -> Vec<Task> {
+fn tasks_of(subagents: &[crate::wire::Subagent], shells: &[crate::wire::ShellTask]) -> Vec<Task> {
+    let shells = shells.iter().map(|shell| {
+        let running = shell.state == "running";
+        Task {
+            id: shell.id.clone(),
+            kind: "shell".into(),
+            call: None,
+            parent: None,
+            title: Some(shell.command.clone()).filter(|c| !c.is_empty()),
+            since: None,
+            backgrounded: running,
+            state: if running {
+                TaskState::Running
+            } else {
+                TaskState::Ended
+            },
+        }
+    });
     subagents
         .iter()
         .map(|subagent| {
@@ -992,7 +1328,24 @@ fn tasks_of(subagents: &[crate::wire::Subagent]) -> Vec<Task> {
                 },
             }
         })
+        .chain(shells)
         .collect()
+}
+
+fn limits_of(limit: crate::wire::RateLimit) -> Limits {
+    Limits {
+        plan: None,
+        usage: Some(Value::from(if limit.limited {
+            "rate-limited"
+        } else {
+            "not rate-limited"
+        })),
+        resets_at: limit
+            .limited
+            .then_some(limit.retry_after_ms)
+            .flatten()
+            .map(|ms| format!("in {} s", ms.div_ceil(1000))),
+    }
 }
 
 fn facts_of(snapshot: &StatusSnapshot) -> SessionFacts {
@@ -1004,7 +1357,14 @@ fn facts_of(snapshot: &StatusSnapshot) -> SessionFacts {
         mode: Some(if snapshot.plan { "plan" } else { "normal" }.into()),
         version: None,
         account: None,
-        billing: Default::default(),
+        billing: Billing {
+            provider: snapshot
+                .billed_to
+                .as_deref()
+                .map(|to| to.split_once(": ").map_or(to, |(name, _)| name).to_string()),
+            key: None,
+            rate_limited: snapshot.rate_limit.is_some_and(|r| r.limited),
+        },
         started: None,
     }
 }
@@ -1020,107 +1380,6 @@ fn set_verb(control: &str, value: &Value) -> Option<(String, Value)> {
         "permissions" => Some(("permissions.set".into(), json!({ "mode": value }))),
         _ => None,
     }
-}
-
-fn act_verb(action: &str, args: &Value) -> Option<(String, Value)> {
-    match action {
-        "compact" => Some(("context.compact".into(), json!({}))),
-        "cost" => Some(("cost".into(), json!({}))),
-        "revert" => Some(("revert".into(), json!({}))),
-        "changesets" => Some(("changesets".into(), json!({}))),
-        "btw" => Some((
-            "btw".into(),
-            json!({ "question": args.get("question").cloned().unwrap_or(Value::Null) }),
-        )),
-        "rewind" => Some(("rewind".into(), args.clone())),
-        "context" => Some(("context".into(), args.clone())),
-        _ => None,
-    }
-}
-
-/// The verbs the daemon's control surface lists, as actions (kampr.md §7).
-pub fn actions() -> Vec<Action> {
-    vec![
-        Action {
-            id: "compact".into(),
-            label: "Compact the context".into(),
-            detail: None,
-            args: Vec::new(),
-            group: None,
-            confirm: None,
-        },
-        Action {
-            id: "cost".into(),
-            label: "Show the cost".into(),
-            detail: None,
-            args: Vec::new(),
-            group: None,
-            confirm: None,
-        },
-        Action {
-            id: "revert".into(),
-            label: "Revert the last change".into(),
-            detail: None,
-            args: Vec::new(),
-            group: None,
-            confirm: None,
-        },
-        Action {
-            id: "changesets".into(),
-            label: "List the changesets".into(),
-            detail: None,
-            args: Vec::new(),
-            group: None,
-            confirm: None,
-        },
-        Action {
-            id: "rewind".into(),
-            label: "Rewind".into(),
-            detail: Some("to a changeset or a message".to_string()),
-            args: vec![
-                ArgSpec {
-                    name: "changeset".into(),
-                    label: "Changeset".into(),
-                    required: false,
-                    options: Vec::new(),
-                },
-                ArgSpec {
-                    name: "to_seq".into(),
-                    label: "Message".into(),
-                    required: false,
-                    options: Vec::new(),
-                },
-            ],
-            group: None,
-            confirm: Some("The work after it is moved to a backup.".into()),
-        },
-        Action {
-            id: "btw".into(),
-            label: "Ask a side question".into(),
-            detail: None,
-            args: vec![ArgSpec {
-                name: "question".into(),
-                label: "Question".into(),
-                required: true,
-                options: Vec::new(),
-            }],
-            group: None,
-            confirm: None,
-        },
-        Action {
-            id: "context".into(),
-            label: "Explain the context".into(),
-            detail: None,
-            args: vec![ArgSpec {
-                name: "strategy".into(),
-                label: "Strategy".into(),
-                required: false,
-                options: Vec::new(),
-            }],
-            group: None,
-            confirm: None,
-        },
-    ]
 }
 
 pub fn facets(title: Option<&str>, subagents: &[crate::wire::Subagent]) -> Facets {

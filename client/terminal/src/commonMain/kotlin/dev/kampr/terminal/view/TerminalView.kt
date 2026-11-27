@@ -101,6 +101,7 @@ import dev.kampr.terminal.input.PaneTextInput
 import dev.kampr.terminal.input.clickReports
 import dev.kampr.terminal.input.paneScrollKeys
 import dev.kampr.terminal.input.paneTakesClicks
+import dev.kampr.terminal.input.paneWheelBeatsTheRing
 import dev.kampr.terminal.input.scrollTracing
 import dev.kampr.terminal.render.GridPoint
 import dev.kampr.terminal.render.GridRenderer
@@ -804,6 +805,7 @@ fun TerminalView(
         probe.cellHeight = metrics.height
         probe.cols = cols.coerceAtLeast(1)
         probe.totalRows = rows.total.coerceAtLeast(1)
+        probe.historyRows = rows.historyRows
         probe.contentTop = stage.insetTop
         probe.contentBottom = stage.contentBottom
 
@@ -874,7 +876,8 @@ fun TerminalView(
         //
         // Gated exactly as `scrollToPane` is, and for the same reasons: a read-only device sends no
         // pty bytes at all, a pane Kampr holds a ring for is showing rows the program's screen does
-        // not have, and `paneTakesClicks` fails closed on everything but a harness that was probed.
+        // not have, and `paneTakesClicks` follows the program's own mouse mode, or fails closed on
+        // everything but a harness that was probed where the node could not say.
         //
         // The cell is the *surface's* and the report has to name a row of the program's own screen,
         // which is why history is refused outright rather than subtracted off: a pane Kampr holds a
@@ -882,7 +885,7 @@ fun TerminalView(
         // row. The bounds check is what says so out loud.
         fun clickedInto(cell: GridPoint) {
             if (io.readOnly) return
-            if (!paneTakesClicks(info?.agent, info?.cmd)) return
+            if (!paneTakesClicks(info?.agent, info?.cmd, info?.modes)) return
             if (rows.historyRows > 0 || cell.row < 0 || cell.row >= rows.liveRows) return
             for (report in clickReports(cell.col, cell.row)) {
                 io.send(ClientMsg.InputText(pane.id, report, typed = true))
@@ -954,16 +957,26 @@ fun TerminalView(
         // so nothing recomposes mid-drag and the same instance happened to live. Travel not yet
         // sent, and the frame the pump is waiting on, cannot be built on that.
         val keptScroll = rows.historyRows > 0
-        val scrollToPane = remember(pane.id, io.readOnly, keptScroll, info?.agent, info?.cmd) {
+        val scrollToPane = remember(pane.id, io.readOnly, keptScroll, info?.agent, info?.cmd, info?.modes) {
             when {
-                io.readOnly || keptScroll -> null
+                io.readOnly -> null
 
-                else -> paneScrollKeys(info?.agent, info?.cmd)?.let { keys ->
+                keptScroll && !paneWheelBeatsTheRing(info?.agent, info?.cmd, info?.modes) -> null
+
+                else -> paneScrollKeys(info?.agent, info?.cmd, info?.modes)?.let { keys ->
                     PaneScroll(keys, session.scrollTrace, scope, session.clock) { report ->
                         io.send(ClientMsg.InputText(pane.id, report, typed = true))
                     }
                 }
             }
+        }
+        // A program given the wheel is given everything above its own screen too: the ring under
+        // it, and the room `reserved` keeps for a ring the node took away, are rows a hand could
+        // otherwise spend its way up through before the first notch reached the program.
+        view.ceiling = if (scrollToPane != null && (keptScroll || reserved > 0f)) {
+            (rows.liveRows * metrics.height - stage.contentHeight).coerceAtLeast(0f)
+        } else {
+            Float.POSITIVE_INFINITY
         }
         LaunchedEffect(scrollToPane) {
             val toPane = scrollToPane ?: return@LaunchedEffect

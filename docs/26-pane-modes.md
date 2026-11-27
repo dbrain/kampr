@@ -41,37 +41,51 @@ rather than breaking the scroll.
 
 ## Wire (additive only)
 
-An optional `modes` object on the pane's `grid.reset` (and re-sent whenever any of these change, as a
-`grid.modes` message, or on `pane.info`: pick whichever the existing mode-like fields already use; read
-docs/04 before choosing):
+An optional `modes` object on the pane's entry in `herd` and `herd.patch`, beside `agent` and `cmd`,
+which change as often and are what the client chose by before. Not on `grid.reset`: a mode changes between
+grids, and the entry is the place a changed pane already travels from. The full shape is in
+[docs/04](./04-wire-protocol.md):
 
 ```jsonc
 { "mouse": "none" | "press" | "drag" | "any",   // ?1000 / ?1002 / ?1003
   "mouse_sgr": true,                              // ?1006
   "alt_scroll": true,                             // ?1007
   "app_cursor": false,                            // ?1
-  "alt_screen": true }                            // ?1049 / ?47 / ?1047
+  "alt_screen": true }                            // ?1049
 ```
 
-Absent means a node that predates it, and the client keeps today's name-based behaviour for that pane:
-`paneScrollKeys` takes `modes` as an optional argument and falls through to the tables when it is null.
-That fallback is permanent: an older node behind a hub is the normal case. `wire-shapes.txt` is blessed
-with the new paths (`KAMPR_BLESS_WIRE=1`) and docs/04 gets the field.
+Absent means a herdr pane or a node that predates it, and the client keeps today's name-based behaviour
+for that pane: `paneScrollKeys` and `paneTakesClicks` take `modes` as an optional argument and fall
+through to the tables when it is null. That fallback is permanent: an older node behind a hub is the normal
+case, and herdr will never report them. `wire-shapes.txt` is blessed with the new paths.
 
-## Where the modes come from, which is the open question
+## What was found
 
-- **Native sessions**: `kampr-native`'s emulator (alacritty `TermMode`) already tracks `MOUSE_*`,
-  `SGR_MOUSE`, `ALTERNATE_SCROLL`, `APP_CURSOR` and `ALT_SCREEN`, and the checkpoint carries them
-  (`screen/checkpoint.rs`), so a replay rebuilds them. Straightforward.
-- **herdr panes**: unknown. `herdr_provider.rs:592` notes that "herdr says nothing of a pane's 2004
-  (#667)", so herdr's API does not report modes. Whether the node's own emulator for a herdr pane (the
-  byte stream from `herdr terminal session observe`) sees `?1000h`/`?1006h`/`?1007h` is what to measure
-  first: run Claude, muffit, `less` and `vim` in a herdr pane and read the node's emulator state. Append
-  a probe row (rule 1) with what was found. If the stream does not carry the program's mode sets
-  (herdr may swallow them), herdr panes stay on the name tables, and that is a documented limit.
-- **Peers and hubs**: the hub relays `grid.reset` by pane id, so a new optional field passes through; an
-  older hub that rebuilds frames drops it, and the client falls back.
-- **muffit's TUI in a terminal pane** is a native session, so it is the first case covered.
+- **herdr panes report no modes** (probe #686, herdr 0.9.5, on top of #292/#293): its observe stream's whole
+  private-mode vocabulary is `?2026` and `?25`, and nothing else on its socket names a mouse, alternate
+  screen or cursor-key mode. A herdr pane stays on the name tables. That is a documented limit, not a gap
+  to close.
+- **Native sessions** read them off their own emulator (`Screen::modes`, alacritty `TermMode`), checked
+  against a real Claude Code session's bytes (#687). `?1007` starts on, as in xterm-likes. `?47` and
+  `?1047` are not tracked, so `alt_screen` is `?1049` alone.
+- **A mode a program left on** (it crashed) is not reported for the prompt it left behind: the node sends
+  `modes` only while it can name a foreground job (#688). That, rather than the stale-label test, is what
+  keeps a report from being typed into readline.
+- **The cursor-key form is still always the application one.** `app_cursor` is on the wire and not followed
+  yet: #390 measured the normal form moving `less` by nothing, and no probe has said the DECCKM-aware form
+  is no worse.
+- **Clicks follow the same rule**: a program with SGR mouse reporting is sent a button-1 report whatever its
+  name. Claude's own click handling can be switched off with `CLAUDE_CODE_DISABLE_MOUSE_CLICKS`; it still
+  sets `?1000h` and ignores the report, which #480 measured as inert, so following the mode costs nothing
+  there. What it does cost is a click now reaching every program that asked for the mouse (vim's cursor,
+  a TUI's own selection) instead of only Claude.
+
+## Not done
+
+- The legacy (non-SGR) mouse form: nothing is sent for it, on the phone or in the terminal client. No
+  program measured needs it.
+- Nothing yet clears a mode on a native pane by watching the job change to a prompt beyond the gate above;
+  the gate only hides them.
 
 ## Order of work (TDD)
 

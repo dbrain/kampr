@@ -56,6 +56,7 @@ fun GroupBody(group: NodeGroup, ctx: HerdRowsCtx, modifier: Modifier = Modifier)
     val tokens = Kampr.tokens
     val area = ctx.folds.area(group)
     Column(modifier, verticalArrangement = Arrangement.spacedBy(look.gap)) {
+        ResumeAfterReboot(group.node, look)
         when (area) {
             Area.Terminals -> {
                 if (group.panes.isEmpty() && group.node.containers.isEmpty() && group.children.isEmpty()) {

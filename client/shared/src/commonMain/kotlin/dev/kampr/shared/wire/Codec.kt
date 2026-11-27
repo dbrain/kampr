@@ -145,6 +145,8 @@ object Wire {
                 multi = obj.bool("multi") ?: false,
                 context = obj.str("context")?.takeIf { it.isNotBlank() },
                 id = obj.str("id"),
+                kind = obj.str("kind"),
+                fields = obj.decodeList<PendingField>("fields"),
             )
 
             "convo.heard" -> ServerMsg.ConvoHeard(
@@ -170,6 +172,10 @@ object Wire {
                 layout = obj["layout"] as? JsonObject,
                 held = obj.bool("held"),
                 detail = obj["detail"] as? JsonObject,
+                resumable = obj["resumable"]?.let { obj.decodeList<StoredConversation>("resumable") },
+                resumeRecords = obj["resumable"]
+                    ?.takeIf { obj.str("op") == ManageOp.NativeResumable.OP }
+                    ?.let { obj.decodeList<ResumeRecord>("resumable") },
             )
 
             "hold.lost" -> ServerMsg.HoldLost(obj.str("pane") ?: return null)
@@ -306,6 +312,14 @@ object Wire {
             put("text", msg.text)
             if (msg.typed) put("typed", true)
             if (msg.paste) put("paste", true)
+            msg.id?.let { put("id", it) }
+            msg.queue?.let { put("when", it) }
+        }
+
+        is ClientMsg.InputUnqueue -> buildJsonObject {
+            put("t", "input.unqueue")
+            put("pane", msg.pane)
+            put("id", msg.id)
         }
 
         is ClientMsg.InputB64 -> buildJsonObject {

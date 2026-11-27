@@ -8,12 +8,15 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+getrandom.workspace = true
 kampr-core = { path = "../kampr-core" }
 kampr-keep = { path = "../kampr-keep" }
 kampr-journal = { path = "../kampr-journal" }
+kampr-proc = { path = "../kampr-proc" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]

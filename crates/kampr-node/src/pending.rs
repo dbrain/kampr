@@ -22,6 +22,7 @@ pub struct Pending {
     pub cursor: Option<usize>,
     pub context: Option<String>,
     pub id: Option<String>,
+    pub kind: Option<kampr_core::wire::PendingKind>,
 }
 
 /// **The cursor is deliberately not part of this.** `send_pending` sends a frame when the reading
@@ -36,6 +37,7 @@ impl PartialEq for Pending {
             && self.multi == other.multi
             && self.context == other.context
             && self.id == other.id
+            && self.kind == other.kind
     }
 }
 
@@ -224,6 +226,7 @@ pub fn detect_marked(screen: &str) -> Option<Pending> {
         cursor,
         context: None,
         id: None,
+        kind: None,
     })
 }
 
@@ -319,6 +322,7 @@ pub fn detect(screen: &str) -> Option<Pending> {
                 cursor: None,
                 context: None,
                 id: None,
+                kind: None,
             });
         }
     }

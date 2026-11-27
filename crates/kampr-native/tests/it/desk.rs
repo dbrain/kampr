@@ -72,7 +72,8 @@ async fn a_host_is_found_from_the_file_its_attach_wrote_and_only_with_a_herdr_pa
 }
 
 /// herdr refuses a `resume_argv` whose first element is a path, and a restored pane does not get
-/// the `env` it was split with, so the root has to ride in the argv (#583).
+/// the `env` it was split with, so the root has to ride in the argv (#583). `--restored` is what
+/// lets a boot that took the session's directory end in a shell instead of an error.
 #[tokio::test]
 async fn what_herdr_is_told_to_run_starts_with_a_plain_command_and_carries_the_root() {
     let root = tempfile::tempdir().expect("a root");
@@ -85,13 +86,14 @@ async fn what_herdr_is_told_to_run_starts_with_a_plain_command_and_carries_the_r
             format!("KAMPR_KEEP_ROOT={}", root.path().display()),
             "/opt/kampr/bin/kampr".into(),
             "attach".into(),
+            "--restored".into(),
             ID.into(),
         ]
     );
     let line = provider.attach_line(ID);
     assert!(line.starts_with(" unset HISTFILE; exec env "), "{line:?}");
     assert!(
-        line.ends_with(&format!(" /opt/kampr/bin/kampr attach {ID}\r")),
+        line.ends_with(&format!(" /opt/kampr/bin/kampr attach --restored {ID}\r")),
         "{line:?}"
     );
 }

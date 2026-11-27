@@ -106,7 +106,7 @@ internal suspend fun PointerInputScope.terminalWheel(
             // inside the program rather than inside Kampr, so nothing here can bring it back —
             // only the notch the other way, sent the same route.
             if (toPane != null && rows != 0 && view.scrollY == before) {
-                val cell = probe.cellAt(event.changes.first().position)
+                val cell = probe.screenCellAt(event.changes.first().position)
                 toPane.wheel(rows = -rows, col = cell.col, row = cell.row)
             }
         }

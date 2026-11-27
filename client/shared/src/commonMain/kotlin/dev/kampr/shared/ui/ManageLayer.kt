@@ -24,6 +24,7 @@ import dev.kampr.shared.net.wallClockMillis
 import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ClientMsg
 import dev.kampr.shared.wire.NodeInfo
+import dev.kampr.shared.wire.ResumeRecord
 
 // Root-window coordinates for the corner a context menu hangs off, which is the pointer's own cell
 // on a desk (#426) and the "…" glyph's own box when a finger asked. Null on a phone, where the menu
@@ -62,6 +63,11 @@ interface ManageIo {
 
     // The whole New sheet, aimed at one machine.
     fun newOn(nodeId: String) = Unit
+
+    // docs/25: what a boot left on a machine that a person may run again, or drop unrun.
+    fun resumable(nodeId: String): List<ResumeRecord> = emptyList()
+    fun resume(nodeId: String, record: ResumeRecord) = Unit
+    fun dismissResume(nodeId: String, record: ResumeRecord) = Unit
 }
 
 private object NoManage : ManageIo {
@@ -109,6 +115,12 @@ class AppManage(private val state: AppState) : ManageIo {
     override fun newOn(nodeId: String) {
         state.openSheet(Sheet.New(nodeId, null))
     }
+
+    override fun resumable(nodeId: String): List<ResumeRecord> = state.resumes.on(nodeId)
+
+    override fun resume(nodeId: String, record: ResumeRecord) = state.resumes.resume(nodeId, record)
+
+    override fun dismissResume(nodeId: String, record: ResumeRecord) = state.resumes.dismiss(nodeId, record)
 }
 
 @Composable
@@ -228,6 +240,7 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                 agentArgs = state.agentArgs,
                 // `hello.caps` speaks for the node this device is connected to and no other.
                 muffit = node.muffit ?: (state.store.hello.value?.let { it.caps.muffit && it.nodeId == node.id } == true),
+                onAsk = { op, rid -> state.connection.send(ClientMsg.Manage(op, rid)) },
             )
         }
 
@@ -247,6 +260,9 @@ fun ManageLayer(state: AppState, herd: Herd, breakpoint: Breakpoint, surfaces: P
                     .takeIf { !state.store.readOnly },
                 tools = { surfaces.Tools(pane.id, state::closeSheet) },
                 desk = herd.hasDesk(pane.nodeId),
+                headless = herd.nodes.firstOrNull { it.id == pane.nodeId }?.claude == true,
+                onCreated = state::opening,
+                onAsk = { op, rid -> state.connection.send(ClientMsg.Manage(op, rid)) },
             )
         }
 

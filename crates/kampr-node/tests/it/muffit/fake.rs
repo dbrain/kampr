@@ -1,5 +1,6 @@
-//! A muffit daemon that speaks the frames of `../muffit/docs/api/kampr.md` (wire 3.3) and records
-//! everything it is asked, so a test can say what the node sent it.
+//! A muffit daemon that speaks the frames of `../muffit/docs/api/kampr.md` (wire 3.3 to 3.9, the
+//! version it greets with set by the test) and records everything it is asked, so a test can say
+//! what the node sent it.
 
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -7,13 +8,16 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::broadcast;
 
+mod rest;
+
 pub const TOKEN: &str = "fake-muffit-token";
+const HANG_UP: &str = "_hang_up";
 
 #[derive(Debug, Clone)]
 pub struct Seen {
@@ -32,6 +36,10 @@ struct Inner {
     seen: Vec<Seen>,
     attach_frames: Vec<Value>,
     created: u32,
+    version: u32,
+    children: Vec<String>,
+    hung_up: bool,
+    watchers_refused: bool,
 }
 
 #[derive(Clone)]
@@ -39,6 +47,7 @@ pub struct Fake {
     inner: Arc<Mutex<Inner>>,
     stream: broadcast::Sender<Value>,
     attach: broadcast::Sender<Value>,
+    child: broadcast::Sender<Value>,
     pub url: String,
 }
 
@@ -95,14 +104,17 @@ impl Fake {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let (stream, _) = broadcast::channel(64);
         let (attach, _) = broadcast::channel(64);
+        let (child, _) = broadcast::channel(64);
         let inner = Arc::new(Mutex::new(Inner {
             sessions,
+            version: 309,
             ..Inner::default()
         }));
         let fake = Self {
             inner,
             stream,
             attach,
+            child,
             url,
         };
         let app = Router::new()
@@ -110,8 +122,7 @@ impl Fake {
             .route("/sessions/stream", get(stream_socket))
             .route("/sessions/{id}/attach", get(attach_socket))
             .route("/sessions/{id}/transcript", get(transcript))
-            .route("/sessions/{id}/permission", post(permission))
-            .route("/sessions/{id}/{verb}", post(control))
+            .merge(rest::routes())
             .layer(middleware::from_fn_with_state(fake.clone(), guard))
             .with_state(fake.clone());
         let task = tokio::spawn(async move {
@@ -217,6 +228,21 @@ impl Fake {
         let _ = self.attach.send(frame);
     }
 
+    /// The wire version the daemon greets with, as `WIRE_VERSION` in muffit's `wire.rs`.
+    pub fn speak(&self, version: u32) {
+        self.inner.lock().unwrap().version = version;
+    }
+
+    /// A frame on every worker's observe socket (kampr.md §6, 3.5).
+    pub fn push_child(&self, frame: Value) {
+        let _ = self.child.send(frame);
+    }
+
+    /// The workers somebody has opened an observe socket on.
+    pub fn children(&self) -> Vec<String> {
+        self.inner.lock().unwrap().children.clone()
+    }
+
     pub fn status(&self, permission: Value, subagents: Value) {
         self.snapshot(json!({
             "session_id": "s1", "state": "running", "title": "install ripgrep",
@@ -230,6 +256,19 @@ impl Fake {
 
     pub fn snapshot(&self, snapshot: Value) {
         self.push(json!({ "type": "status", "cursor": 2, "snapshot": snapshot }));
+    }
+
+    /// Every attach socket closes and no new one is let in, so the node is left with REST alone.
+    pub fn hang_up(&self) {
+        self.inner.lock().unwrap().hung_up = true;
+        let _ = self.attach.send(json!({ "type": HANG_UP }));
+    }
+
+    /// Every attach socket closes and only a watcher is turned away, as muffit treats a stored session:
+    /// attaching without `observe` still restores it.
+    pub fn hang_up_on_watchers(&self) {
+        self.inner.lock().unwrap().watchers_refused = true;
+        let _ = self.attach.send(json!({ "type": HANG_UP }));
     }
 
     pub fn attached(&self) -> usize {
@@ -342,47 +381,72 @@ async fn transcript(
     .into_response()
 }
 
-async fn permission(
-    State(fake): State<Fake>,
-    Path(id): Path<String>,
-    axum::Json(body): axum::Json<Value>,
-) -> Response {
-    let mut inner = fake.inner.lock().unwrap();
-    let Some(row) = inner.sessions.iter_mut().find(|s| s["id"] == id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            axum::Json(json!({ "error": format!("unknown session: {id}") })),
-        )
-            .into_response();
-    };
-    if row["permission"]["id"] != body["id"] {
-        return (
-            StatusCode::CONFLICT,
-            axum::Json(json!({ "error": "that request is no longer waiting" })),
-        )
-            .into_response();
+/// The wire version each control verb arrived in, from `handle_control` in muffit's `ws.rs`;
+/// `None` is a verb it answers `unknown verb` to (`pause`, `resume` and `stop` are REST only).
+fn verb_since(verb: &str) -> Option<u32> {
+    match verb {
+        "models.list" | "model.swap" | "model.add" | "thinking.set" | "mode.set" | "permissions.set"
+        | "btw" | "context" | "context.compact" | "cost" | "revert" | "rewind" | "changesets"
+        | "permission.answer" => Some(300),
+        v if v.starts_with("mcp.") => Some(300),
+        "question.answer" | "question.withdraw" => Some(304),
+        "job.stop" => Some(306),
+        "rename" | "clear" | "queue.unqueue" | "fork" => Some(307),
+        "commands.list" => Some(308),
+        _ => None,
     }
-    row["permission"] = Value::Null;
-    axum::Json(json!({ "id": body["id"] })).into_response()
 }
 
-async fn control(State(fake): State<Fake>, Path((id, verb)): Path<(String, String)>) -> Response {
-    if verb == "stop" {
-        let row = {
-            let mut inner = fake.inner.lock().unwrap();
-            let row = inner.sessions.iter_mut().find(|s| s["id"] == id);
-            row.map(|row| {
-                row["state"] = json!("stopped");
-                row.clone()
-            })
-        };
-        if let Some(row) = row {
-            let _ = fake
-                .stream
-                .send(json!({ "type": "session", "session": shown(&row) }));
-        }
+/// `crates/muffit-server/src/commands.rs` at wire 3.9.
+const CATALOG: &[(&str, &str)] = &[
+    ("models.list", "list the configured models"),
+    ("model.swap", "switch the session's active model"),
+    ("model.add", "add a provider's model to the user config"),
+    ("thinking.set", "set the thinking level (off/low/medium/high)"),
+    ("mode.set", "set the permission mode (toggle/plan/normal)"),
+    ("permissions.set", "set the permission mode (ask/auto/yolo/…)"),
+    ("btw", "an aside answer that stays out of the history"),
+    ("context", "show, or switch, the context strategy"),
+    ("context.compact", "compact the conversation"),
+    ("cost", "the session's token usage and cost"),
+    ("revert", "revert the working tree to a checkpoint"),
+    ("rewind", "rewind the conversation to a seq or changeset"),
+    ("changesets", "list the changesets (the turns that changed files)"),
+    ("job.stop", "stop a background shell task"),
+    ("rename", "rename the session"),
+    ("clear", "clear the pane's view (a display action)"),
+    ("queue.unqueue", "drop a sent-but-unconsumed input by msg_id"),
+    ("fork", "fork the conversation into a new session"),
+    (
+        "permission.answer",
+        "answer a permission prompt (allow/always/deny)",
+    ),
+    ("question.answer", "answer the model's ask question"),
+    ("question.withdraw", "withdraw the model's ask question"),
+    ("mcp.status", "list the MCP servers"),
+    ("mcp.add", "add an MCP server"),
+    ("mcp.approve", "approve a pending MCP server"),
+    ("mcp.disable", "disable an MCP server"),
+    ("mcp.enable", "enable an MCP server"),
+    ("mcp.remove", "remove an MCP server"),
+];
+
+fn command_result(id: &str, verb: &str, version: u32) -> Value {
+    if verb_since(verb).is_none_or(|since| version < since) {
+        return json!({ "type": "command_result", "verb": verb, "ok": false,
+                       "payload": format!("unknown verb: {verb}") });
     }
-    axum::Json(json!({ "id": id })).into_response()
+    let payload = match verb {
+        "models.list" => json!({ "providers": [
+            { "name": "mock", "kind": "anthropic", "model": "mock" },
+            { "name": "mock2", "kind": "anthropic", "model": "mock-2" }
+        ] }),
+        "commands.list" => json!({ "commands": CATALOG.iter()
+            .map(|(verb, summary)| json!({ "verb": verb, "summary": summary }))
+            .collect::<Vec<_>>() }),
+        _ => json!({ "id": id }),
+    };
+    json!({ "type": "command_result", "verb": verb, "ok": true, "payload": payload })
 }
 
 async fn stream_socket(State(fake): State<Fake>, ws: WebSocketUpgrade) -> Response {
@@ -410,6 +474,9 @@ async fn attach_socket(
     ws: WebSocketUpgrade,
 ) -> Response {
     let observe = query.get("observe").is_some_and(|v| v == "true");
+    if let Some((parent, _)) = id.split_once(".s") {
+        return child_socket(fake.clone(), parent.to_string(), id.clone(), ws);
+    }
     let row = fake
         .inner
         .lock()
@@ -421,6 +488,13 @@ async fn attach_socket(
     let Some(row) = row else {
         return (StatusCode::NOT_FOUND, "no such session").into_response();
     };
+    let refused = {
+        let inner = fake.inner.lock().unwrap();
+        inner.hung_up || (observe && inner.watchers_refused)
+    };
+    if refused {
+        return (StatusCode::NOT_FOUND, "no such live session").into_response();
+    }
     match (is_live(&row), observe) {
         (true, _) => {}
         (false, true) => return (StatusCode::NOT_FOUND, "no such live session").into_response(),
@@ -437,7 +511,8 @@ async fn attach_socket(
             .unwrap()
             .attach_frames
             .push(serde_json::from_str(&hello).unwrap_or_default());
-        let greeting = json!({ "type": "hello", "version": 303, "cursor": 1, "session": row,
+        let version = fake.inner.lock().unwrap().version;
+        let greeting = json!({ "type": "hello", "version": version, "cursor": 1, "session": row,
                                "capabilities": ["input", "interrupt", "history", "status", "subscribe"] });
         if !send(&mut socket, greeting).await {
             return;
@@ -451,18 +526,53 @@ async fn attach_socket(
                     let frame: Value = serde_json::from_str(&text).unwrap_or_default();
                     fake.inner.lock().unwrap().attach_frames.push(frame.clone());
                     if frame["type"] == "control" {
-                        let verb = frame["verb"].as_str().unwrap_or_default().to_string();
-                        let payload = if verb == "models.list" {
-                            json!({ "providers": [
-                                { "name": "mock", "kind": "anthropic", "model": "mock" },
-                                { "name": "mock2", "kind": "anthropic", "model": "mock-2" }
-                            ] })
-                        } else {
-                            json!({ "id": id })
-                        };
-                        if !send(&mut socket, json!({ "type": "command_result", "verb": verb, "ok": true, "payload": payload })).await {
+                        let verb = frame["verb"].as_str().unwrap_or_default();
+                        if !send(&mut socket, command_result(&id, verb, version)).await {
                             return;
                         }
+                    }
+                }
+                frame = frames.recv() => {
+                    let Ok(frame) = frame else {
+                        return;
+                    };
+                    if frame["type"] == HANG_UP || !send(&mut socket, frame).await {
+                        return;
+                    }
+                }
+            }
+        }
+    })
+    .into_response()
+}
+
+/// A worker's observe socket (kampr.md §6): 404 unless its ancestor is live on a 3.5 daemon, then
+/// the child's greeting and whatever the test pushes to children.
+fn child_socket(fake: Fake, parent: String, id: String, ws: WebSocketUpgrade) -> Response {
+    let (live, version) = {
+        let inner = fake.inner.lock().unwrap();
+        let live = inner.sessions.iter().any(|s| s["id"] == parent && is_live(s));
+        (live, inner.version)
+    };
+    if !live || version < 305 {
+        return (StatusCode::NOT_FOUND, "no such child session").into_response();
+    }
+    fake.inner.lock().unwrap().children.push(id.clone());
+    ws.on_upgrade(move |mut socket| async move {
+        let mut frames = fake.child.subscribe();
+        if !said_hello(&mut socket).await {
+            return;
+        }
+        let greeting = json!({ "type": "hello", "version": version, "cursor": 1,
+                               "session": { "id": id, "state": "running", "turns": 0 } });
+        if !send(&mut socket, greeting).await {
+            return;
+        }
+        loop {
+            tokio::select! {
+                incoming = socket.recv() => {
+                    if !matches!(incoming, Some(Ok(Message::Text(_)))) {
+                        return;
                     }
                 }
                 frame = frames.recv() => {

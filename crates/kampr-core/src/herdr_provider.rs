@@ -37,6 +37,8 @@ use tracing::{debug, info, warn};
 ///   `scrollback_rows`, which the sweep carries.
 /// - `pane.output_changed` — **not subscribable at all.** herdr emits it, but `events.subscribe`
 ///   refuses the name, and one bad name refuses the whole list (probe #54).
+mod screen;
+
 const TOPOLOGY_EVENTS: &[&str] = &[
     "layout.updated",
     "pane.created",
@@ -1306,7 +1308,7 @@ impl Provider for HerdrProvider {
             .snapshot
             .borrow()
             .pane(pane_id)
-            .is_some_and(|p| p.is_agent() && !p.scrollback_is_safe_to_read())
+            .is_some_and(|p| screen::holds_the_screen(p, self.inner.command(pane_id).as_ref()))
     }
 
     fn topology(&self) -> watch::Receiver<u64> {
@@ -1501,6 +1503,7 @@ fn pane_info(inner: &Inner, snapshot: &Snapshot, pane: &kampr_herdr::Pane) -> Pa
         muffit: None,
         tile: tile(snapshot, pane),
         detail: inner.stream_fault(),
+        modes: None,
     }
 }
 

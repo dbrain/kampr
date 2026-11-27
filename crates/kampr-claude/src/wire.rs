@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// One line of Claude's stream-json, read off stdout. Parsing is lenient by rule: an unknown
 /// `type` is `Other`, a missing field is `None`, and nothing here is allowed to fail a turn on a
@@ -75,9 +75,6 @@ pub struct Init {
     pub permission_mode: Option<String>,
     /// Guard 4: `"none"` on a login that is paid by the plan; a key name is a key in the env.
     pub api_key_source: Option<String>,
-    pub capabilities: Vec<String>,
-    pub slash_commands: Vec<SlashCommand>,
-    pub agents: Vec<String>,
     pub version: Option<String>,
 }
 
@@ -89,43 +86,9 @@ impl Init {
             model: Line::str_of(v, "model"),
             permission_mode: Line::str_of(v, "permissionMode").or_else(|| Line::str_of(v, "permission_mode")),
             api_key_source: Line::str_of(v, "apiKeySource").or_else(|| Line::str_of(v, "api_key_source")),
-            capabilities: v
-                .get("capabilities")
-                .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|c| c.as_str().map(str::to_string)).collect())
-                .unwrap_or_default(),
-            slash_commands: v
-                .get("slash_commands")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|c| {
-                            Some(SlashCommand {
-                                name: c.get("name")?.as_str()?.to_string(),
-                                description: c.get("description").and_then(Value::as_str).map(str::to_string),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            agents: v
-                .get("agents")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|c| c.get("name").and_then(Value::as_str).map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default(),
             version: Line::str_of(v, "version"),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SlashCommand {
-    pub name: String,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -135,6 +98,11 @@ pub struct Status {
 }
 
 impl Status {
+    /// A `system/status` that only reports the permission mode changing.
+    pub fn permission_mode_only(&self) -> bool {
+        self.status.is_none() && self.permission_mode.is_some()
+    }
+
     fn from(v: &Value) -> Self {
         Self {
             status: Line::str_of(v, "status"),
@@ -198,14 +166,14 @@ impl TaskProgress {
 #[derive(Debug, Clone, Default)]
 pub struct TaskNotification {
     pub task_id: Option<String>,
-    pub output_file: Option<String>,
+    pub status: Option<String>,
 }
 
 impl TaskNotification {
     fn from(v: &Value) -> Self {
         Self {
             task_id: Line::str_of(v, "task_id"),
-            output_file: Line::str_of(v, "output_file"),
+            status: Line::str_of(v, "status"),
         }
     }
 }
@@ -409,8 +377,8 @@ fn user(v: &Value) -> UserLine {
     }
 }
 
-/// A turn's end. `result` is the answer's text; `origin` names a turn the model started for
-/// itself (guard 7); `total_cost_usd` is what the turn cost.
+/// A turn's end. `origin` is absent on a person's turn and an object `{kind, ...}` on one the
+/// session started itself (#682); `total_cost_usd` is what the turn cost.
 #[derive(Debug, Clone, Default)]
 pub struct ResultLine {
     pub subtype: Option<String>,
@@ -422,7 +390,7 @@ pub struct ResultLine {
     pub usage: Usage,
     pub duration_ms: u64,
     pub num_turns: u64,
-    pub origin: Option<String>,
+    pub origin: Option<Value>,
     pub error: Option<String>,
     pub session_id: Option<String>,
 }
@@ -438,7 +406,7 @@ fn result(v: &Value) -> ResultLine {
         usage: usage(v.get("usage").unwrap_or(v)),
         duration_ms: v.get("duration_ms").and_then(Value::as_u64).unwrap_or(0),
         num_turns: v.get("num_turns").and_then(Value::as_u64).unwrap_or(0),
-        origin: Line::str_of(v, "origin"),
+        origin: v.get("origin").filter(|o| !o.is_null()).cloned(),
         error: Line::str_of(v, "error"),
         session_id: Line::str_of(v, "session_id"),
     }
@@ -467,7 +435,8 @@ fn usage(v: &Value) -> Usage {
     }
 }
 
-/// Guard 6 and the limits on screen: a plan running on its usage credits.
+/// `rate_limit_event.rate_limit_info`, as the binary's own schema names it (2.1.326): `isUsingOverage`
+/// is guard 6's signal, and `unifiedWindows` carry each window's use as a fraction of its cap.
 #[derive(Debug, Clone, Default)]
 pub struct RateLimit {
     pub is_using_overage: bool,
@@ -479,53 +448,65 @@ pub struct RateLimit {
 #[derive(Debug, Clone)]
 pub struct Window {
     pub utilization: f64,
-    pub resets_at: Option<String>,
+    pub resets_at: Option<u64>,
 }
 
 fn rate_limit(v: &Value) -> RateLimit {
-    let v = v.get("rate_limit_event").unwrap_or(v);
-    let window = |v: &Value, key: &str| {
-        v.get(key).map(|w| Window {
+    let info = v.get("rate_limit_info").unwrap_or(&Value::Null);
+    let windows = info.get("unifiedWindows").unwrap_or(&Value::Null);
+    let window = |key: &str| {
+        windows.get(key).map(|w| Window {
             utilization: w.get("utilization").and_then(Value::as_f64).unwrap_or(0.0),
-            resets_at: w.get("resets_at").and_then(Value::as_str).map(str::to_string),
+            resets_at: w.get("resetsAt").and_then(Value::as_u64),
         })
     };
+    let flag = |key: &str| info.get(key).and_then(Value::as_bool).unwrap_or(false);
     RateLimit {
-        is_using_overage: v
-            .get("is_using_overage")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        overage_status: Line::str_of(v, "overage_status"),
-        five_hour: window(v, "five_hour"),
-        seven_day: window(v, "seven_day"),
+        is_using_overage: flag("isUsingOverage") || flag("overageInUse"),
+        overage_status: Line::str_of(info, "overageStatus"),
+        five_hour: window("five_hour"),
+        seven_day: window("seven_day"),
     }
 }
 
-/// A request the binary asks of us: a `can_use_tool` standing in the middle of a turn.
+/// A request the binary asks of us in the middle of a turn: `can_use_tool` for a permission, a
+/// question or a plan (#645, #674), `elicitation` for an MCP server's form (#684).
 #[derive(Debug, Clone)]
 pub struct ControlRequest {
     pub request_id: String,
-    pub tool_name: Option<String>,
-    pub input: Value,
-    pub permission_suggestions: Vec<Value>,
-    pub raw: Value,
+    pub subtype: String,
+    pub request: Value,
 }
 
-fn parse_control_request(v: &Value) -> ControlRequest {
-    let request = v.get("request").unwrap_or(v);
-    ControlRequest {
-        request_id: Line::str_of(v, "request_id").unwrap_or_default(),
-        tool_name: request
-            .get("tool_name")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        input: request.get("input").cloned().unwrap_or(Value::Null),
-        permission_suggestions: request
+impl ControlRequest {
+    pub fn tool_name(&self) -> Option<&str> {
+        self.request.get("tool_name").and_then(Value::as_str)
+    }
+
+    pub fn input(&self) -> Value {
+        self.request.get("input").cloned().unwrap_or(Value::Null)
+    }
+
+    pub fn permission_suggestions(&self) -> Vec<Value> {
+        self.request
             .get("permission_suggestions")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default(),
-        raw: v.clone(),
+            .unwrap_or_default()
+    }
+
+    /// The subagent that asks, where the binary names one (#636).
+    pub fn agent_id(&self) -> Option<&str> {
+        self.request.get("agent_id").and_then(Value::as_str)
+    }
+}
+
+fn parse_control_request(v: &Value) -> ControlRequest {
+    let request = v.get("request").cloned().unwrap_or(Value::Null);
+    ControlRequest {
+        request_id: Line::str_of(v, "request_id").unwrap_or_default(),
+        subtype: Line::str_of(&request, "subtype").unwrap_or_default(),
+        request,
     }
 }
 
@@ -554,99 +535,15 @@ fn parse_control_response(v: &Value) -> ControlResponse {
     }
 }
 
-// ── the writer: our lines to the binary's stdin ──────────────────────────────
-
-/// A `user` message: the prompt, with optional images. This is a word sent, and it is what the
-/// billing guards stand in front of. `uuid` is the word's id — the handle a
-/// `cancel_async_message` names — and `priority` is the binary's queue priority: `now` preempts
-/// the turn in flight, `next` waits behind it.
-pub fn user_message(text: &str, images: &[Image], uuid: Option<&str>, priority: Option<&str>) -> String {
-    let content = if images.is_empty() {
-        Value::String(text.to_string())
-    } else {
-        let mut blocks = vec![Value::Object(
-            [("type".to_string(), json_text(text))].into_iter().collect(),
-        )];
-        for image in images {
-            blocks.push(json!({
-                "type": "image",
-                "source": { "type": "base64", "media_type": image.mime, "data": image.data },
-            }));
-        }
-        Value::Array(blocks)
-    };
-    let mut line = json!({
-        "type": "user",
-        "message": { "role": "user", "content": content },
-        "parent_tool_use_id": null,
-        "session_id": "",
-    });
-    if let Some(uuid) = uuid {
-        line["uuid"] = Value::String(uuid.to_string());
-    }
-    if let Some(priority) = priority {
-        line["priority"] = Value::String(priority.to_string());
-    }
-    line.to_string()
-}
-
-fn json_text(text: &str) -> Value {
-    json!({ "type": "text", "text": text })
-}
-
-pub struct Image {
-    pub mime: String,
-    pub data: String,
-}
-
-/// A control request, our side: `initialize`, `list_models`, `get_usage`, `set_model`, ...
-/// The reply is matched to the caller's `request_id`.
-pub fn control_request(request_id: &str, subtype: &str, body: Value) -> String {
-    let mut request = serde_json::to_value(body).unwrap_or(Value::Null);
-    if let Some(obj) = request.as_object_mut() {
-        obj.insert("subtype".to_string(), Value::String(subtype.to_string()));
-    }
-    json!({
-        "type": "control_request",
-        "request_id": request_id,
-        "request": request,
-    })
-    .to_string()
-}
-
-/// The answer to a `can_use_tool`: `behavior` is `allow` or `deny`.
-pub fn control_response(request_id: &str, behavior: &str, updated_input: Value) -> String {
-    json!({
-        "type": "control_response",
-        "response": {
-            "subtype": "success",
-            "request_id": request_id,
-            "response": {
-                "behavior": behavior,
-                "updatedInput": updated_input,
-            },
-        },
-    })
-    .to_string()
-}
-
-/// The answer to our own `initialize`/`set_model`/... request: a success the binary accepts.
-pub fn control_response_success(request_id: &str) -> String {
-    json!({
-        "type": "control_response",
-        "response": { "subtype": "success", "request_id": request_id, "response": {} },
-    })
-    .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn an_init_line_reads_its_billing_fields() {
         let line = Line::parse(
-            r#"{"type":"system","subtype":"init","session_id":"s1","cwd":"/w","model":"sonnet","permissionMode":"plan","apiKeySource":"none","capabilities":["fs"],"slash_commands":[{"name":"/model","description":"pick"}],"version":"2.1.326"}"#,
+            r#"{"type":"system","subtype":"init","session_id":"s1","cwd":"/w","model":"sonnet","permissionMode":"plan","apiKeySource":"none","version":"2.1.326"}"#,
         )
         .unwrap();
         let Line::Init(init) = line else {
@@ -654,37 +551,56 @@ mod tests {
         };
         assert_eq!(init.session_id.as_deref(), Some("s1"));
         assert_eq!(init.api_key_source.as_deref(), Some("none"));
-        assert_eq!(init.capabilities, vec!["fs"]);
-        assert_eq!(init.slash_commands[0].name, "/model");
         assert_eq!(init.version.as_deref(), Some("2.1.326"));
     }
 
+    // #682: a self-started turn's origin is an object, and a person's turn has none at all.
     #[test]
-    fn a_result_line_reads_its_origin_and_cost() {
+    fn a_result_line_reads_its_origin_object_and_cost() {
         let line = Line::parse(
-            r#"{"type":"result","subtype":"success","is_error":false,"result":"hi","total_cost_usd":0.012,"origin":"task_notification","usage":{"input_tokens":10,"output_tokens":5},"duration_ms":1200,"num_turns":1}"#,
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"hi","total_cost_usd":0.012,"origin":{"kind":"task-notification","producer":"session-task","runId":"0mwyfgylr"},"usage":{"input_tokens":10,"output_tokens":5},"duration_ms":1200,"num_turns":1}"#,
         )
         .unwrap();
         let Line::Result(result) = line else {
             panic!("wanted result, got {line:?}")
         };
-        assert_eq!(result.origin.as_deref(), Some("task_notification"));
+        assert_eq!(result.origin.as_ref().unwrap()["kind"], "task-notification");
         assert!((result.total_cost_usd - 0.012).abs() < 1e-9);
         assert_eq!(result.usage.input_tokens, 10);
         assert_eq!(result.result.as_deref(), Some("hi"));
+
+        let own = Line::parse(r#"{"type":"result","subtype":"success","is_error":false}"#).unwrap();
+        let Line::Result(own) = own else {
+            panic!("wanted result, got {own:?}")
+        };
+        assert!(own.origin.is_none());
     }
 
+    // The binary's own schema (2.1.326): the event wraps `rate_limit_info`, the overage flag is
+    // camelCase inside it and each window sits under `unifiedWindows` with epoch-second resets.
     #[test]
-    fn a_rate_limit_event_reads_its_overage_flag() {
+    fn a_rate_limit_event_reads_its_overage_flag_and_windows() {
         let line = Line::parse(
-            r#"{"type":"rate_limit_event","rate_limit_event":{"is_using_overage":true,"overage_status":"active","five_hour":{"utilization":1.0,"resets_at":"2026-01-01T00:00:00Z"}}}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1795800000,"rateLimitType":"five_hour","utilization":1.02,"unifiedWindows":{"five_hour":{"utilization":1.02,"resetsAt":1795800000},"seven_day":{"utilization":0.5,"resetsAt":1796000000}},"overageStatus":"allowed","isUsingOverage":true},"uuid":"u1","session_id":"s1"}"#,
         )
         .unwrap();
         let Line::RateLimit(limit) = line else {
             panic!("wanted rate limit, got {line:?}")
         };
         assert!(limit.is_using_overage);
-        assert_eq!(limit.five_hour.unwrap().utilization, 1.0);
+        assert_eq!(limit.overage_status.as_deref(), Some("allowed"));
+        let five = limit.five_hour.unwrap();
+        assert_eq!((five.utilization, five.resets_at), (1.02, Some(1795800000)));
+        assert_eq!(limit.seven_day.unwrap().utilization, 0.5);
+
+        let plain = Line::parse(
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","isUsingOverage":false}}"#,
+        )
+        .unwrap();
+        let Line::RateLimit(plain) = plain else {
+            panic!("wanted rate limit, got {plain:?}")
+        };
+        assert!(!plain.is_using_overage);
     }
 
     #[test]
@@ -752,21 +668,19 @@ mod tests {
     }
 
     #[test]
-    fn a_control_request_and_response_round_trip_their_ids() {
+    fn a_control_request_and_response_read_their_ids() {
         let req = Line::parse(
-            r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"permission_suggestions":[]}}"#,
+            r#"{"type":"control_request","request_id":"r1","request":{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"ls"},"permission_suggestions":[{"type":"setMode"}]}}"#,
         )
         .unwrap();
         let Line::ControlRequest(req) = req else {
             panic!("wanted control request, got {req:?}")
         };
         assert_eq!(req.request_id, "r1");
-        assert_eq!(req.tool_name.as_deref(), Some("Bash"));
-
-        let reply = control_response("r1", "allow", json!({"command": "ls"}));
-        let parsed: Value = serde_json::from_str(&reply).unwrap();
-        assert_eq!(parsed["response"]["request_id"], "r1");
-        assert_eq!(parsed["response"]["response"]["behavior"], "allow");
+        assert_eq!(req.subtype, "can_use_tool");
+        assert_eq!(req.tool_name(), Some("Bash"));
+        assert_eq!(req.input(), json!({"command": "ls"}));
+        assert_eq!(req.permission_suggestions().len(), 1);
 
         let resp = Line::parse(
             r#"{"type":"control_response","response":{"subtype":"success","request_id":"r1","response":{"subscriptionType":"Claude Max"}}}"#,

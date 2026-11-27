@@ -44,6 +44,14 @@ impl App {
             self.host_key(key);
             return;
         }
+        if self.new_claude.is_some() && !self.manage.active() {
+            self.new_claude_key(key);
+            return;
+        }
+        if self.sheet.is_some() && !self.manage.active() {
+            self.sheet_key(key);
+            return;
+        }
         if let Some(invite) = self.invite.as_mut() {
             match invite.key(key) {
                 crate::invite::Done::Closed => self.invite = None,
@@ -206,6 +214,9 @@ impl App {
             self.teardown();
             return true;
         }
+        if self.composer.answering(&pane).is_none() && self.declared_key(&pane, key) {
+            return true;
+        }
         let role = self.client.state().role;
         if key.modifiers == crossterm::event::KeyModifiers::ALT
             && let crossterm::event::KeyCode::Char(c) = key.code
@@ -252,7 +263,10 @@ impl App {
         }
         match self.composer.key(&pane, key) {
             crate::convo::Typed::Ignored => false,
-            crate::convo::Typed::Changed => true,
+            crate::convo::Typed::Changed => {
+                self.suggest(&pane);
+                true
+            }
             crate::convo::Typed::Send(text) => {
                 self.reply(&pane, &text);
                 true
@@ -264,6 +278,19 @@ impl App {
                 {
                     self.note("not delivered — the socket is down");
                 }
+                true
+            }
+            crate::convo::Typed::Filled(answering, values) => {
+                if !self
+                    .client
+                    .answer_form(&pane, &answering.key, answering.id.as_deref(), values)
+                {
+                    self.note("not delivered — the socket is down");
+                }
+                true
+            }
+            crate::convo::Typed::Refused(why) => {
+                self.note(why);
                 true
             }
         }
@@ -279,7 +306,9 @@ impl App {
         let Some(option) = pending.options.iter().find(|o| o.key == key) else {
             return;
         };
-        if !option.text {
+        // A form's `1` is its submit, sent with the values of its fields.
+        let form = (pending.form() && key == "1").then(|| crate::convo::Form::new(pending.fields.clone()));
+        if !option.text && form.is_none() {
             self.client.answer(pane, key, id.as_deref(), None);
             return;
         }
@@ -292,6 +321,7 @@ impl App {
             label: option.label.clone(),
             id,
             multi: pending.multi,
+            form,
         };
         self.composer.answer_with(pane, answering);
     }
@@ -335,6 +365,9 @@ impl App {
     fn reply(&mut self, pane: &str, text: &str) {
         if !self.writes() {
             self.note("this device is read-only");
+            return;
+        }
+        if self.say_queued(pane, text) {
             return;
         }
         let sent = match text.contains('\n') {
@@ -559,6 +592,14 @@ impl App {
     }
 
     fn send_manage_claiming(&mut self, op: serde_json::Value, claim: Option<Claim>) {
+        self.spawn_manage(op, claim, None);
+    }
+
+    pub(super) fn send_manage_about(&mut self, op: serde_json::Value, about: String) {
+        self.spawn_manage(op, None, Some(about));
+    }
+
+    fn spawn_manage(&mut self, op: serde_json::Value, claim: Option<Claim>, about: Option<String>) {
         let client = self.client.clone();
         let acked = self.acked.clone();
         let name = op["op"].as_str().unwrap_or_default().to_string();
@@ -579,14 +620,14 @@ impl App {
                     ..Managed::default()
                 },
             };
-            let _ = acked.send(Acked { ack, claim });
+            let _ = acked.send(Acked { ack, claim, about });
         });
     }
 
     /// #241 sanctions this: a session ack is a promise the host already agrees, and the kinds and
     /// sessions a menu draws come from `caps` alone — so an op that changed them asks again.
     pub(super) fn settle_manage(&mut self) {
-        while let Ok(Acked { ack, claim }) = self.acks.try_recv() {
+        while let Ok(Acked { ack, claim, about }) = self.acks.try_recv() {
             let refresh = ack.ok && ack.op.starts_with("session.");
             // **And it stops there.** The manage panel reports ops the operator typed; the
             // standing hold is not one, and putting its ack on the panel's strip covered the
@@ -596,7 +637,7 @@ impl App {
                 self.claim_answered(claim, ack.ok);
                 continue;
             }
-            if self.docker_ack(&ack) {
+            if self.docker_ack(&ack) || self.headless_ack(&ack, about) {
                 continue;
             }
             self.manage.observe(&Event::Managed(ack));

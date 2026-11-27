@@ -268,3 +268,120 @@ async fn a_long_plan_is_one_line_in_the_strip_and_opens_whole_above_it() {
     let frames = conn.heard().await;
     assert!(answers(&frames).is_empty(), "{frames:?}");
 }
+
+fn form() -> Value {
+    json!({
+        "t": "pending", "pane": PANE, "question": "Pick a colour", "header": "probe",
+        "source": "transcript", "id": "form1", "kind": "form",
+        "options": [{ "key": "1", "label": "Submit" }, { "key": "3", "label": "Decline" }],
+        "fields": [
+            { "name": "colour", "title": "Colour", "type": "string", "required": true, "choices": ["red", "teal"] },
+            { "name": "count", "type": "integer", "detail": "how many" },
+            { "name": "loud", "type": "boolean" }
+        ]
+    })
+}
+
+fn erase(app: &mut App, n: usize) {
+    (0..n).for_each(|_| hit(app, KeyCode::Backspace));
+}
+
+#[tokio::test]
+async fn a_form_is_filled_one_field_at_a_time_and_sent_as_its_values() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    let mut app = on_a_blocked_claude(&mut conn, &mut events, &client).await;
+    blocked_on(&mut conn, &mut app, &mut events, form()).await;
+
+    let screen = painted(&mut app, 110, 24);
+    assert!(
+        screen.contains("Colour (colour) · string · required"),
+        "the fields are drawn:\n{screen}"
+    );
+
+    press(&mut app, '1');
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("Colour · 1 of 3"), "{screen}");
+    hit(&mut app, KeyCode::Enter);
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("Colour is required"), "{screen}");
+    typed(&mut app, "blue");
+    hit(&mut app, KeyCode::Enter);
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("one of red, teal"), "{screen}");
+    erase(&mut app, 4);
+    typed(&mut app, "teal");
+    hit(&mut app, KeyCode::Enter);
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("count · 2 of 3"), "{screen}");
+    conn.send(form());
+    pump(&mut app, &mut events, |e| matches!(e, Event::Pending(_))).await;
+    let screen = painted(&mut app, 110, 24);
+    assert!(
+        screen.contains("count · 2 of 3"),
+        "the same form published again leaves it half filled:\n{screen}"
+    );
+    typed(&mut app, "x");
+    hit(&mut app, KeyCode::Enter);
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("count is a whole number"), "{screen}");
+    erase(&mut app, 1);
+    typed(&mut app, "3");
+    hit(&mut app, KeyCode::Enter);
+    assert!(
+        answers(&conn.heard().await).is_empty(),
+        "nothing is sent before the last field"
+    );
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("loud · 3 of 3"), "{screen}");
+    hit(&mut app, KeyCode::Enter);
+    assert_eq!(
+        answers(&conn.heard().await),
+        [&json!({
+            "t": "answer", "pane": PANE, "key": "1", "id": "form1",
+            "reply": { "form": { "values": { "colour": "teal", "count": 3 } } }
+        })],
+        "a field left empty is left out"
+    );
+
+    press(&mut app, '1');
+    hit(&mut app, KeyCode::Esc);
+    press(&mut app, '3');
+    assert_eq!(
+        answers(&conn.heard().await),
+        [&json!({ "t": "answer", "pane": PANE, "key": "3", "id": "form1" })],
+        "esc gives the keys back, and declining is a key"
+    );
+}
+
+#[tokio::test]
+async fn a_form_fills_a_yes_or_no_and_a_number_with_their_own_types() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let mut conn = fake.accept().await;
+    let mut app = on_a_blocked_claude(&mut conn, &mut events, &client).await;
+    let mut asked = form();
+    asked["fields"] = json!([
+        { "name": "loud", "type": "boolean", "required": true },
+        { "name": "ratio", "type": "number" }
+    ]);
+    blocked_on(&mut conn, &mut app, &mut events, asked).await;
+
+    press(&mut app, '1');
+    typed(&mut app, "maybe");
+    hit(&mut app, KeyCode::Enter);
+    let screen = painted(&mut app, 110, 24);
+    assert!(screen.contains("loud is yes or no"), "{screen}");
+    erase(&mut app, 5);
+    typed(&mut app, "y");
+    hit(&mut app, KeyCode::Enter);
+    typed(&mut app, "0.5");
+    hit(&mut app, KeyCode::Enter);
+    assert_eq!(
+        answers(&conn.heard().await)[0]["reply"],
+        json!({ "form": { "values": { "loud": true, "ratio": 0.5 } } })
+    );
+}

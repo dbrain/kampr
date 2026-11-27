@@ -68,6 +68,8 @@ fn a_pane_entry_carries_the_node_qualified_id() {
             reachable: None,
             native: None,
             muffit: None,
+            claude: None,
+            resume: None,
             herdr: None,
             rtt_ms: Some(0.4),
             herdr_version: Some("0.9.0".into()),
@@ -330,6 +332,8 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
         multi: false,
         context: None,
         id: None,
+        kind: None,
+        fields: vec![],
     })
     .unwrap();
     assert_eq!(asked["t"], "pending");
@@ -345,7 +349,11 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
     );
     let frame = asked.as_object().unwrap();
     assert!(
-        !frame.contains_key("header") && !frame.contains_key("multi") && !frame.contains_key("context"),
+        !frame.contains_key("header")
+            && !frame.contains_key("multi")
+            && !frame.contains_key("context")
+            && !frame.contains_key("kind")
+            && !frame.contains_key("fields"),
         "{asked}"
     );
 
@@ -358,6 +366,8 @@ fn pending_carries_its_source_and_clears_with_a_null_question() {
         multi: false,
         context: None,
         id: None,
+        kind: None,
+        fields: vec![],
     })
     .unwrap();
     assert!(cleared["question"].is_null());
@@ -377,6 +387,8 @@ fn a_node_names_the_release_that_supersedes_it_and_says_nothing_otherwise() {
         reachable: None,
         native: None,
         muffit: None,
+        claude: None,
+        resume: None,
         herdr: None,
         rtt_ms: None,
         herdr_version: None,
@@ -527,6 +539,8 @@ fn a_node_serves_while_herdr_or_its_native_or_muffit_sessions_can() {
         reachable,
         native,
         muffit,
+        claude: None,
+        resume: None,
         herdr: None,
         rtt_ms: None,
         herdr_version: None,

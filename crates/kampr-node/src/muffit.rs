@@ -1,104 +1,74 @@
 //! What a node does with a muffit pane (docs/18): no terminal pump, a conversation through the
-//! registry, and questions and answers over muffit's REST rather than keystrokes.
+//! registry, and answers through it (or muffit's REST) rather than keystrokes.
+
+pub mod standing;
 
 use crate::conversations::Conversations;
 use crate::wire::Wire;
 use kampr_core::conversation::composer::Line;
 use kampr_core::conversation::{Command, Image, Reply, When};
 use kampr_core::provider::Input;
-use kampr_core::wire::{ErrorCode, PendingOption, PendingSource, ServerMsg};
-use kampr_muffit::wire::PermissionPrompt;
-use kampr_muffit::{Answer, MuffitProvider};
+use kampr_core::wire::ErrorCode;
+use kampr_muffit::{MuffitProvider, answers};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-const ANSWERS: [(&str, &str, Answer); 3] = [
-    ("1", "Allow", Answer::Allow),
-    ("2", "Always allow", Answer::Always),
-    ("3", "Deny", Answer::Deny),
-];
-
-pub fn answer_for(key: &str) -> Option<Answer> {
-    ANSWERS.iter().find(|(k, _, _)| *k == key).map(|(_, _, a)| *a)
+/// What the session waits on, from the session stream the node already holds: no watcher needed.
+pub fn standing(link: &crate::sessions::MuffitLink) -> Vec<kampr_core::conversation::Ask> {
+    link.provider
+        .info(&link.session)
+        .map(|info| kampr_muffit::asks_of(info.permission.as_ref(), info.question.as_ref()))
+        .unwrap_or_default()
 }
 
-/// The pane's answer key for a seam reply: muffit's prompt is allow, always, deny.
-pub fn key_of(reply: &Reply) -> Option<&'static str> {
-    match reply {
-        Reply::Allow { remember: true, .. } => Some("2"),
-        Reply::Allow { .. } => Some("1"),
-        Reply::Deny { .. } => Some("3"),
-        _ => None,
-    }
-}
-
-pub fn pending(pane: &str, prompt: Option<&PermissionPrompt>) -> ServerMsg {
-    ServerMsg::Pending {
-        pane: pane.to_string(),
-        question: prompt.map(|p| p.action.clone()),
-        header: prompt.map(|p| p.tool.clone()),
-        multi: false,
-        context: None,
-        id: prompt.map(|p| p.id.to_string()),
-        options: match prompt {
-            Some(_) => ANSWERS
-                .iter()
-                .map(|(key, label, _)| PendingOption {
-                    key: (*key).into(),
-                    label: (*label).into(),
-                    detail: None,
-                    chosen: false,
-                    text: false,
-                })
-                .collect(),
-            None => Vec::new(),
-        },
-        source: PendingSource::Transcript,
-    }
-}
-
-/// The prompt a muffit session is waiting on, off the session stream the node already holds.
-pub fn prompt(provider: &MuffitProvider, session: &str) -> Option<PermissionPrompt> {
-    provider.info(session)?.permission
-}
-
-pub enum AnswerResult {
-    Taken,
-    Cleared,
-    BadKey,
-    Refused(String),
-}
-
-/// Answers the session's waiting prompt with the key, through the daemon's REST.
-pub async fn answer(provider: &MuffitProvider, session: &str, key: &str) -> AnswerResult {
-    let Some(answer) = answer_for(key) else {
-        return AnswerResult::BadKey;
-    };
-    let Some(prompt) = prompt(provider, session) else {
-        return AnswerResult::Cleared;
-    };
-    match provider.client().answer(session, prompt.id, answer).await {
-        Ok(kampr_muffit::Answered::Taken) => AnswerResult::Taken,
-        Ok(kampr_muffit::Answered::NoLongerWaiting) => AnswerResult::Cleared,
-        Err(e) => AnswerResult::Refused(format!("{e:#}")),
-    }
-}
-
-pub fn answer_result(wire: &Wire, pane: &str, result: AnswerResult) {
-    match result {
-        AnswerResult::Taken => {}
-        AnswerResult::Cleared => {
-            wire.send(&pending(pane, None));
+/// An answer on a muffit pane: through the conversation the socket has open, else straight to
+/// the daemon's REST, so a prompt answered from the herd without opening the pane still lands.
+// too_many_arguments: the answer frame's fields and where it goes, one flat hand-off as `input` is
+#[allow(clippy::too_many_arguments)]
+pub async fn answer(
+    link: &crate::sessions::MuffitLink,
+    conversations: &Conversations,
+    wire: &Wire,
+    pane: &str,
+    key: &str,
+    id: Option<&str>,
+    text: Option<&str>,
+    reply: Option<&Reply>,
+) {
+    let (permission, question) = link
+        .provider
+        .info(&link.session)
+        .map(|info| (info.permission, info.question))
+        .unwrap_or_default();
+    let (ask, reply) = match answers::reply_of(permission.as_ref(), question.as_ref(), key, id, text, reply) {
+        Ok(named) => named,
+        Err(why) => {
+            wire.error(ErrorCode::BadRequest, why, Some(pane));
+            return;
         }
-        AnswerResult::BadKey => {
-            wire.error(
-                ErrorCode::BadRequest,
-                "a muffit prompt is answered 1, 2 or 3",
-                Some(pane),
-            );
+    };
+    let command = Command::Answer {
+        ask: ask.clone(),
+        reply: reply.clone(),
+    };
+    if conversations.command(pane, command).is_ok() {
+        return;
+    }
+    let posted = answers::post(
+        link.provider.client(),
+        &link.session,
+        question.as_ref(),
+        &ask,
+        &reply,
+    )
+    .await;
+    match posted {
+        answers::Outcome::Taken => {}
+        answers::Outcome::Gone => {
+            wire.send(&crate::conversations::pending(pane, &[]));
         }
-        AnswerResult::Refused(why) => {
+        answers::Outcome::Refused(why) => {
             wire.error(ErrorCode::SessionUnavailable, &why, Some(pane));
         }
     }

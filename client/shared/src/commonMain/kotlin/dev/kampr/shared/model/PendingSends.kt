@@ -46,8 +46,8 @@ class PendingSends {
 
     val all: List<PendingSend> get() = sends
 
-    fun sent(text: String, turns: List<Turn>, queued: List<Queued>, delivered: Boolean, at: Double): PendingSend {
-        val send = fresh(Random.nextLong().toULong().toString(36), text, turns, queued, delivered, at)
+    fun sent(text: String, turns: List<Turn>, queued: List<Queued>, delivered: Boolean, at: Double, id: String = newSendId()): PendingSend {
+        val send = fresh(id, text, turns, queued, delivered, at)
         sends += send
         return send
     }
@@ -119,6 +119,9 @@ class PendingSends {
         )
     }
 }
+
+// Also the message's id on the wire where the source can take one back (`input.unqueue`).
+fun newSendId(): String = Random.nextLong().toULong().toString(36)
 
 // After the last reply it knew of, so a page of older turns paged in above is not the answer.
 private fun answered(send: PendingSend, turns: List<Turn>): Boolean {

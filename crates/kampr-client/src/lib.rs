@@ -16,6 +16,7 @@
 //! authoritative.
 
 pub mod client;
+pub mod convo;
 pub mod dial;
 pub mod fleet;
 pub mod frames;
@@ -26,10 +27,11 @@ pub mod profile;
 pub mod resolve;
 
 pub use client::{Client, ManageError, Policy, State};
+pub use convo::ConvoUpdate;
 pub use dial::{DialError, ws_url};
 pub use frames::{
-    Caps, ClaudeHooks, ConvoPage, Event, Failure, Hello, Managed, NodeCaps, Pending, PendingOption, Role,
-    Security, SessionCaps,
+    Caps, ClaudeHooks, ConvoPage, Event, Failure, Hello, Managed, NodeCaps, Pending, PendingField,
+    PendingOption, Role, Security, SessionCaps,
 };
 pub use herd::{Gone, Herd, NodeGroup};
 pub use pair::{Minted, PairError, Paired, mint, pair};

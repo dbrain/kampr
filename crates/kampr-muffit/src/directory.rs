@@ -1,11 +1,12 @@
 use crate::client::{self, Client};
+use crate::reach::{Reach, Refusals};
 use crate::wire::{ServerFrame, SessionInfo, SessionState};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 const FIRST_RETRY: Duration = Duration::from_millis(250);
 const LAST_RETRY: Duration = Duration::from_secs(5);
@@ -103,9 +104,11 @@ impl Drop for Directory {
 async fn stream(client: Client, directory: Weak<Directory>) {
     let mut retry = FIRST_RETRY;
     let mut was_up = false;
+    let mut refusals = Refusals::default();
     loop {
         match client.socket("/sessions/stream", None, &[]).await {
             Ok(mut socket) => {
+                refusals.note(&Reach::Answers);
                 if !was_up {
                     info!("following the muffit daemon's sessions");
                     was_up = true;
@@ -126,6 +129,15 @@ async fn stream(client: Client, directory: Weak<Directory>) {
                 debug!("the muffit session stream closed");
             }
             Err(e) => {
+                if let Some(refusal) = refusals.note(&Reach::from_error(&e)) {
+                    warn!(
+                        url = %client.base(),
+                        status = refusal.status,
+                        why = %refusal.why,
+                        "the muffit daemon refused this node's token, so no muffit session is listed; \
+                         another daemon may hold this url (set [muffit] url, or kampr doctor)"
+                    );
+                }
                 if was_up {
                     info!(error = %format!("{e:#}"), "the muffit daemon went away");
                     was_up = false;

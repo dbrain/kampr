@@ -1050,6 +1050,89 @@ async fn the_wheel_moves_the_ring_under_the_pointer_and_the_sidebar_under_it() {
     );
 }
 
+/// **A ring under a full-screen program is the shell session from before it**, which the node drops
+/// only for a program it knows holds the alternate screen. Where it has not, the wheel still goes to
+/// the program by the web client's rule (`paneWheelBeatsTheRing`): whenever the node reported its
+/// modes, and by name only for muffit's TUI, which takes the screen before it draws anything. A
+/// Claude with no modes may be the classic renderer, whose ring is the conversation (#588), and a
+/// pane whose modes ask for no wheel keeps it for the ring.
+#[tokio::test]
+async fn the_wheel_over_a_program_that_holds_the_screen_beats_the_ring_under_it() {
+    let tui = json!({ "mouse": "any", "mouse_sgr": true, "alt_scroll": true, "alt_screen": true });
+    let less = json!({ "mouse": "none", "alt_scroll": true, "app_cursor": true, "alt_screen": true });
+    let shell = json!({ "mouse": "none", "alt_scroll": true });
+    type Case<'a> = (Option<&'a str>, &'a str, Option<Value>, Option<&'a str>);
+    let cases: [Case; 7] = [
+        (Some("muffit"), "muffit", None, Some("\u{1b}[<64;")),
+        (None, "muffit-tui", None, Some("\u{1b}[<64;")),
+        (None, "muffit-tui", Some(tui), Some("\u{1b}[<64;")),
+        (None, "less", Some(less), Some("\u{1b}OA\u{1b}OA\u{1b}OA")),
+        (None, "cat", Some(shell), None),
+        (Some("claude"), "claude", None, None),
+        (None, "less", None, None),
+    ];
+    for (agent, cmd, modes, sent) in cases {
+        let mut fake = Fake::start().await;
+        let client = Arc::new(fake.client());
+        let mut events = client.events();
+        let mut conn = fake.accept().await;
+        let mut entry = pane("01JNODE/w1:p1", "t1");
+        entry["agent"] = json!(agent);
+        entry["cmd"] = json!(cmd);
+        if let Some(modes) = &modes {
+            entry["modes"] = modes.clone();
+        }
+        conn.greet(json!([entry]), json!({}));
+        until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+        let mut app = App::new(client.clone(), Options::default(), Images::default());
+        app.adopt_prefs();
+        app.refocus();
+        conn.send(json!({
+            "t": "grid.reset", "pane": "01JNODE/w1:p1", "cols": 12, "rows": 4,
+            "rows_data": [{ "row": 0, "runs": [{ "s": 0, "x": "live" }] }],
+            "cursor": { "col": 0, "row": 0, "visible": true }, "links": []
+        }));
+        until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+        conn.send(json!({
+            "t": "scrollback", "pane": "01JNODE/w1:p1", "from_top": 0, "total_rows": 40,
+            "complete": true, "capped": false,
+            "rows": (0..40).map(|n| json!({ "row": n, "runs": [{ "s": 0, "x": format!("old {n}") }] }))
+                .collect::<Vec<_>>()
+        }));
+        let ring = until(&mut events, |e| match e {
+            Event::Scrollback { pane, doc } => Some(Event::Scrollback { pane, doc }),
+            _ => None,
+        })
+        .await;
+        app.absorb(&ring);
+        painted(&mut app, 100, 20);
+        let _ = conn.heard().await;
+
+        let grid = app.layout.panes[0].placement.expect("a placed grid").grid;
+        wheel(&mut app, &client, true, grid.x + 2, grid.y + 1);
+        let screen = painted(&mut app, 100, 20);
+        let typed = inputs(&conn.heard().await)
+            .iter()
+            .map(|v| v["text"].as_str().unwrap_or_default().to_string())
+            .collect::<Vec<_>>();
+        let case = format!("{agent:?} running {cmd:?} with modes {modes:?}");
+        match sent {
+            Some(lead) => {
+                assert_eq!(typed.len(), 1, "{case}: {typed:?}");
+                assert!(typed[0].contains(lead), "{case}: sent {typed:?}");
+                assert!(!screen.contains("back"), "{case}: the ring moved too:\n{screen}");
+            }
+            None => {
+                assert!(typed.is_empty(), "{case}: the program heard {typed:?}");
+                assert!(
+                    screen.contains("\u{2191} 3 back"),
+                    "{case}: the ring stayed put:\n{screen}"
+                );
+            }
+        }
+    }
+}
+
 /// The chrome a right-click has to be able to name, laid out so nothing overlaps: a tab strip, a
 /// sidebar with one row that names a pane, and two panes side by side.
 fn chrome() -> Layout {
@@ -1377,19 +1460,96 @@ async fn a_drag_that_leaves_its_pane_takes_nothing_from_whatever_it_landed_on() 
 /// (#388), everything else alternate
 /// scroll in the *application* cursor form (#390), and a pane whose foreground job nobody named is
 /// the shell's line editor, where a cursor key recalls history — so it gets nothing (#391).
+///
+/// A pane whose node reports its modes (docs/26) is not asked by name: the mouse mode it set is a
+/// report, the alternate screen with alternate scroll is cursor keys, and the rest is nothing.
 #[tokio::test]
 async fn the_wheel_over_a_pane_with_no_ring_scrolls_the_program_in_it() {
-    type Case<'a> = (Option<&'a str>, Option<&'a str>, bool, Option<&'a str>);
-    let cases: [Case; 7] = [
-        (Some("muffit"), Some("muffit"), true, Some("\u{1b}[<64;")),
-        (Some("muffit"), Some("muffit"), false, Some("\u{1b}[<65;")),
-        (Some("claude"), Some("claude"), true, Some("\u{1b}[<64;")),
-        (Some("claude"), Some("claude"), false, Some("\u{1b}[<65;")),
-        (None, Some("less"), true, Some("\u{1b}OA\u{1b}OA\u{1b}OA")),
-        (None, Some("less"), false, Some("\u{1b}OB\u{1b}OB\u{1b}OB")),
-        (Some("claude"), None, true, None),
+    type Case<'a> = (
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<Value>,
+        bool,
+        Option<&'a str>,
+    );
+    let claude_modes = json!({ "mouse": "press", "mouse_sgr": true, "alt_scroll": true, "alt_screen": true });
+    let less_modes = json!({ "mouse": "none", "alt_scroll": true, "app_cursor": true, "alt_screen": true });
+    let shell_modes = json!({ "mouse": "none", "alt_scroll": true });
+    let cases: [Case; 18] = [
+        (Some("muffit"), Some("muffit"), None, true, Some("\u{1b}[<64;")),
+        (
+            None,
+            Some("/usr/local/bin/muffit-tui"),
+            None,
+            true,
+            Some("\u{1b}[<64;"),
+        ),
+        (Some("muffit"), Some("muffit"), None, false, Some("\u{1b}[<65;")),
+        (Some("claude"), Some("claude"), None, true, Some("\u{1b}[<64;")),
+        (Some("claude"), Some("claude"), None, false, Some("\u{1b}[<65;")),
+        (None, Some("less"), None, true, Some("\u{1b}OA\u{1b}OA\u{1b}OA")),
+        (None, Some("less"), None, false, Some("\u{1b}OB\u{1b}OB\u{1b}OB")),
+        (Some("claude"), None, None, true, None),
+        (
+            Some("codex"),
+            Some("codex"),
+            Some(claude_modes.clone()),
+            true,
+            Some("\u{1b}[<64;"),
+        ),
+        (
+            None,
+            Some("foo"),
+            Some(claude_modes.clone()),
+            false,
+            Some("\u{1b}[<65;"),
+        ),
+        (
+            Some("claude"),
+            None,
+            Some(claude_modes.clone()),
+            true,
+            Some("\u{1b}[<64;"),
+        ),
+        (
+            None,
+            Some("less"),
+            Some(less_modes.clone()),
+            true,
+            Some("\u{1b}OA\u{1b}OA\u{1b}OA"),
+        ),
+        (
+            Some("claude"),
+            Some("claude"),
+            Some(less_modes.clone()),
+            false,
+            Some("\u{1b}OB\u{1b}OB\u{1b}OB"),
+        ),
+        (
+            Some("claude"),
+            Some("claude"),
+            Some(shell_modes.clone()),
+            true,
+            None,
+        ),
+        (Some("muffit"), Some("muffit"), Some(shell_modes), false, None),
+        (
+            None,
+            Some("less"),
+            Some(json!({ "alt_screen": true })),
+            true,
+            None,
+        ),
+        (
+            Some("claude"),
+            Some("claude"),
+            Some(json!({ "mouse": "press", "alt_screen": true })),
+            true,
+            None,
+        ),
+        (Some("claude"), Some("claude"), Some(json!({})), true, None),
     ];
-    for (agent, cmd, up, sent) in cases {
+    for (agent, cmd, modes, up, sent) in cases {
         let mut fake = Fake::start().await;
         let client = Arc::new(fake.client());
         let mut events = client.events();
@@ -1397,6 +1557,9 @@ async fn the_wheel_over_a_pane_with_no_ring_scrolls_the_program_in_it() {
         let mut entry = pane("01JNODE/w1:p1", "t1");
         entry["agent"] = json!(agent);
         entry["cmd"] = json!(cmd);
+        if let Some(modes) = &modes {
+            entry["modes"] = modes.clone();
+        }
         conn.greet(json!([entry]), json!({}));
         until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
         let mut app = App::new(client.clone(), Options::default(), Images::default());
@@ -1415,7 +1578,7 @@ async fn the_wheel_over_a_pane_with_no_ring_scrolls_the_program_in_it() {
         wheel(&mut app, &client, up, grid.x + 2, grid.y + 1);
         let frames = conn.heard().await;
         let typed = inputs(&frames);
-        let case = format!("{agent:?} running {cmd:?}, up {up}");
+        let case = format!("{agent:?} running {cmd:?} with modes {modes:?}, up {up}");
         match sent {
             None => assert!(typed.is_empty(), "{case}: a shell's prompt heard {typed:?}"),
             Some(lead) => {
@@ -1432,5 +1595,50 @@ async fn the_wheel_over_a_pane_with_no_ring_scrolls_the_program_in_it() {
                 }
             }
         }
+    }
+}
+
+/// docs/26 for a click: an armed pane is the operator's word only where the node could not say what
+/// the program asked for. Where it did, a click is a report only under an SGR mouse mode, because a
+/// shell that asked for no mouse reads `ESC [ < 0 ; 5 ; 4 M` as typed text.
+#[tokio::test]
+async fn an_armed_pane_hears_a_click_only_where_its_modes_ask_for_one() {
+    let cases: [(Option<Value>, bool); 4] = [
+        (None, true),
+        (Some(json!({ "mouse": "press", "mouse_sgr": true })), true),
+        (Some(json!({ "mouse": "none", "alt_scroll": true })), false),
+        (Some(json!({ "mouse": "press" })), false),
+    ];
+    for (modes, heard) in cases {
+        let mut fake = Fake::start().await;
+        let client = Arc::new(fake.client());
+        let mut events = client.events();
+        let mut conn = fake.accept().await;
+        let mut entry = pane("01JNODE/w1:p1", "t1");
+        if let Some(modes) = &modes {
+            entry["modes"] = modes.clone();
+        }
+        conn.greet(json!([entry]), json!({ "01JNODE/w1:p1": { "mouse": true } }));
+        until(&mut events, |e| matches!(e, Event::Prefs { .. }).then_some(())).await;
+        let mut app = App::new(client.clone(), Options::default(), Images::default());
+        app.adopt_prefs();
+        app.refocus();
+        conn.send(json!({
+            "t": "grid.reset", "pane": "01JNODE/w1:p1", "cols": 12, "rows": 4,
+            "rows_data": [{ "row": 0, "runs": [{ "s": 0, "x": "hello" }] }],
+            "cursor": { "col": 0, "row": 0, "visible": true }, "links": []
+        }));
+        until(&mut events, |e| matches!(e, Event::Grid { .. }).then_some(())).await;
+        painted(&mut app, 100, 20);
+        let _ = conn.heard().await;
+
+        let grid = app.layout.panes[0].placement.expect("a live grid").grid;
+        for event in [down(grid.x + 4, grid.y + 3), down(grid.x + 4, grid.y + 3)] {
+            let role = client.state().role;
+            let click = app.mouse.hit(event, &app.layout, role);
+            app.clicked(click);
+        }
+        let frames = conn.heard().await;
+        assert_eq!(!inputs(&frames).is_empty(), heard, "modes {modes:?}: {frames:?}");
     }
 }

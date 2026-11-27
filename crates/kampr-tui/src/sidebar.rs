@@ -95,6 +95,8 @@ pub enum Row {
         place: Option<String>,
         /// A shell into the host's containers, in the terminals list: it carries the ▣.
         docker: bool,
+        /// OSC 7501's failure or progress (docs/24).
+        program: Option<String>,
     },
     Question(String),
     Stopped {
@@ -502,6 +504,7 @@ fn push_pane(
         pane: pane.id.clone(),
         place,
         docker,
+        program: crate::program::mark(pane),
     });
     if let Some(question) = questions(&pane.id) {
         rows.push(Row::Question(question));
@@ -698,6 +701,7 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
             status,
             place,
             docker,
+            program,
             ..
         } => {
             let body = match here {
@@ -710,12 +714,17 @@ fn line<'a>(row: &'a Row, t: &Theme, picked: bool, here: bool, width: u16) -> Li
                 (false, true) => "  ",
                 (false, false) => "    ",
             };
-            let mut spans = vec![
-                Span::styled(lead, base.fg(t.accent)),
-                Span::styled(format!("{} ", glyph(*status)), base.fg(t.status(*status))),
-            ];
+            let mark = match program.as_deref() {
+                Some("✗") => Span::styled("✗ ", base.fg(t.blocked).add_modifier(Modifier::BOLD)),
+                _ => Span::styled(format!("{} ", glyph(*status)), base.fg(t.status(*status))),
+            };
+            let named = match program.as_deref().filter(|p| *p != "✗") {
+                Some(progress) => format!("{name} {progress}"),
+                None => name.clone(),
+            };
+            let mut spans = vec![Span::styled(lead, base.fg(t.accent)), mark];
             spans.extend(spread(
-                (name.clone(), body),
+                (named, body),
                 place
                     .as_deref()
                     .map(|p| format!("{} ", clip(p, 9)))
@@ -816,6 +825,7 @@ mod tests {
                     pane: "n/n:01ja".into(),
                     place: None,
                     docker: false,
+                    program: None,
                 },
             ]
         );

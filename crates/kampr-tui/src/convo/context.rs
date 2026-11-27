@@ -36,7 +36,7 @@ impl Convo {
 }
 
 fn reading(pending: &Pending) -> Option<Reading> {
-    let context = pending.context.as_deref().filter(|c| !c.trim().is_empty())?;
+    let context = pending.described()?;
     let head = [pending.header.as_deref(), pending.question.as_deref()]
         .into_iter()
         .flatten()

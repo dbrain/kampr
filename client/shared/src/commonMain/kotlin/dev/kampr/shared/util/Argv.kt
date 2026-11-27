@@ -34,6 +34,43 @@ fun parseArgs(typed: String): List<String> {
     return args
 }
 
+// docs/25 and Rex's resume spec: a stored command is shown exactly as it would run, in the quoting a
+// shell would read back to the same argv, and with nothing left in it that a terminal or a text
+// layout would act on — a control character, a bidi override or a zero-width mark.
+fun displayArgv(argv: List<String>): String = argv.joinToString(" ", transform = ::displayArg)
+
+private const val PLAIN = "_@%+=:,./-"
+
+private fun displayArg(arg: String): String = when {
+    arg.isNotEmpty() && arg.all { it.isAsciiLetterOrDigit() || it in PLAIN } -> arg
+    arg.any(::unseen) -> "$'" + arg.map(::escaped).joinToString("") + "'"
+    else -> "'" + arg.replace("'", "'\\''") + "'"
+}
+
+private fun Char.isAsciiLetterOrDigit(): Boolean = this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
+
+private fun unseen(c: Char): Boolean = c.category in UNSEEN
+
+private val UNSEEN = setOf(
+    CharCategory.CONTROL,
+    CharCategory.FORMAT,
+    CharCategory.LINE_SEPARATOR,
+    CharCategory.PARAGRAPH_SEPARATOR,
+    CharCategory.UNASSIGNED,
+    CharCategory.PRIVATE_USE,
+)
+
+private fun escaped(c: Char): String = when {
+    c == '\n' -> "\\n"
+    c == '\t' -> "\\t"
+    c == '\r' -> "\\r"
+    c == '\\' -> "\\\\"
+    c == '\'' -> "\\'"
+    !unseen(c) -> c.toString()
+    c.code < 0x80 -> "\\x" + c.code.toString(16).padStart(2, '0')
+    else -> "\\u{" + c.code.toString(16) + "}"
+}
+
 fun commandLine(kind: String, args: List<String>): String = (listOf(kind) + args.map { if (it.any(Char::isWhitespace)) "\"$it\"" else it }).joinToString(" ")
 
 // Named, not guessed at: every one of these is a flag some harness ships that removes the

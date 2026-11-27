@@ -146,6 +146,10 @@ data class NodeInfo(
     @Serializable(with = ContainerList::class) val containers: List<ContainerInfo> = emptyList(),
     // The host that adopted this node into one of its containers, stamped by that host.
     val parent: String? = null,
+    // Whether this node starts Claude with no terminal (docs/21). Null is a node too old to.
+    val claude: Boolean? = null,
+    // Whether this node answers `native.resumable` (docs/25). Null is a node too old to.
+    val resume: Boolean? = null,
 ) {
     val herdrOn: Boolean get() = herdr != false
 
@@ -224,7 +228,31 @@ data class PaneInfo(
     val tile: Tile? = null,
     // The name of the container on this pane's node that this pane is a shell into.
     val container: String? = null,
+    // What programs reported over OSC 7501 (docs/24). `programError` is the folded state `error`,
+    // which `agent_status` cannot say; `program` is the record set, absent while the root is all
+    // there is. `programProgress` is the working record the status folds to, the root's included.
+    @SerialName("program_error") val programError: Boolean = false,
+    @SerialName("program_msg") val programMsg: String? = null,
+    val program: List<ProgramRow>? = null,
+    @SerialName("program_progress") val programProgress: Int? = null,
+    // What the pane's program asked of the mouse and the cursor keys (docs/26). Null where the node
+    // cannot know — a herdr pane reports none (#686), and an older node sends none — and a client
+    // then chooses by `agent` and `cmd`, which is permanent rather than a migration aid.
+    val modes: PaneModes? = null,
 )
+
+// `mouse` is `none`, `press` (?1000), `drag` (?1002) or `any` (?1003). `mouseSgr` is ?1006,
+// `altScroll` ?1007, `appCursor` ?1 and `altScreen` ?1049.
+@Serializable
+data class PaneModes(
+    val mouse: String = "none",
+    @SerialName("mouse_sgr") val mouseSgr: Boolean = false,
+    @SerialName("alt_scroll") val altScroll: Boolean = false,
+    @SerialName("app_cursor") val appCursor: Boolean = false,
+    @SerialName("alt_screen") val altScreen: Boolean = false,
+) {
+    val tracksMouse: Boolean get() = mouse != "none"
+}
 
 @Serializable
 data class Tile(val group: String, val path: List<Cut> = emptyList())
@@ -236,6 +264,18 @@ data class Cut(val split: String, val ratio: Int, val second: Boolean = false)
 @Serializable
 data class NativeExit(val code: Int? = null, val signal: Int? = null)
 
+// One OSC 7501 record. The root's `id` is empty and `app` is the one it inherits.
+@Serializable
+data class ProgramRow(
+    val id: String,
+    val state: String,
+    val kind: String? = null,
+    val progress: Int? = null,
+    val app: String? = null,
+    val title: String? = null,
+    val msg: String? = null,
+)
+
 // "This pane can be talked to as a conversation", read off both halves. Both move during a session
 // and in both directions, so it is asked on every composition rather than at open. Every surface
 // that decides whether the conversation exists — the tab, the default view, the reply box, and what
@@ -245,6 +285,12 @@ data class NativeExit(val code: Int? = null, val signal: Int? = null)
 val PaneInfo?.talks: Boolean get() = this != null && (converses || hasConversation || isMuffit)
 
 val PaneInfo.isMuffit: Boolean get() = provider == MUFFIT
+
+// A Claude with no terminal (docs/21): its node names it `c:<keeper id>` and gives no provider.
+val PaneInfo.isHeadlessClaude: Boolean get() = provider == null && id.substringAfter('/').startsWith("c:")
+
+// A Kampr session running Claude, which its node can continue without the terminal.
+val PaneInfo.isTerminalClaude: Boolean get() = provider == "native" && agent == "claude"
 
 const val MUFFIT = "muffit"
 
@@ -342,6 +388,29 @@ data class PendingOption(
     val chosen: Boolean = false,
     val text: Boolean = false,
 )
+
+// One input of a form a source asks to be filled. `type` is the schema's own word: string,
+// number, integer or boolean.
+@Serializable
+data class PendingField(
+    val name: String,
+    val title: String? = null,
+    val detail: String? = null,
+    val type: String = "string",
+    val required: Boolean = false,
+    val choices: List<String> = emptyList(),
+) {
+    val label: String get() = title ?: name
+
+    val described: String get() =
+        listOfNotNull(
+            title?.let { "$it ($name)" } ?: name,
+            type,
+            "required".takeIf { required },
+            choices.takeIf { it.isNotEmpty() }?.joinToString("|"),
+            detail,
+        ).joinToString(" · ")
+}
 
 // The header of something a transcript mentions but never carries: a pasted screenshot is ~730 KB
 // and the socket it would ride on is the one carrying live terminal frames, which it head-of-lines
@@ -470,6 +539,11 @@ val Abilities.canSendNow: Boolean get() = "send_now" in input
 val Abilities.canSlash: Boolean get() = "slash" in input
 val Abilities.canMention: Boolean get() = "mention" in input
 val Abilities.canInterrupt: Boolean get() = "interrupt" in steer
+val Abilities.canUnqueue: Boolean get() = "unqueue" in input
+
+// A source that declares no input of its own is one whose terminal takes the typing, and a file
+// goes there as its path; one that declares input takes a file only where it says `files`.
+val Abilities.canAttach: Boolean get() = input.isEmpty() || "files" in input
 
 object AbilityWords {
     // The facts a pane's header details can draw from. A source that declares none of these has
@@ -801,10 +875,19 @@ sealed interface ServerMsg {
         // The question's own handle, where the node has one: an answer carries it back so a press
         // made on a question that has since been replaced is refused rather than taken.
         val id: String? = null,
+        // permission, question, plan or form, where the node knows. An open string.
+        val kind: String? = null,
+        val fields: List<PendingField> = emptyList(),
     ) : ServerMsg {
         // An MCP server's form: Claude would block its own form if Kampr held it, so the node
         // publishes it with nothing to press.
         val terminalOnly: Boolean get() = source == "hook" && options.isEmpty()
+
+        // A form answered from here: its `1` is sent with the values of its fields.
+        val form: Boolean get() = kind == "form" && fields.isNotEmpty()
+
+        // What it acts on: its context, or a form's fields one per line.
+        val described: String? get() = context ?: fields.takeIf { it.isNotEmpty() }?.joinToString("\n") { it.described }
     }
 
     // The harness took this prompt (Claude's `UserPromptSubmit`, #631), seconds before its record.
@@ -836,6 +919,10 @@ sealed interface ServerMsg {
         val held: Boolean? = null,
         // `docker.detail`'s answer (docs/19).
         val detail: JsonObject? = null,
+        // `claude.resumable`'s answer: the conversations on disk, newest first.
+        val resumable: List<StoredConversation>? = null,
+        // `native.resumable`'s, under the same key: commands a boot left (docs/25).
+        val resumeRecords: List<ResumeRecord>? = null,
     ) : ServerMsg
 
     // Somebody else took a pane this session was holding at a view's size (ADR 0013).
@@ -963,12 +1050,18 @@ sealed interface ClientMsg {
     // never holds it for a harness still booting; a reply leaves it off and is held (#535).
     // `paste` marks a text that is one bracketed paste: the pane's node frames it again for the
     // program there, and a node that predates the mark writes it framed as sent.
+    // `id` is the message's own, minted here so an `input.unqueue` can name it, and `queue` is
+    // the wire's `when`: `next` waits behind the running turn. Both only on a conversation source.
     data class InputText(
         val pane: String,
         val text: String,
         val typed: Boolean = false,
         val paste: Boolean = false,
+        val id: String? = null,
+        val queue: String? = null,
     ) : ClientMsg
+
+    data class InputUnqueue(val pane: String, val id: String) : ClientMsg
 
     data class InputB64(val pane: String, val b64: String) : ClientMsg
 

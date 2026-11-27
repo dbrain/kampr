@@ -16,3 +16,6 @@ fun breakpointOf(width: Dp, height: Dp): Breakpoint = when {
     width > height -> Breakpoint.Landscape
     else -> Breakpoint.Portrait
 }
+
+// The touch rule's two sizes by posture: 36 dp only where a rotated phone has no height to spare.
+fun touchTarget(breakpoint: Breakpoint): Dp = if (breakpoint == Breakpoint.Landscape) LANDSCAPE_TOUCH else TOUCH

@@ -710,6 +710,10 @@ const LAUNCHD_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <!-- The counterpart of the systemd unit's KillMode=process: when the node exits, launchd stops it
+       alone and leaves the rest of its process group running. The keepers are not in that group
+       (they double-fork with setsid), so this is not what keeps them alive. -->
+  <key>AbandonProcessGroup</key><true/>
   <!-- 63 is 0o077. launchd takes this as a decimal integer, and sqlite creates the
        write-ahead log beside the database at whatever umask the process was given. -->
   <key>Umask</key><integer>63</integer>
@@ -793,6 +797,16 @@ mod tests {
             !SYSTEMD_UNIT.contains("\nPrivateTmp="),
             "a created session inherits the node's mount namespace, so a private /tmp is the \
              operator's agents writing somewhere their own shell cannot see: {SYSTEMD_UNIT}"
+        );
+    }
+
+    /// Without it launchd kills everything left in the job's process group when the node exits, and
+    /// the keepers are in it on a Mac (there is no systemd to give each its own unit).
+    #[test]
+    fn the_plist_stops_the_node_alone_as_kill_mode_process_does() {
+        assert!(
+            LAUNCHD_PLIST.contains("<key>AbandonProcessGroup</key><true/>"),
+            "{LAUNCHD_PLIST}"
         );
     }
 

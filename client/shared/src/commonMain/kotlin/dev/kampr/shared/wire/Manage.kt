@@ -1,5 +1,7 @@
 package dev.kampr.shared.wire
 
+import androidx.compose.runtime.Immutable
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -284,6 +286,77 @@ sealed interface ManageOp {
         override val op: String get() = "docker.${action.wire}"
     }
 
+    // docs/21. A conversation with no terminal, answered with its `c:` pane's id. `prompt` is
+    // sent once a pane opens it, after the node's billing check.
+    data class ClaudeCreate(val node: String, val cwd: String?, val prompt: String?) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "claude.create"
+        }
+    }
+
+    // docs/25: what a boot left on `node` that a person may run again, running one, and dropping
+    // one unrun. `id` is the record's, from the list.
+    data class NativeResumable(val node: String) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "native.resumable"
+        }
+    }
+
+    data class NativeResume(val node: String, val id: String) : ManageOp {
+        override val op: String get() = "native.resume"
+    }
+
+    data class NativeResumeDismiss(val node: String, val id: String) : ManageOp {
+        override val op: String get() = "native.resume.dismiss"
+    }
+
+    data class ClaudeResumable(val node: String, val cwd: String?) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "claude.resumable"
+        }
+    }
+
+    data class ClaudeResume(val node: String, val id: String) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "claude.resume"
+        }
+    }
+
+    // Stops the headless Claude and starts `claude -r` on its conversation in a Kampr session.
+    // `interrupt` is the operator's yes to a `busy` refusal, never the first press.
+    data class ClaudeToTerminal(val at: String, val interrupt: Boolean = false) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "claude.to_terminal"
+        }
+    }
+
+    // The reverse, under the same `busy` rule.
+    data class ClaudeFromTerminal(val at: String, val interrupt: Boolean = false) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "claude.from_terminal"
+        }
+    }
+
+    data class ClaudeEnd(val at: String) : ManageOp {
+        override val op: String get() = OP
+
+        companion object {
+            const val OP = "claude.end"
+        }
+    }
+
     data class ClaudeHooksInstall(val at: String, val mode: HooksScope) : ManageOp {
         override val op: String get() = "claude.hooks.install"
     }
@@ -452,8 +525,59 @@ fun ManageOp.fields(): JsonObject = buildJsonObject {
         }
 
         is ManageOp.ClaudeHooksDecline -> put("at", at)
+
+        is ManageOp.ClaudeCreate -> {
+            put("node", node)
+            opt("cwd", cwd)
+            opt("prompt", prompt)
+        }
+
+        is ManageOp.ClaudeResumable -> {
+            put("node", node)
+            opt("cwd", cwd)
+        }
+
+        is ManageOp.NativeResumable -> put("node", node)
+
+        is ManageOp.NativeResume -> {
+            put("node", node)
+            put("id", id)
+        }
+
+        is ManageOp.NativeResumeDismiss -> {
+            put("node", node)
+            put("id", id)
+        }
+
+        is ManageOp.ClaudeResume -> {
+            put("node", node)
+            put("id", id)
+        }
+
+        is ManageOp.ClaudeToTerminal -> {
+            put("at", at)
+            if (interrupt) put("interrupt", true)
+        }
+
+        is ManageOp.ClaudeFromTerminal -> {
+            put("at", at)
+            if (interrupt) put("interrupt", true)
+        }
+
+        is ManageOp.ClaudeEnd -> put("at", at)
     }
 }
+
+// One conversation `claude.resumable` lists: Claude's own session id, where it ran, and its first
+// prompt.
+@Serializable
+data class StoredConversation(val id: String, val cwd: String? = null, val title: String? = null)
+
+// One command `native.resumable` lists (docs/25): run as a list, never through a shell, so it is
+// shown escaped by `displayArgv`.
+@Immutable
+@Serializable
+data class ResumeRecord(val id: String, val label: String? = null, val argv: List<String> = emptyList(), val cwd: String? = null)
 
 // Herdr's id grammar, which the node re-derives on every op: `w3` is a workspace, `w3:t1` a tab,
 // `w3:p2` a pane, all prefixed with the node id.

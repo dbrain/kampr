@@ -58,6 +58,18 @@ pub enum Command {
         ask: String,
         reply: Reply,
     },
+    /// An option's key pressed, with the words an option that takes them carries. The source reads
+    /// it against what it is asking, as a dialog reads a keystroke: a question's key chooses or
+    /// ticks, a plan's revises with the words.
+    Press {
+        ask: String,
+        key: String,
+        text: Option<String>,
+    },
+    /// Commits what is ticked on a question that takes several answers.
+    Submit {
+        ask: String,
+    },
     Steer(Steer, Option<String>),
     Set {
         control: String,

@@ -3,7 +3,7 @@ mod elicit;
 mod tool;
 
 use crate::pending::Pending;
-use kampr_core::wire::PendingOption;
+use kampr_core::wire::{PendingKind, PendingOption};
 use serde_json::{Value, json};
 
 const NO_WORDS: &str = "this answer takes no words";
@@ -75,6 +75,12 @@ impl Card {
             Kind::Ask(ask) => ask.view(),
             Kind::Elicit(elicit) => elicit.view(),
         };
+        view.kind = Some(match &self.kind {
+            Kind::Tool(_) => PendingKind::Permission,
+            Kind::Plan(_) => PendingKind::Plan,
+            Kind::Ask(_) => PendingKind::Question,
+            Kind::Elicit(_) => PendingKind::Form,
+        });
         if let Some(by) = &self.by {
             view.header = Some(match view.header {
                 Some(header) => format!("{header} · {by}"),
@@ -117,6 +123,7 @@ fn card(
         cursor: None,
         context,
         id: None,
+        kind: None,
     }
 }
 

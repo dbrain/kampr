@@ -3,6 +3,7 @@
 //! compared with `tests/fixtures/wire-shapes.txt`. A path that disappears or changes type fails;
 //! a new one passes and is written into the snapshot with `KAMPR_BLESS_WIRE=1`.
 
+use kampr_core::conversation::AskField;
 use kampr_core::provider::AgentStatus;
 use kampr_core::wire::*;
 use kampr_core::{ClientMsg, Question, ServerMsg};
@@ -134,6 +135,25 @@ fn pane(question: Question) -> PaneEntry {
             }],
         }),
         container: Some("db".into()),
+        program_error: true,
+        program_msg: Some("API Error".into()),
+        program: Some(vec![kampr_core::wire::ProgramEntry {
+            id: "build/lint".into(),
+            state: "working".into(),
+            kind: Some("permission".into()),
+            progress: Some(40),
+            app: Some("ci".into()),
+            title: Some("Lint".into()),
+            msg: Some("linting".into()),
+        }]),
+        program_progress: Some(40),
+        modes: Some(kampr_core::PaneModes {
+            mouse: kampr_core::MouseTracking::Drag,
+            mouse_sgr: true,
+            alt_scroll: true,
+            app_cursor: true,
+            alt_screen: true,
+        }),
     }
 }
 
@@ -146,6 +166,8 @@ fn node() -> NodeEntry {
         reachable: Some(true),
         native: Some(true),
         muffit: Some(true),
+        claude: Some(true),
+        resume: Some(true),
         herdr: Some(true),
         rtt_ms: Some(1.5),
         herdr_version: Some("0.9.1".into()),
@@ -371,6 +393,15 @@ fn server() -> Vec<ServerMsg> {
             multi: true,
             context: Some("c".into()),
             id: Some("toolu_1".into()),
+            kind: Some(PendingKind::Form),
+            fields: vec![AskField {
+                name: "n".into(),
+                title: Some("t".into()),
+                detail: Some("d".into()),
+                kind: "string".into(),
+                required: true,
+                choices: vec!["c".into()],
+            }],
         },
         ServerMsg::ConvoHeard {
             pane: pane(),

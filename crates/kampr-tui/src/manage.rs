@@ -141,6 +141,10 @@ pub struct Manage {
     outcome: Option<(String, Instant)>,
     /// herdr's own split tree, held opaque between a `layout.export` ack and a `layout.apply`.
     exported: Option<Value>,
+    /// A Claude hand-over in flight: a `busy` refusal is a question, and its yes is this op again
+    /// with `interrupt`. Kept apart from `inflight` because the `error` that follows a refusal
+    /// may land before the ack does and take that.
+    handing: Option<Value>,
 }
 
 impl Manage {
@@ -197,7 +201,11 @@ impl Manage {
             return;
         };
         let rows = match target {
-            Target::Pane => pane_rows(entry, self.matched),
+            Target::Pane => {
+                let mut rows = claude_rows(herd, entry);
+                rows.extend(pane_rows(entry, self.matched));
+                rows
+            }
             Target::Tab => tab_rows(entry),
             Target::Space => space_rows(entry),
         };
@@ -291,6 +299,10 @@ impl Manage {
             // that reaches here when the ack went to the op's own waiter. `stream_unavailable` is
             // the one code that is never a refusal — it is a pane's screen, not an op — so it must
             // not clear an op that is still outstanding.
+            Event::Error(failure) if failure.code == "busy" && self.handing.is_some() => {
+                self.inflight = None;
+                self.ask_to_interrupt(&failure.message);
+            }
             Event::Error(failure) if failure.code != "stream_unavailable" => {
                 let Some((op, _)) = self.inflight.take() else {
                     return;
@@ -381,6 +393,13 @@ impl Manage {
     /// with no target to Kampr.
     fn menu(&self, herd: &Herd, entry: Option<&PaneEntry>) -> Next {
         let mut rows = native(herd, entry);
+        // Keyless here: this menu's letters are already spoken for, and arrows reach them.
+        rows.extend(
+            entry
+                .into_iter()
+                .flat_map(|e| claude_rows(herd, e))
+                .map(|row| Row { key: None, ..row }),
+        );
         let kampr = kampr_nodes(herd);
         rows.extend(self.kampr_rows(&kampr, entry));
         if let Some(at) = entry {
@@ -884,6 +903,9 @@ impl Manage {
     /// The op leaves and **nothing here changes**: the herd is the node's to move, and this
     /// client's own copy of it does not learn a thing until the `herd.patch` arrives.
     fn fire(&mut self, op: Value) -> Progress {
+        if HANDOVERS.contains(&op["op"].as_str().unwrap_or_default()) {
+            self.handing = Some(op.clone());
+        }
         self.open = None;
         self.outcome = None;
         self.inflight = Some((op.clone(), Instant::now()));
@@ -908,6 +930,17 @@ impl Manage {
             .is_some_and(|(op, _)| op["op"] == ack.op.as_str())
         {
             self.inflight = None;
+        }
+        if HANDOVERS.contains(&ack.op.as_str()) {
+            match (ack.ok, ack.code.as_deref()) {
+                (false, Some("busy")) => {
+                    if self.handing.is_some() {
+                        self.ask_to_interrupt(ack.message.as_deref().unwrap_or_default());
+                    }
+                    return;
+                }
+                _ => self.handing = None,
+            }
         }
         if !ack.ok {
             let why = ack
@@ -960,6 +993,23 @@ impl Manage {
 
     fn note(&mut self, text: String) {
         self.outcome = Some((text, Instant::now()));
+    }
+
+    /// The node's sentence is the question: it names what moving would stop.
+    fn ask_to_interrupt(&mut self, why: &str) {
+        let Some(mut op) = self.handing.take() else { return };
+        op["interrupt"] = json!(true);
+        let why = match why.is_empty() {
+            true => "Claude is busy: moving it now stops what it is doing.".to_string(),
+            false => why.to_string(),
+        };
+        self.open = Some(Modal {
+            title: "Claude is busy".into(),
+            stage: Stage::Confirm {
+                lines: vec![why, "Stop it and move anyway?".into()],
+                op,
+            },
+        });
     }
 
     /// **Both halves, when both are true.** An op that is still outstanding is a fact about now,
@@ -1153,9 +1203,83 @@ fn pane_rows(entry: &PaneEntry, matched: Matched) -> Vec<Row> {
             next: close(at, "pane"),
         },
     ];
-    rows.into_iter()
+    let mut rows: Vec<Row> = rows
+        .into_iter()
         .filter(|r| herdr || !matches!(r.label.as_str(), "focus" | "zoom"))
-        .collect()
+        .collect();
+    rows.extend(programs(entry));
+    rows
+}
+
+const HANDOVERS: [&str; 2] = ["claude.to_terminal", "claude.from_terminal"];
+
+/// A headless Claude's pane id is `c:<keeper>` on its node (`kampr-claude`'s `provider::PREFIX`).
+fn headless(entry: &PaneEntry) -> bool {
+    entry.provider.is_none()
+        && entry
+            .id
+            .split_once('/')
+            .is_some_and(|(_, local)| local.starts_with("c:"))
+}
+
+/// The hand-overs docs/21 names: a headless Claude to a terminal and back, and its end.
+fn claude_rows(herd: &Herd, entry: &PaneEntry) -> Vec<Row> {
+    let at = entry.id.as_str();
+    if headless(entry) {
+        return vec![
+            Row {
+                key: Some('t'),
+                label: "open in terminal".into(),
+                note: "carry this conversation into a Kampr session running claude".into(),
+                next: Next::Send(json!({ "op": "claude.to_terminal", "at": at })),
+            },
+            Row {
+                key: Some('e'),
+                label: "end".into(),
+                note: "stop this Claude; the conversation stays resumable".into(),
+                next: Next::Confirm {
+                    lines: vec!["End this conversation? Claude stops and the pane leaves the herd.".into()],
+                    op: json!({ "op": "claude.end", "at": at }),
+                },
+            },
+        ];
+    }
+    let claude_on = herd.node(&entry.node_id).is_some_and(|n| n.claude == Some(true));
+    match entry.provider.as_deref() == Some("native") && entry.agent.as_deref() == Some("claude") && claude_on
+    {
+        true => vec![Row {
+            key: Some('h'),
+            label: "continue without terminal".into(),
+            note: "hang up this Claude and resume it headless".into(),
+            next: Next::Send(json!({ "op": "claude.from_terminal", "at": at })),
+        }],
+        false => Vec::new(),
+    }
+}
+
+/// OSC 7501's records under the pane (docs/24), to read: a row is a fact, not an op.
+fn programs(entry: &PaneEntry) -> Option<Row> {
+    let records = crate::program::records(entry);
+    (!records.is_empty()).then(|| Row {
+        key: Some('g'),
+        label: "programs".into(),
+        note: format!("{} reported over OSC 7501", records.len()),
+        next: Next::Pick {
+            title: "programs".into(),
+            rows: records
+                .into_iter()
+                .map(|r| Row {
+                    key: None,
+                    label: format!("{}{}  ", "  ".repeat(r.depth), r.name),
+                    note: r.note,
+                    next: Next::Pick {
+                        title: "programs".into(),
+                        rows: Vec::new(),
+                    },
+                })
+                .collect(),
+        },
+    })
 }
 
 /// A pane id carries its workspace and **never its tab**, so a pane whose entry has no `tab_id`

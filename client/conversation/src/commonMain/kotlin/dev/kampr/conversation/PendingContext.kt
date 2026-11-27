@@ -9,6 +9,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kampr.conversation.md.Markdown
@@ -24,31 +25,33 @@ private val COMMAND_CEILING = 120.dp
 // given most of a phone; it still scrolls, because the answers under it are the point of the card.
 private val PLAN_CEILING = 300.dp
 
-private fun ServerMsg.Pending.isPlan(): Boolean = source == "hook" && header == "Plan"
+private fun ServerMsg.Pending.isPlan(): Boolean = kind == "plan" || (source == "hook" && header == "Plan")
 
 @Composable
 internal fun PendingContext(pending: ServerMsg.Pending, context: String) {
     val tokens = Kampr.tokens
     val box = RoundedCornerShape(tokens.radii.sm)
     val plan = pending.isPlan()
+    val scroll = rememberScrollState()
     Box(
         Modifier
             .fillMaxWidth()
             .background(tokens.color.surface, box)
             .edge(tokens.card, box)
-            .heightIn(max = if (plan) PLAN_CEILING else COMMAND_CEILING)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            .heightIn(max = if (plan) PLAN_CEILING else COMMAND_CEILING),
     ) {
-        if (plan) {
-            Markdown(context, query = "")
-        } else {
-            KText(
-                context,
-                tokens.type.caption.copy(fontFamily = tokens.fonts.mono),
-                tokens.color.text,
-                maxLines = Int.MAX_VALUE,
-            )
+        Box(Modifier.fillMaxWidth().verticalScroll(scroll).padding(horizontal = 10.dp, vertical = 8.dp)) {
+            if (plan) {
+                Markdown(context, query = "")
+            } else {
+                KText(
+                    context,
+                    tokens.type.caption.copy(fontFamily = tokens.fonts.mono),
+                    tokens.color.text,
+                    maxLines = Int.MAX_VALUE,
+                )
+            }
         }
+        MoreBelow(scroll, tokens.color.surface, Modifier.align(Alignment.BottomStart))
     }
 }

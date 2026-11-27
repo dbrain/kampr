@@ -13,6 +13,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use std::collections::HashMap;
 
+use super::form::{Filled, Form};
 use crate::theme::Theme;
 
 /// Tall enough for a paragraph, short enough that the transcript above it is still a transcript.
@@ -33,6 +34,10 @@ pub enum Typed {
     /// The draft, and the carriage return that follows it as its own message.
     Send(String),
     Answer(Answering, String),
+    /// A form's last field taken: its values by name.
+    Filled(Answering, serde_json::Value),
+    /// Words that do not fit the field the box is collecting, and why. They stay in the box.
+    Refused(String),
 }
 
 /// A question's option that is answered with words, which the box is collecting instead of a
@@ -43,6 +48,7 @@ pub struct Answering {
     pub label: String,
     pub id: Option<String>,
     pub multi: bool,
+    pub form: Option<Form>,
 }
 
 #[derive(Debug, Default)]
@@ -100,6 +106,13 @@ impl Composer {
         draft.cursor = draft.text.len();
     }
 
+    pub fn replace(&mut self, pane: &str, text: &str) {
+        self.drafts.remove(pane);
+        if !text.is_empty() {
+            self.take(pane, text);
+        }
+    }
+
     pub fn key(&mut self, pane: &str, key: KeyEvent) -> Typed {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -114,6 +127,20 @@ impl Composer {
             }
             KeyCode::Enter => {
                 let text = draft.text.trim_end().to_string();
+                if let Some(form) = self.answering.get_mut(pane).and_then(|a| a.form.as_mut()) {
+                    return match form.take(&text) {
+                        Ok(Filled::Next) => {
+                            self.drafts.remove(pane);
+                            Typed::Changed
+                        }
+                        Ok(Filled::Done(values)) => {
+                            self.drafts.remove(pane);
+                            let answering = self.answering.remove(pane).expect("a form is answering");
+                            Typed::Filled(answering, values)
+                        }
+                        Err(why) => Typed::Refused(why),
+                    };
+                }
                 if text.is_empty() && self.answering.contains_key(pane) {
                     return Typed::Changed;
                 }
@@ -199,6 +226,9 @@ impl Composer {
             (false, _) => return,
             (true, true) => {
                 let hint = match answering {
+                    Some(Answering { form: Some(form), .. }) => {
+                        format!(" {} · enter takes it · esc cancels", form.hint())
+                    }
                     Some(a) if a.multi => format!(
                         " {} · type the answer · enter sends it with the ticked ones · esc cancels",
                         a.label
@@ -211,6 +241,9 @@ impl Composer {
             (true, false) => Line::from(vec![
                 Span::styled(
                     match answering {
+                        Some(Answering { form: Some(form), .. }) => {
+                            format!(" {} · esc cancels \u{203a} ", form.hint())
+                        }
                         Some(a) => format!(" {} · esc cancels \u{203a} ", a.label),
                         None => " \u{203a} ".to_string(),
                     },

@@ -1,5 +1,6 @@
 use super::{NO_WORDS, Pressed, capped, card, decision, not_an_answer, option, worded};
 use crate::pending::Pending;
+use kampr_claude::plan::{self, ANSWERS};
 use serde_json::{Value, json};
 
 const CONTEXT_CHARS: usize = 2000;
@@ -76,11 +77,13 @@ impl Plan {
         card(
             "Approve Claude's plan?".into(),
             Some("Plan".into()),
-            vec![
-                option("1", "Yes, auto-accept edits", None, false),
-                option("2", "Yes, manually approve edits", None, false),
-                worded("3", "No, tell Claude what to change"),
-            ],
+            ANSWERS
+                .iter()
+                .map(|(key, label, mode)| match mode {
+                    Some(_) => option(key, label, None, false),
+                    None => worded(key, label),
+                })
+                .collect(),
             self.input["plan"]
                 .as_str()
                 .filter(|p| !p.trim().is_empty())
@@ -98,11 +101,10 @@ impl Plan {
                 "updatedPermissions": [ { "type": "setMode", "mode": mode, "destination": "session" } ],
             })
         };
-        let decided = match (key, text) {
-            ("1", None) => approved("acceptEdits"),
-            ("2", None) => approved("default"),
-            ("1" | "2", Some(_)) => return Err(NO_WORDS.into()),
-            ("3", said) => json!({ "behavior": "deny", "message": said.unwrap_or(DECLINED) }),
+        let decided = match (plan::mode(key), key, text) {
+            (Some(mode), _, None) => approved(mode),
+            (Some(_), _, Some(_)) => return Err(NO_WORDS.into()),
+            (None, "3", said) => json!({ "behavior": "deny", "message": said.unwrap_or(DECLINED) }),
             _ => return Err(not_an_answer(key)),
         };
         Ok(Pressed::Decided(decision(decided)))

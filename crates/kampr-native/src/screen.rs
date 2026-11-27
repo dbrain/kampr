@@ -1,4 +1,5 @@
 mod checkpoint;
+mod modes;
 
 use crate::answer::{self, Scan};
 use crate::frame::{self, Cursor, Links};
@@ -10,7 +11,8 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::Parser;
 use alacritty_terminal::vte::ansi::{CursorShape, Processor, Timeout};
 use checkpoint::Ground;
-use kampr_core::provider::{Found, ProgramStatus, RawScrollback};
+use kampr_core::program::{Event as Program, ProgramRecords};
+use kampr_core::provider::{Found, RawScrollback};
 use kampr_term::Cell;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};
@@ -40,7 +42,7 @@ pub struct Screen {
     rebase: bool,
     sent: Vec<Cell>,
     sent_cursor: Cursor,
-    program: Option<ProgramStatus>,
+    program: ProgramRecords,
     program_reports: u64,
     ground: Ground,
 }
@@ -49,6 +51,14 @@ pub struct Screen {
 pub struct Feed {
     pub replies: Vec<u8>,
     pub(crate) asked: Vec<Asked>,
+    pub(crate) resume: Vec<Resumed>,
+}
+
+/// An `OSC 7577` body and where in the bytes fed it ended; a piece ends at each, so the offset is exact.
+#[derive(Debug)]
+pub(crate) struct Resumed {
+    pub body: Vec<u8>,
+    pub end: usize,
 }
 
 /// One question in a feed: where it ended in the bytes fed, and where its answer is in `replies`.
@@ -128,7 +138,7 @@ impl Screen {
             rebase: false,
             sent: Vec::new(),
             sent_cursor: Cursor::default(),
-            program: None,
+            program: ProgramRecords::default(),
             program_reports: 0,
             ground: Ground::default(),
         };
@@ -139,6 +149,7 @@ impl Screen {
     pub fn feed(&mut self, bytes: &[u8]) -> Feed {
         let mut replies = String::new();
         let mut asked = Vec::new();
+        let mut resume = Vec::new();
         self.ground.advance(bytes);
         let mut rest = bytes;
         while !rest.is_empty() {
@@ -158,9 +169,12 @@ impl Screen {
                     reply: start..replies.len(),
                 });
             }
-            if let Some(program) = found.program {
-                self.program = program;
-                self.program_reports += 1;
+            resume.extend(found.resume.into_iter().map(|body| Resumed { body, end }));
+            for event in found.program {
+                let report = matches!(event, Program::Set(_) | Program::Clear(_));
+                if self.program.apply(event) || report {
+                    self.program_reports += 1;
+                }
             }
             self.sync(found.cleared);
         }
@@ -170,6 +184,7 @@ impl Screen {
         Feed {
             replies: replies.into_bytes(),
             asked,
+            resume,
         }
     }
 
@@ -209,13 +224,20 @@ impl Screen {
         &self.title
     }
 
-    /// The harness's last `OSC 7501` report (#600), `None` until it makes one and after it clears.
-    pub fn program(&self) -> Option<&ProgramStatus> {
-        self.program.as_ref()
+    /// What programs have reported over `OSC 7501` (#600, docs/24), less what ended since.
+    pub fn program(&self) -> &ProgramRecords {
+        &self.program
+    }
+
+    /// The session's child is gone: what it was running or waiting on is not any more.
+    pub fn process_ended(&mut self) {
+        if self.program.process_ended() {
+            self.program_reports += 1;
+        }
     }
 
     /// How many reports have been read, so a caller can tell a new `done` from the one it saw.
-    pub(crate) fn program_reports(&self) -> u64 {
+    pub fn program_reports(&self) -> u64 {
         self.program_reports
     }
 

@@ -432,6 +432,7 @@ fn on_ask(ask: Request, asks: &mut HashMap<String, Request>, emit: &mut Emit) ->
                 text: true,
             },
         ],
+        fields: Vec::new(),
     }]))
 }
 

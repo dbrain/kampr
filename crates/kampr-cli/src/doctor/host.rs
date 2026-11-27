@@ -159,27 +159,33 @@ pub fn linger(state: &service::State) -> Check {
         .fix("run `kampr serve` under whatever already supervises this box"),
         Supervisor::Systemd => {
             let user = service::username();
-            match service::linger(&user) {
-                Some(true) => Check::ok(
-                    "linger",
-                    format!("lingering is on for {user}, so systemd starts the user manager at boot"),
-                ),
-                Some(false) => Check::fail(
-                    "linger",
-                    format!(
-                        "the unit is installed but lingering is off for {user}: systemd tears the \
-                         user manager down when your last session ends and does not start it at \
-                         boot, so the node dies at logout and does not come back after a reboot"
-                    ),
-                )
-                .fix(format!("loginctl enable-linger {user}")),
-                None => Check::warn(
-                    "linger",
-                    format!("could not tell whether lingering is on for {user}"),
-                )
-                .fix(format!("loginctl enable-linger {user}")),
-            }
+            let lingers = service::linger(&user);
+            systemd_linger(&user, rustix::process::getuid().as_raw(), lingers)
         }
+    }
+}
+
+fn systemd_linger(user: &str, uid: u32, lingers: Option<bool>) -> Check {
+    match lingers {
+        Some(true) => Check::ok(
+            "linger",
+            format!("lingering is on for {user}, so systemd starts the user manager at boot"),
+        ),
+        Some(false) => Check::fail(
+            "linger",
+            format!(
+                "the unit is installed but lingering is off for {user}: systemd tears the \
+                 user manager down when your last session ends and does not start it at \
+                 boot, so the node dies at logout and does not come back after a reboot, and \
+                 /run/user/{uid} goes with it at logout, taking every keeper's session and log"
+            ),
+        )
+        .fix(format!("loginctl enable-linger {user}")),
+        None => Check::warn(
+            "linger",
+            format!("could not tell whether lingering is on for {user}"),
+        )
+        .fix(format!("loginctl enable-linger {user}")),
     }
 }
 
@@ -346,6 +352,23 @@ pub fn fleet_path(config: &Config) -> Check {
 mod tests {
     use super::super::Status;
     use super::*;
+
+    #[test]
+    fn a_user_who_does_not_linger_is_told_what_logout_costs_and_the_one_command_that_fixes_it() {
+        for (lingers, status) in [
+            (Some(true), Status::Ok),
+            (Some(false), Status::Fail),
+            (None, Status::Warn),
+        ] {
+            let check = systemd_linger("dbrain", 1000, lingers);
+            assert_eq!(check.status, status, "{check:?}");
+        }
+        let check = systemd_linger("dbrain", 1000, Some(false));
+        for cost in ["/run/user/1000", "keeper", "logout"] {
+            assert!(check.detail.contains(cost), "{cost}: {}", check.detail);
+        }
+        assert_eq!(check.fix.as_deref(), Some("loginctl enable-linger dbrain"));
+    }
 
     #[cfg(unix)]
     #[tokio::test]

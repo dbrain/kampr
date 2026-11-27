@@ -575,6 +575,20 @@ class PaneScrollTest {
         assertEquals(6, ScrollKeys.Notch.land(count = 2, reversed = true).rows, "no first-report-after-reversal loss")
     }
 
+    // A trackpad in a browser hands the wheel a row an event, and a report for each of them moved
+    // muffit three rows for every row the fingers travelled. The rows a rounded-up report has already
+    // moved are owed back by the events after it, until the direction changes.
+    @Test
+    fun aStreamOfSingleRowsMovesMuffitAsFarAsItAskedAndNoFurther() {
+        val out = mutableListOf<String>()
+        val scroll = PaneScroll(ScrollKeys.Notch) { out += it }
+        repeat(9) { scroll.wheel(rows = 1, col = 40, row = 20) }
+        assertEquals(3, out.size, "nine rows asked for: ${out.size} reports, ${out.size * 3} rows")
+        scroll.wheel(rows = 1, col = 40, row = 20)
+        scroll.wheel(rows = -1, col = 40, row = 20)
+        assertEquals("\u001b[<65;41;21M", out.last(), "the way back is not paid for by the way up")
+    }
+
     // Alternate scroll, which is what herdr does at the desk. The **application** form: `less`,
     // `man` and `vim` all set DECCKM, and the normal `ESC [ B` moved less by nothing (#390).
     @Test

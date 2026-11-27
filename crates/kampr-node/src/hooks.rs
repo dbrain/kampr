@@ -626,6 +626,8 @@ pub fn pending(pane: &str, asked: Option<Pending>) -> ServerMsg {
         multi: asked.as_ref().is_some_and(|a| a.multi),
         context: asked.as_ref().and_then(|a| a.context.clone()),
         id: asked.as_ref().and_then(|a| a.id.clone()),
+        kind: asked.as_ref().and_then(|a| a.kind),
+        fields: Vec::new(),
         options: asked.map(|a| a.options).unwrap_or_default(),
         source: PendingSource::Hook,
     }

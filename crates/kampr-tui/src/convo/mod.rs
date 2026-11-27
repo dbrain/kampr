@@ -6,13 +6,19 @@
 
 mod composer;
 mod context;
+mod declared;
+mod form;
 mod markdown;
 mod search;
+mod sheet;
 mod stamps;
 mod strip;
 
 pub use composer::{Answering, Composer, Typed};
+pub use declared::{Declared, Held, task_name, trouble_text};
+pub use form::Form;
 pub use search::{Search, Took as Searched};
+pub use sheet::{Do as SheetDo, Kind as SheetKind, Sheet, Took as SheetTook};
 
 use crate::image::{Attachment, Images};
 use crate::theme::Theme;

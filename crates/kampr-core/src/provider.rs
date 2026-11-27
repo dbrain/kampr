@@ -1,3 +1,4 @@
+use crate::program::ProgramRecords;
 use anyhow::Result;
 use async_trait::async_trait;
 use kampr_journal::Harness;
@@ -117,29 +118,10 @@ pub struct NativePane {
     pub detached: bool,
     pub size_holder: Option<String>,
     pub exited: Option<NativeExit>,
-    /// What the harness itself says over `OSC 7501` (#600), `None` while that channel is down.
-    pub program: Option<ProgramStatus>,
+    /// What programs say over `OSC 7501` (#600, docs/24), `None` while no record is held.
+    pub program: Option<ProgramRecords>,
     /// The container a `docker.shell` session is a shell into (docs/19).
     pub container: Option<String>,
-}
-
-/// A harness's own run state, as Claude Code publishes it to a terminal that answered `OSC 7501;?`
-/// (#600). `kind` and `message` are set only on a block (`permission`, `question`, `auth`) and an
-/// error, the message already decoded.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProgramStatus {
-    pub state: ProgramState,
-    pub kind: Option<String>,
-    pub message: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProgramState {
-    Idle,
-    Working,
-    Blocked,
-    Done,
-    Error,
 }
 
 /// A session of the muffit daemon on this machine (docs/18): a conversation with no terminal.
@@ -201,6 +183,8 @@ pub struct PaneInfo {
     /// ordinary state; a pane that carries one has a supervisor retrying behind it, so it clears
     /// itself when the fault does.
     pub detail: Option<String>,
+    /// `None` wherever the provider does not own the program's bytes (herdr, probe #686).
+    pub modes: Option<crate::modes::PaneModes>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

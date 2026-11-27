@@ -1,7 +1,9 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
-pub const WIRE_VERSION: u32 = 303;
+/// What this node speaks and the floor it assumes of a daemon whose greeting names no version.
+pub const WIRE_VERSION: u32 = 309;
+pub const BASELINE: u32 = 303;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +28,35 @@ pub struct PermissionPrompt {
     pub action: String,
 }
 
+/// The model's `ask` question (wire 3.4): an option's index or, with `free_text`, words answer it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Question {
+    pub id: u64,
+    pub text: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub free_text: bool,
+}
+
+/// A background `bash` job (wire 3.6). Its output is the model's to read and is not on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ShellTask {
+    pub id: String,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub state: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct RateLimit {
+    #[serde(default)]
+    pub limited: bool,
+    #[serde(default)]
+    pub retry_after_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
@@ -42,6 +73,8 @@ pub struct SessionInfo {
     pub model: Option<String>,
     #[serde(default)]
     pub permission: Option<PermissionPrompt>,
+    #[serde(default)]
+    pub question: Option<Question>,
     #[serde(default)]
     pub clients: Vec<AttachedClient>,
 }
@@ -107,6 +140,14 @@ pub enum ContentBlock {
         #[serde(default)]
         args: String,
         status: ToolCallStatus,
+    },
+    /// A slice of a call's arguments as the model writes them (wire 3.7).
+    ToolCallDelta {
+        call_id: String,
+        #[serde(default)]
+        tool: String,
+        #[serde(default)]
+        delta: String,
     },
     ToolOutputChunk {
         call_id: String,
@@ -181,8 +222,9 @@ pub struct Subagent {
     #[serde(default)]
     pub title: Option<String>,
     pub liveness: Liveness,
-    /// `Orchestrator`, `TaskChimp`, `Review`, `Interactive`, `Debugging`, `Planner` or a key.
-    #[serde(default)]
+    /// `Orchestrator`, `TaskChimp`, `Review`, `Interactive`, `Debugging`, `Planner`, or a custom
+    /// role's key, which muffit's `AgentRole::Other` sends as `{"Other": "<key>"}`.
+    #[serde(default, deserialize_with = "lenient_role")]
     pub role: Option<String>,
     /// The worker's own state: `running`, `waiting_user`, `paused`, `completed` or `failed`.
     #[serde(default)]
@@ -196,6 +238,15 @@ pub struct ContextStatus {
     /// The window's prompt size, once a turn has measured one.
     #[serde(default)]
     pub measured_prompt_tokens: Option<u32>,
+    #[serde(default)]
+    pub pressure: Option<Pressure>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Pressure {
+    /// The strategy's budget: the size the window is cut back from.
+    #[serde(default)]
+    pub budget: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -208,7 +259,16 @@ pub struct StatusSnapshot {
     #[serde(default)]
     pub permission: Option<PermissionPrompt>,
     #[serde(default)]
+    pub question: Option<Question>,
+    #[serde(default)]
     pub subagents: Vec<Subagent>,
+    #[serde(default)]
+    pub shell_tasks: Vec<ShellTask>,
+    /// `<provider catalog name>: <model>` (wire 3.9).
+    #[serde(default)]
+    pub billed_to: Option<String>,
+    #[serde(default)]
+    pub rate_limit: Option<RateLimit>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -233,6 +293,8 @@ pub struct StatusSnapshot {
 pub enum ServerFrame {
     Hello {
         #[serde(default)]
+        version: Option<u32>,
+        #[serde(default)]
         cursor: i64,
         session: SessionInfo,
     },
@@ -250,6 +312,12 @@ pub enum ServerFrame {
         snapshot: StatusSnapshot,
     },
     Lagged {},
+    /// A durable event, with the `events` capability. `event` is read leniently: the daemon's
+    /// enum has no catch-all (kampr.md §3).
+    Event {
+        #[serde(default)]
+        event: Value,
+    },
     Error {
         message: String,
     },
@@ -268,5 +336,17 @@ pub fn hello(capabilities: &[&str]) -> serde_json::Value {
     serde_json::json!({
         "type": "hello", "version": WIRE_VERSION, "capabilities": capabilities,
         "client": { "kind": "kampr" },
+    })
+}
+
+/// A role this node cannot name is no role, never a status frame it drops whole.
+fn lenient_role<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    Ok(match Value::deserialize(d)? {
+        Value::String(role) => Some(role),
+        Value::Object(one) if one.len() == 1 => one
+            .into_iter()
+            .next()
+            .and_then(|(_, key)| key.as_str().map(str::to_string)),
+        _ => None,
     })
 }

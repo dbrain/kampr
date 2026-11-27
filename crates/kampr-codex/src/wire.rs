@@ -214,11 +214,13 @@ const NUDGE_EVERY: Duration = Duration::from_millis(250);
 const NUDGE: &str = "account/read";
 
 impl Pump {
-    /// Spawn the server and take the pipe. The reader and writer run as tasks; when the
-    /// child dies the reader closes [`Self::exit`] and settles every pending call.
+    /// Spawn the server and take the pipe. `env` is the child's whole environment; nothing of
+    /// the node's own crosses. The reader and writer run as tasks; when the child dies the
+    /// reader closes [`Self::exit`] and settles every pending call.
     pub async fn spawn(program: &str, args: &[String], env: &[(String, String)]) -> Result<Self, WireError> {
         let mut child = Command::new(program)
             .args(args)
+            .env_clear()
             .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

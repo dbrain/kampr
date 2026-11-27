@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use kampr_core::child_env::{self, LoginEnv};
 use kampr_core::conversation::{Conversation, Ending, NewSession, Refusal, Source, Stored};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -53,6 +54,12 @@ impl CodexHerd {
     }
 }
 
+/// The child's whole environment: given outright, or the operator's login one less what pays.
+enum ChildEnv {
+    Exactly(Vec<(String, String)>),
+    Login(LoginEnv),
+}
+
 /// A seam `Source` over `codex app-server --stdio`.
 ///
 /// The program, its arguments and the environment are injected, so the tests run the probe's
@@ -60,7 +67,7 @@ impl CodexHerd {
 pub struct CodexSource {
     program: String,
     args: Vec<String>,
-    env: Vec<(String, String)>,
+    env: ChildEnv,
     herd: Arc<CodexHerd>,
 }
 
@@ -69,29 +76,19 @@ impl CodexSource {
         Self {
             program: program.into(),
             args,
-            env,
+            env: ChildEnv::Exactly(env),
             herd: Arc::new(CodexHerd::new()),
         }
     }
 
-    /// The production shape: `codex` on the `PATH` (or `KAMPR_CODEX`), under a `CODEX_HOME`
-    /// that is ours — the threads this source creates must not mix with the operator's own
-    /// codex sessions.
-    pub fn from_env() -> Self {
+    /// The production shape: `codex` (or `KAMPR_CODEX`) under `shell`'s login environment, so
+    /// its tools and its `CODEX_HOME` (unset is `~/.codex`, the operator's own login) are what
+    /// a terminal codex would have, less the keys and endpoints codex reads (probe row 697).
+    pub fn from_env(shell: &str) -> Self {
         let program = std::env::var("KAMPR_CODEX").unwrap_or_else(|_| "codex".into());
-        let home = std::env::var("CODEX_HOME")
-            .ok()
-            .or_else(|| {
-                std::env::var("HOME")
-                    .ok()
-                    .map(|home| format!("{home}/.kampr/codex"))
-            })
-            .unwrap_or_else(|| "/tmp/kampr-codex".into());
-        Self::new(
-            program,
-            vec!["app-server".into(), "--stdio".into()],
-            vec![("CODEX_HOME".into(), home)],
-        )
+        let mut source = Self::new(program, vec!["app-server".into(), "--stdio".into()], Vec::new());
+        source.env = ChildEnv::Login(LoginEnv::new(shell));
+        source
     }
 
     /// Extra flags for the app-server, after `app-server --stdio`.
@@ -107,7 +104,11 @@ impl CodexSource {
 
     /// Spawn the server and get through the handshake.
     async fn boot(&self) -> Result<Pump, Refusal> {
-        let pump = Pump::spawn(&self.program, &self.args, &self.env)
+        let env = match &self.env {
+            ChildEnv::Exactly(env) => env.clone(),
+            ChildEnv::Login(login) => child_env::CODEX.strip(login.get().await),
+        };
+        let pump = Pump::spawn(&self.program, &self.args, &env)
             .await
             .map_err(|e| Refusal::new(format!("the codex app-server will not start: {e}")))?;
         pump.handshake()

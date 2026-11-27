@@ -111,7 +111,7 @@ impl MuffitProvider {
 }
 
 pub fn agent_status(info: &SessionInfo) -> AgentStatus {
-    if info.permission.is_some() {
+    if info.permission.is_some() || info.question.is_some() {
         return AgentStatus::Blocked;
     }
     match info.state {
@@ -205,7 +205,17 @@ mod tests {
             (SessionState::Created, None, AgentStatus::Idle),
             (SessionState::Paused, None, AgentStatus::Idle),
         ];
-        for (state, permission, want) in cases {
+        let asked = crate::wire::Question {
+            id: 1,
+            text: "Which approach?".into(),
+            options: vec!["Refactor".into()],
+            free_text: false,
+        };
+        let cases = cases
+            .into_iter()
+            .map(|(state, permission, want)| (state, permission, None, want))
+            .chain([(SessionState::Running, None, Some(asked), AgentStatus::Blocked)]);
+        for (state, permission, question, want) in cases {
             let info = SessionInfo {
                 id: "s1".into(),
                 state,
@@ -215,6 +225,7 @@ mod tests {
                 branch: None,
                 model: None,
                 permission,
+                question,
                 clients: Vec::new(),
             };
             assert_eq!(agent_status(&info), want, "{state:?}");

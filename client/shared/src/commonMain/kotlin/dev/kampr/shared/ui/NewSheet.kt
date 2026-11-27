@@ -16,6 +16,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
+import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.hasDesk
 import dev.kampr.shared.model.isNative
 import dev.kampr.shared.model.paneTitle
@@ -42,8 +44,10 @@ import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SessionInfo
 import dev.kampr.shared.wire.SplitDirection
+import dev.kampr.shared.wire.StoredConversation
+import kotlinx.coroutines.delay
 
-private enum class Step { Menu, Workspace, Tab, Worktree, Session, Native, Muffit, Node }
+private enum class Step { Menu, Workspace, Tab, Worktree, Session, Native, Muffit, Claude, Node }
 
 private enum class Pick { Native, Workspace, Split, Agent, KamprAgent }
 
@@ -59,7 +63,7 @@ private val SESSION_NAME = Regex("^[A-Za-z0-9_-]{1,64}$")
 // already what they were looking at. `rename`, `close` and `focus` are not creates at all, and
 // `layout.export` answers with the caller's own container.
 private const val PANE_SPLIT = "pane.split"
-private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.", "agent.start", ManageOp.NativeCreate.OP, ManageOp.MuffitCreate.OP)
+private val OPENS = listOf("workspace.create", "tab.create", PANE_SPLIT, "worktree.", "agent.start", ManageOp.NativeCreate.OP, ManageOp.MuffitCreate.OP, ManageOp.ClaudeCreate.OP, ManageOp.ClaudeResume.OP)
 
 // A shell alias cannot be started by `agent.start` — an alias only exists inside an interactive
 // shell — but the argv behind one can, and the node has always forwarded it. Somebody who wants
@@ -96,6 +100,8 @@ fun NewSheet(
     onRefreshCaps: () -> Unit = {},
     agentArgs: AgentArgs = NoAgentArgs,
     muffit: Boolean = false,
+    // An ask whose answer this sheet has to tell from an older one's: `rid` comes back on its ack.
+    onAsk: (ManageOp, rid: String) -> Unit = { op, _ -> onManage(op) },
 ) {
     val tokens = Kampr.tokens
     var step by remember { mutableStateOf(Step.Menu) }
@@ -120,6 +126,10 @@ fun NewSheet(
     var nativeDesk by remember { mutableStateOf(true) }
     var muffitPrompt by remember { mutableStateOf(TextFieldValue()) }
     var muffitTerminal by remember { mutableStateOf(true) }
+    var claudePrompt by remember { mutableStateOf(TextFieldValue()) }
+    var stored by remember(node.id) { mutableStateOf<List<StoredConversation>?>(null) }
+    var resumableAsks by remember { mutableIntStateOf(0) }
+    var resumableRefusal by remember(node.id) { mutableStateOf<String?>(null) }
     var worktreePath by remember { mutableStateOf(TextFieldValue()) }
     var existingWorktree by remember { mutableStateOf(false) }
     var agentPane by remember(node.id) { mutableStateOf<String?>(null) }
@@ -160,6 +170,13 @@ fun NewSheet(
     // the list is `caps.sessions` and the node caches that answer.
     LaunchedEffect(outcome) {
         val ack = outcome ?: return@LaunchedEffect
+        if (ack.op == ManageOp.ClaudeResumable.OP) {
+            // The reply names no directory, so only the rid says it answers the one typed now.
+            if (ack.rid != "resumable-$resumableAsks") return@LaunchedEffect
+            resumableRefusal = (ack.message ?: ack.code).takeUnless { ack.ok }
+            stored = ack.resumable.orEmpty()
+            return@LaunchedEffect
+        }
         if (ack.op != inFlight) return@LaunchedEffect
         inFlight = null
         when {
@@ -184,6 +201,18 @@ fun NewSheet(
                 onDismiss()
             }
         }
+    }
+
+    // The list is for the directory typed, so it is asked again once typing settles there.
+    val resumeIn = cwd.text.trim().ifEmpty { null }
+    // A reconnect asks again: an ask that went out as the socket dropped is never answered.
+    val live = LocalConnectionStatus.current is ConnectionStatus.Live
+    LaunchedEffect(step == Step.Claude, resumeIn, live) {
+        if (step != Step.Claude) return@LaunchedEffect
+        stored = null
+        resumableRefusal = null
+        delay(RESUMABLE_SETTLE)
+        onAsk(ManageOp.ClaudeResumable(node.id, resumeIn), "resumable-${++resumableAsks}")
     }
 
     fun run(op: ManageOp) {
@@ -309,6 +338,10 @@ fun NewSheet(
 
         Step.Native -> "Start Kampr session" to startNative
 
+        Step.Claude -> "Start conversation" to {
+            run(ManageOp.ClaudeCreate(nodeId, trimmedCwd, claudePrompt.text.trim().ifEmpty { null }))
+        }
+
         Step.Muffit -> {
             val prompt = muffitPrompt.text.trim().ifEmpty { null }
             val start: () -> Unit = { run(ManageOp.MuffitCreate(nodeId, prompt, trimmedCwd, muffitTerminal)) }
@@ -343,6 +376,7 @@ fun NewSheet(
                 Step.Session -> "Named session"
                 Step.Native -> "Kampr session"
                 Step.Muffit -> "Muffit session"
+                Step.Claude -> CLAUDE_CARD
                 Step.Node -> "Machine"
             },
             subtitle = listOfNotNull("On ${node.name}", pane?.workspace).joinToString(" · "),
@@ -532,6 +566,17 @@ fun NewSheet(
                         desk = nativeDesk.takeIf { node.hasDesk },
                         onDesk = { nativeDesk = it },
                         beside = pane?.takeUnless { it.isNative }?.let(::paneTitle),
+                    )
+
+                    Step.Claude -> ClaudeFields(
+                        cwd = cwd,
+                        onCwd = { cwd = it },
+                        prompt = claudePrompt,
+                        onPrompt = { claudePrompt = it },
+                        stored = stored,
+                        refusal = resumableRefusal,
+                        nodeName = node.name,
+                        onResume = { run(ManageOp.ClaudeResume(nodeId, it)) },
                     )
 
                     Step.Muffit -> Fields {
@@ -772,6 +817,16 @@ private fun KamprCards(compact: Boolean, kampr: KamprPick) {
                 subtitle = "An agent that is a conversation, not a terminal",
                 compact = compact,
                 onClick = { onStep(Step.Muffit) },
+            )
+        }
+        if (node.claude == true) {
+            SheetCard(
+                icon = KamprIcons.chat,
+                iconTint = tokens.color.dim,
+                title = CLAUDE_CARD,
+                subtitle = "A conversation with Claude, with no terminal behind it",
+                compact = compact,
+                onClick = { onStep(Step.Claude) },
             )
         }
         SheetCard(

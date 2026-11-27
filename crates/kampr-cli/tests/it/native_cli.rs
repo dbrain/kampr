@@ -16,7 +16,7 @@ const SOON: Duration = Duration::from_secs(10);
 
 const ECHO: &str = r#"echo prior-output; while read l; do case $l in size) stty size;; quit) exit 3;; *) echo "got $l";; esac; done"#;
 
-struct Root(tempfile::TempDir, tempfile::TempDir);
+struct Root(tempfile::TempDir, tempfile::TempDir, Vec<(&'static str, String)>);
 
 impl Root {
     fn new() -> Self {
@@ -27,7 +27,13 @@ impl Root {
                 .tempdir_in("/tmp")
                 .expect("root"),
             tempfile::tempdir().expect("a config dir"),
+            Vec::new(),
         )
+    }
+
+    fn with_env(mut self, key: &'static str, value: impl Into<String>) -> Self {
+        self.2.push((key, value.into()));
+        self
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -37,8 +43,10 @@ impl Root {
             .env("KAMPR_CONFIG_DIR", self.1.path())
             .env("KAMPR_KEEP_ROOT", self.0.path())
             .env("KAMPR_KEEP_LAUNCH", "detached")
+            .env("SHELL", "/bin/sh")
             .env_remove("HERDR_PANE_ID")
-            .env_remove("HERDR_SOCKET_PATH");
+            .env_remove("HERDR_SOCKET_PATH")
+            .envs(self.2.iter().map(|(k, v)| (k, v)));
         command
     }
 
@@ -370,6 +378,122 @@ fn ls_lists_and_attach_resolves_prefixes_and_reports_an_ended_session() {
     );
 }
 
+/// herdr runs the stored `resume_argv` into a restored pane, and after a boot the id in it names a
+/// keeper directory that lived on tmpfs (docs/25, "The stale attach").
+#[test]
+fn a_restored_attach_to_a_session_the_machine_lost_ends_in_a_shell_and_a_typo_still_errors() {
+    let root = Root::new();
+    let cwd = std::env::current_dir().expect("cwd").canonicalize().expect("cwd");
+    let mut term = Term::open(&root, &["attach", "--restored", "01dead"], 100, 30);
+    term.shows("ended with the machine");
+    term.type_line("echo here:$(pwd -P)");
+    term.shows(&format!("here:{}", cwd.display()));
+    term.type_line("exit 7");
+    assert_eq!(term.exit_code(), 7, "{}", term.raw());
+
+    let typo = root.run(&["attach", "01dead"]);
+    assert!(!typo.status.success());
+    assert!(String::from_utf8_lossy(&typo.stderr).contains("no session matches"));
+
+    let live = root.new_detached(ECHO);
+    let attached = Term::open(&root, &["attach", "--restored", live.id()], 100, 30);
+    attached.shows("prior-output");
+    assert!(!attached.screen().contains("ended with the machine"));
+
+    let other = root.new_detached(ECHO);
+    let common = live
+        .id()
+        .chars()
+        .zip(other.id().chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let ambiguous = root.run(&["attach", "--restored", &live.id()[..common]]);
+    assert!(!ambiguous.status.success());
+    assert!(String::from_utf8_lossy(&ambiguous.stderr).contains("matches 2 sessions"));
+}
+
+type Requests = Arc<Mutex<Vec<serde_json::Value>>>;
+
+/// herdr's socket as far as a restored pane's attach needs it: one JSON line in, `ok` out, the
+/// connection closed, as herdr does after every call.
+fn fake_herdr(socket: &std::path::Path) -> Requests {
+    use std::io::BufRead;
+    let listener = std::os::unix::net::UnixListener::bind(socket).expect("herdr's socket");
+    let seen = Requests::default();
+    let sink = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            let mut line = String::new();
+            std::io::BufReader::new(&stream)
+                .read_line(&mut line)
+                .expect("a request");
+            sink.lock()
+                .expect("seen")
+                .push(serde_json::from_str(&line).expect("json"));
+            (&stream)
+                .write_all(b"{\"id\":\"kampr\",\"result\":{\"type\":\"ok\"}}\n")
+                .expect("reply");
+        }
+    });
+    seen
+}
+
+fn methods(seen: &Requests) -> Vec<String> {
+    let seen = seen.lock().expect("seen");
+    seen.iter()
+        .map(|r| r["method"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+/// herdr keeps the argv it was last given for a pane and types it after every restart, and a
+/// report without one does not replace it (#694), so the pane that found the argv stale gives
+/// herdr one that does nothing. Only a restored attach does: a typo at a prompt is not herdr's.
+#[test]
+fn a_restored_attach_to_a_lost_session_replaces_the_argv_herdr_stored_for_its_pane() {
+    let dir = tempfile::Builder::new()
+        .prefix("kh")
+        .tempdir_in("/tmp")
+        .expect("a dir");
+    let socket = dir.path().join("herdr.sock");
+    let seen = fake_herdr(&socket);
+    let root = Root::new()
+        .with_env("HERDR_SOCKET_PATH", socket.to_string_lossy())
+        .with_env("HERDR_PANE_ID", "w1:p9");
+
+    root.run(&["attach", "01dead"]);
+    assert!(
+        methods(&seen).is_empty(),
+        "a typo is not a restore: {:?}",
+        methods(&seen)
+    );
+
+    let mut term = Term::open(&root, &["attach", "--restored", "01dead"], 100, 30);
+    term.shows("ended with the machine");
+    term.type_line("echo shell-is-up");
+    term.shows("shell-is-up");
+    assert_eq!(methods(&seen), ["pane.report_agent", "pane.release_agent"]);
+    let (report, release) = {
+        let seen = seen.lock().expect("seen");
+        (seen[0]["params"].clone(), seen[1]["params"].clone())
+    };
+    assert_eq!(report["pane_id"], "w1:p9");
+    assert_eq!(report["source"], "kampr");
+    assert_eq!(report["resume_argv"], serde_json::json!(["true"]));
+    // A release without a newer `seq` is answered ok and dropped (#695).
+    assert!(release["seq"].as_u64() > report["seq"].as_u64(), "{release}");
+    term.type_line("exit");
+    assert_eq!(term.exit_code(), 0);
+
+    let live = root.new_detached(ECHO);
+    let attached = Term::open(&root, &["attach", "--restored", live.id()], 100, 30);
+    attached.shows("prior-output");
+    assert_eq!(
+        methods(&seen).len(),
+        2,
+        "a session that is there is not a lost one"
+    );
+}
+
 /// The node keeps its sessions where `native.root` says, so the CLI must look there too, or
 /// `kampr ls` on that machine lists nothing the phone can see.
 #[test]
@@ -519,4 +643,42 @@ fn replayed(session: &SessionDir) -> String {
         .read_rows(top, top + u32::from(rows) - 1)
         .expect("the screen's rows")
         .join("\n")
+}
+
+/// A record a program left before the boot (docs/25) is offered at the restored pane under the
+/// default `ask`; yes starts it as a new session, no gives the shell, and either way it is spent.
+#[test]
+fn a_restored_attach_offers_the_command_the_lost_session_registered() {
+    let state = tempfile::tempdir().expect("a state dir");
+    let record = |id: &str| {
+        let dir = state.path().join("resume");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = serde_json::json!({
+            "label": "work", "offset": 1,
+            "owners": [{ "pid": 1, "start": null, "time": 0, "at": 1, "tried": false,
+                         "command": { "argv": ["sh", "-c", "echo RESUMED-$((40+2)); exec sh"], "cwd": "/tmp" } }],
+        });
+        std::fs::write(dir.join(format!("{id}.json")), file.to_string()).unwrap();
+        dir.join(format!("{id}.json"))
+    };
+    let root = Root::new().with_env("KAMPR_STATE_DIR", state.path().display().to_string());
+
+    let yes = record("01deadyes");
+    let term = Term::open(&root, &["attach", "--restored", "01deadyes"], 100, 30);
+    term.shows("Resume it?");
+    assert!(term.screen().contains("echo RESUMED"), "{}", term.raw());
+    term.type_line("y");
+    term.shows("RESUMED-42");
+    assert!(!yes.exists(), "a record survived its resume");
+    assert_eq!(root.sessions().len(), 1);
+
+    let no = record("01deadno");
+    let term = Term::open(&root, &["attach", "--restored", "01deadno"], 100, 30);
+    term.shows("Resume it?");
+    term.type_line("n");
+    term.shows("ended with the machine");
+    assert!(
+        no.exists(),
+        "a declined record is offered again at the next restore"
+    );
 }

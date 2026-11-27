@@ -11,6 +11,7 @@ import dev.kampr.shared.wire.ControlOption
 import dev.kampr.shared.wire.Limits
 import dev.kampr.shared.wire.LiveTool
 import dev.kampr.shared.wire.LiveTurn
+import dev.kampr.shared.wire.PendingField
 import dev.kampr.shared.wire.Reply
 import dev.kampr.shared.wire.ServerMsg
 import dev.kampr.shared.wire.SessionFacts
@@ -288,5 +289,41 @@ class ConvoSeamWireTest {
         // word and the pane draws it rather than dropping the frame.
         val grew = Wire.decode("""{"t":"convo.abilities","pane":"p","abilities":{"input":["a_new_word"]}}""")
         assertEquals(ServerMsg.ConvoAbilities("p", Abilities(input = listOf("a_new_word"))), grew)
+    }
+
+    // A form's fields ride on `pending` exactly as the node's serde writes them, `type` and all.
+    @Test
+    fun aPendingFormDecodesItsKindAndFields() {
+        val msg = Wire.decode(
+            """{"t":"pending","pane":"p","question":"Pick","source":"transcript","id":"f1","kind":"form",""" +
+                """"options":[{"key":"1","label":"Submit"}],""" +
+                """"fields":[{"name":"colour","title":"Colour","type":"string","required":true,"choices":["red","teal"]},""" +
+                """{"name":"count","detail":"how many","type":"integer"}]}""",
+        ) as ServerMsg.Pending
+        assertEquals("form", msg.kind)
+        assertEquals(
+            listOf(
+                PendingField("colour", "Colour", null, "string", true, listOf("red", "teal")),
+                PendingField("count", null, "how many", "integer"),
+            ),
+            msg.fields,
+        )
+        assertTrue(msg.form)
+        val bare = Wire.decode("""{"t":"pending","pane":"p","question":"Q","source":"screen","options":[]}""") as ServerMsg.Pending
+        assertNull(bare.kind)
+        assertTrue(bare.fields.isEmpty())
+    }
+
+    // An `input` the node can queue under the client's own id, and the frame that takes it back.
+    @Test
+    fun aQueuedMessageCarriesItsIdAndCanBeTakenBack() {
+        val queued = Wire.json.parseToJsonElement(Wire.encode(ClientMsg.InputText("p", "run the gate", id = "m1", queue = "next"))).jsonObject
+        assertEquals("input", queued["t"]!!.jsonPrimitive.content)
+        assertEquals("m1", queued["id"]!!.jsonPrimitive.content)
+        assertEquals("next", queued["when"]!!.jsonPrimitive.content)
+        val plain = Wire.json.parseToJsonElement(Wire.encode(ClientMsg.InputText("p", "x"))).jsonObject
+        assertFalse("id" in plain || "when" in plain, "a reply to a pane says neither: $plain")
+        val back = Wire.json.parseToJsonElement(Wire.encode(ClientMsg.InputUnqueue("p", "m1"))).jsonObject
+        assertEquals(mapOf("t" to "input.unqueue", "pane" to "p", "id" to "m1"), back.mapValues { it.value.jsonPrimitive.content })
     }
 }

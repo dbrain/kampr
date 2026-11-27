@@ -20,7 +20,7 @@ kampr-watch = { path = "../kampr-watch" }
 libc.workspace = true
 memchr.workspace = true
 postcard.workspace = true
-rustix = { workspace = true, features = ["event", "termios"] }
+rustix = { workspace = true, features = ["event", "fs", "process", "termios"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

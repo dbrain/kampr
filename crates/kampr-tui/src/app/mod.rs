@@ -1,7 +1,9 @@
 mod act;
 mod chrome;
 mod copy;
+mod declared;
 mod docker;
+mod headless;
 mod host;
 mod tiles;
 
@@ -127,6 +129,8 @@ pub(super) type Claim = (String, u16, u16);
 pub(super) struct Acked {
     pub ack: Managed,
     pub claim: Option<Claim>,
+    /// The node an op was about, where its ack does not name one: `native.resumable`'s.
+    pub about: Option<String>,
 }
 
 pub struct App {
@@ -145,6 +149,12 @@ pub struct App {
     pub images: Images,
     pub convo: Convo,
     pub composer: crate::convo::Composer,
+    pub declared: crate::convo::Declared,
+    sheet: Option<crate::convo::Sheet>,
+    new_claude: Option<crate::headless::NewClaude>,
+    /// What each node kept to resume after a reboot, and the nodes asked on this socket.
+    resumes: HashMap<String, Vec<crate::resume::Record>>,
+    asked_resumes: HashSet<String>,
     pub layout: Layout,
     focus: Option<String>,
     last: Option<String>,
@@ -251,6 +261,11 @@ impl App {
             images,
             convo: Convo::new(),
             composer: crate::convo::Composer::default(),
+            declared: crate::convo::Declared::default(),
+            sheet: None,
+            new_claude: None,
+            resumes: HashMap::new(),
+            asked_resumes: HashSet::new(),
             layout: Layout::default(),
             focus: None,
             last: None,
@@ -527,11 +542,13 @@ impl App {
                 self.refocus();
                 self.sync_watches();
                 self.watch_alerts();
+                self.ask_resumes();
             }
             Event::Herd => {
                 self.refocus();
                 self.sync_watches();
                 self.watch_alerts();
+                self.ask_resumes();
             }
             Event::Refused { origin } => self.refused(origin),
             Event::HoldLost { pane } => {
@@ -553,11 +570,13 @@ impl App {
                 // offering to stop a hold nobody had.
                 self.matching = None;
                 self.told.clear();
+                self.asked_resumes.clear();
                 self.asking = None;
                 self.declined = None;
                 self.settling = None;
                 self.note(reason.clone());
                 self.convo.absorb(event);
+                self.absorb_declared(event);
                 self.settle_answers();
             }
             // Not a second greeting: only the write affordances move, and they are gated on the
@@ -598,6 +617,7 @@ impl App {
                 self.search.found(pane, query, matches.clone(), *total, true);
                 self.aim_at_match(&pane.clone());
             }
+            Event::ConvoUpdate { .. } | Event::ConvoHeard { .. } => self.absorb_declared(event),
             Event::Convo(_)
             | Event::ConvoTurn { .. }
             | Event::ConvoFacets { .. }
@@ -674,7 +694,10 @@ impl App {
         let convo = &self.convo;
         self.composer.settle(|pane, answering| {
             convo.pending(pane).is_some_and(|p| {
-                p.id == answering.id && p.options.iter().any(|o| o.text && o.key == answering.key)
+                p.id == answering.id
+                    && p.options
+                        .iter()
+                        .any(|o| (o.text || answering.form.is_some()) && o.key == answering.key)
             })
         });
     }
@@ -712,7 +735,10 @@ impl App {
             Click::Hooks { pane, act } => self.hooks(&pane, act),
             Click::Save { pane, id } => self.save(&pane, &id),
             Click::Passthrough { pane, text } => {
-                self.client.typed(&pane, &text);
+                let modes = self.client.state().herd.pane(&pane).and_then(|e| e.modes);
+                if crate::mouse::hears_reports(modes) {
+                    self.client.typed(&pane, &text);
+                }
             }
             Click::Wheel { pane, up, cell } => self.wheel(pane, up, cell),
             Click::Menu(menu) => self.context_menu(menu),
@@ -767,26 +793,25 @@ impl App {
             return;
         }
         // Nothing above the viewport for kampr to move into: the program has the alternate screen
-        // and herdr keeps no ring behind one (#387), so the notch is the program's.
-        if self.rings.get(&pane).is_none_or(Vec::is_empty) {
-            let sent = {
-                let state = self.client.state();
-                let entry = state.herd.pane(&pane);
-                cell.and_then(|cell| {
-                    crate::mouse::handoff(
-                        entry.and_then(|e| e.agent.as_deref()),
-                        entry.and_then(|e| e.cmd.as_deref()),
-                        up,
-                        cell,
-                        WHEEL,
-                    )
-                })
-            };
-            if let Some(text) = sent
-                && self.writes()
-            {
-                self.client.typed(&pane, &text);
-            }
+        // and herdr keeps no ring behind one (#387), so the notch is the program's. A ring under a
+        // program that holds the screen is the shell from before it, and the notch is still its.
+        let ringed = self.rings.get(&pane).is_some_and(|ring| !ring.is_empty());
+        let sent = {
+            let state = self.client.state();
+            let entry = state.herd.pane(&pane);
+            let agent = entry.and_then(|e| e.agent.as_deref());
+            let cmd = entry.and_then(|e| e.cmd.as_deref());
+            let modes = entry.and_then(|e| e.modes);
+            cell.filter(|_| !ringed || crate::mouse::beats_the_ring(agent, cmd, modes))
+                .and_then(|cell| crate::mouse::handoff(agent, cmd, modes, up, cell, WHEEL))
+        };
+        if let Some(text) = sent
+            && self.writes()
+        {
+            self.client.typed(&pane, &text);
+            return;
+        }
+        if !ringed {
             return;
         }
         let at = self.scrolls.entry(pane).or_default();

@@ -180,6 +180,8 @@ impl App {
         };
         self.draw_docker(modal, frame.buffer_mut());
         self.draw_host(modal, frame.buffer_mut());
+        self.draw_sheet(modal, frame.buffer_mut());
+        self.draw_new_claude(modal, frame.buffer_mut());
         if self.keybinds {
             self.draw_keybinds(frame, area);
         }
@@ -255,39 +257,49 @@ impl App {
         //
         // It leads with the pane's own name because a lone pane is flush and has no border title
         // to carry it — a `pane.rename` would otherwise land nowhere the operator can see.
-        let here = self.focus.as_ref().and_then(|pane| {
-            let state = self.client.state();
-            let entry = state.herd.pane(pane)?;
-            let mut parts = vec![label(entry)];
-            if let Some(node) = state.herd.node(&entry.node_id) {
-                parts.push(node.name.clone());
-            }
-            if let Some(cwd) = entry.cwd.as_deref() {
-                parts.push(kampr_core::naming::home_relative(cwd).into_owned());
-            }
-            Some(format!("{} ", parts.join(" \u{b7} ")))
-        });
+        // The pane's own name, with whatever OSC 7501 says of it, outlasts the host and directory
+        // when the strip is too narrow for all of it: a failure is the half worth keeping.
+        let here: Vec<String> = self
+            .focus
+            .as_ref()
+            .and_then(|pane| {
+                let state = self.client.state();
+                let entry = state.herd.pane(pane)?;
+                let mut parts = vec![label(entry)];
+                if let Some(node) = state.herd.node(&entry.node_id) {
+                    parts.push(node.name.clone());
+                }
+                if let Some(cwd) = entry.cwd.as_deref() {
+                    parts.push(kampr_core::naming::home_relative(cwd).into_owned());
+                }
+                Some(vec![
+                    format!("{} ", parts.join(" \u{b7} ")),
+                    format!("{} ", label(entry)),
+                ])
+            })
+            .unwrap_or_default();
         Paragraph::new(Line::from(spans))
             .style(Style::default().bg(t.bar))
             .render(area, frame.buffer_mut());
         // Right-aligned, and only where it does not reach the tabs: a truncated hostname is worse
         // than none, and the tabs are the half that is navigable.
-        if let Some(here) = here {
+        if let Some(here) = here
+            .into_iter()
+            .find(|here| area.width > x.saturating_add(here.chars().count() as u16))
+        {
             let width = here.chars().count() as u16;
-            if area.width > x.saturating_add(width) {
-                Paragraph::new(Line::from(Span::styled(
-                    here,
-                    Style::default().fg(t.mute).bg(t.bar),
-                )))
-                .render(
-                    Rect {
-                        x: area.x + area.width - width,
-                        width,
-                        ..area
-                    },
-                    frame.buffer_mut(),
-                );
-            }
+            Paragraph::new(Line::from(Span::styled(
+                here,
+                Style::default().fg(t.mute).bg(t.bar),
+            )))
+            .render(
+                Rect {
+                    x: area.x + area.width - width,
+                    width,
+                    ..area
+                },
+                frame.buffer_mut(),
+            );
         }
     }
 
@@ -463,12 +475,24 @@ impl App {
             // whole of what was wrong with this view.
             let wanted = self.composer.height(pane, surface.width, role.writes());
             let rows = wanted.min(surface.height.saturating_sub(1));
+            let declared = self
+                .declared
+                .lines(pane, self.composer.text(pane), surface.width, &t);
+            let told = (declared.len() as u16).min(surface.height.saturating_sub(rows + 1));
             let above = Rect {
-                height: surface.height - rows,
+                height: surface.height - rows - told,
                 ..surface
             };
+            for (i, line) in declared.iter().take(told as usize).enumerate() {
+                frame.buffer_mut().set_line(
+                    surface.x,
+                    above.y + above.height + i as u16,
+                    line,
+                    surface.width,
+                );
+            }
             let box_at = Rect {
-                y: surface.y + above.height,
+                y: surface.y + above.height + told,
                 height: rows,
                 ..surface
             };
@@ -665,6 +689,12 @@ impl App {
                         Style::default().fg(t.accent).add_modifier(Modifier::BOLD),
                     )),
                 ));
+                for line in self.resume_lines(&group.node.id) {
+                    rows.push((
+                        None,
+                        Line::from(Span::styled(line, Style::default().fg(t.working))),
+                    ));
+                }
                 for pane in group.panes {
                     rows.push((Some(pane.id.clone()), herd_line(pane, &state.herd, &t, false)));
                 }
@@ -840,7 +870,11 @@ impl App {
 }
 
 fn label(entry: &PaneEntry) -> String {
-    sidebar::name(entry)
+    let name = sidebar::name(entry);
+    match crate::program::note(entry) {
+        Some(note) => format!("{name} · {note}"),
+        None => name,
+    }
 }
 
 /// `pacman -Syu · 2 need you · 1 running · 1 done · 1 failed`

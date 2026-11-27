@@ -15,6 +15,11 @@ mod convo;
 mod fake;
 mod linked;
 mod live;
+mod refused;
+mod roles;
+mod sources;
+mod unattached;
+mod warnings;
 
 use fake::{Daemon, Fake, TOKEN, finished, session, text};
 
@@ -470,7 +475,8 @@ async fn a_permission_prompt_is_pending_and_answered_over_rest() {
     let pending = client
         .frame("the prompt", |f| f["t"] == "pending" && !f["question"].is_null())
         .await;
-    assert_eq!(pending["source"], "transcript", "{pending}");
+    assert_eq!(pending["source"], "conversation", "{pending}");
+    assert_eq!(pending["kind"], "permission", "{pending}");
     assert_eq!(pending["header"], "bash", "{pending}");
     assert_eq!(pending["question"], prompt["action"], "{pending}");
     assert_eq!(

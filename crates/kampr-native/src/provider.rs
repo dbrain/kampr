@@ -2,19 +2,21 @@ use crate::layout::{Layouts, tab_of};
 use crate::live::{self, Live};
 use crate::procs;
 use crate::reflow::{self, Views};
+use crate::resume::{self, Resumable, Resume};
 use crate::screen::Screen;
 use crate::watcher::{self, Change};
 use crate::workspaces::{WORKSPACE_PREFIX, Workspaces};
 use anyhow::{Context, Result, anyhow, bail};
 use async_trait::async_trait;
 use kampr_core::desk::{Desk, DeskReport, Hosting};
+use kampr_core::program::ProgramStatus;
 use kampr_core::provider::{
-    AgentStatus, Found, Input, NativeExit, NativePane, PaneInfo, PaneStream, ProgramStatus, Provider,
-    RawScrollback, Reflow, split_view,
+    AgentStatus, Found, Input, NativeExit, NativePane, PaneInfo, PaneStream, Provider, RawScrollback, Reflow,
+    split_view,
 };
 use kampr_core::tile::Split;
 use kampr_journal::process::{Harness, PaneProcess};
-use kampr_keep::{Ending, Launch, SessionDir, Spec};
+use kampr_keep::{Ending, Launch, Mode, SessionDir, Spec};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -55,6 +57,8 @@ pub struct NativeConfig {
     /// `KAMPR_HOOK_SOCKET`, which the hook Claude runs reads instead of a path, so a `~/.claude`
     /// shared between nodes holds one command for all of them.
     pub hook_env: Vec<(String, String)>,
+    /// `None` is the same as `Mode::Off`: no session gets a token and nothing is stored.
+    pub resume: Option<Resume>,
 }
 
 impl NativeConfig {
@@ -76,6 +80,7 @@ impl NativeConfig {
             send_argv: false,
             forget_ended: false,
             hook_env: Vec::new(),
+            resume: None,
         })
     }
 }
@@ -102,6 +107,9 @@ pub struct NativeProvider {
 pub(crate) struct Inner {
     pub(crate) config: NativeConfig,
     lives: Mutex<HashMap<String, Arc<Live>>>,
+    /// Each token this node issued, by session id, from before its keeper starts: the directory
+    /// watcher can adopt a session before `resume.token` can be written into it.
+    tokens: Mutex<HashMap<String, kampr_core::resume::Token>>,
     holds: Mutex<HashMap<String, Hold>>,
     lease: AtomicU64,
     lost: broadcast::Sender<(String, u64)>,
@@ -123,6 +131,7 @@ impl NativeProvider {
             .with_context(|| format!("creating {}", config.root.display()))?;
         let inner = Arc::new(Inner {
             lives: Mutex::new(HashMap::new()),
+            tokens: Mutex::new(HashMap::new()),
             holds: Mutex::new(HashMap::new()),
             lease: AtomicU64::new(1),
             lost: broadcast::channel(LOST_DEPTH).0,
@@ -148,12 +157,14 @@ impl NativeProvider {
 
     /// `env` first because herdr refuses a `resume_argv` that starts with a path, and does not
     /// give a restored pane the `env` it was split with (#583), so the root rides in the argv.
+    /// `--restored` is what lets herdr's re-run of it after a boot end in a shell (#694).
     pub fn resume_argv(&self, session_id: &str) -> Vec<String> {
         vec![
             "env".to_string(),
             format!("KAMPR_KEEP_ROOT={}", self.inner.config.root.display()),
             self.inner.config.attach.display().to_string(),
             "attach".to_string(),
+            "--restored".to_string(),
             session_id.to_string(),
         ]
     }
@@ -191,12 +202,25 @@ impl NativeProvider {
         spec.cohort = new.cohort;
         spec.workspace = new.workspace;
         spec.container = new.container;
+        let token = resume::issue(self.inner.config.resume.as_ref(), &mut spec);
+        if let Some(token) = &token {
+            self.inner
+                .tokens
+                .lock()
+                .unwrap()
+                .insert(spec.id.clone(), token.clone());
+        }
         let config = self.inner.config.clone();
         let session = tokio::task::spawn_blocking(move || {
             let launch = config.launch.unwrap_or_else(Launch::auto);
             kampr_keep::spawn(&config.root, spec, launch, &config.keeper)
         })
         .await??;
+        if let Some(token) = token
+            && let Err(e) = resume::write_token(session.path(), &token)
+        {
+            tracing::warn!(session = session.id(), error = %e, "keeping a session's resume token");
+        }
         let pane = format!("{PREFIX}{}", session.id());
         self.inner.adopt(session);
         self.inner.bump();
@@ -214,9 +238,59 @@ impl NativeProvider {
     pub fn close(&self, pane: &str) -> Result<()> {
         let session = self.require(pane)?;
         std::fs::write(session.path().join(CLOSED), b"").with_context(|| format!("marking {pane} closed"))?;
+        self.inner.unresume(session.id());
         kampr_keep::close(&session).with_context(|| format!("hanging up {pane}"))?;
         self.inner.sweep(&session);
         Ok(())
+    }
+
+    /// What a boot left behind that a person can bring back (docs/25), which is every stored
+    /// command whose session is gone.
+    pub fn resumable(&self) -> Vec<Resumable> {
+        match &self.inner.config.resume {
+            Some(resume) => resume::listed(resume, &self.session_ids()),
+            None => Vec::new(),
+        }
+    }
+
+    /// Starts what `id` (from [`Self::resumable`]) names as a new session; the program reports
+    /// again from there. A record is spent once taken, whatever becomes of the run.
+    pub async fn resume(&self, id: &str) -> Result<String> {
+        let resume = self.inner.config.resume.as_ref().context("resume is off")?;
+        let (label, owner) = resume::take(resume, &self.session_ids(), id)
+            .with_context(|| format!("{id} cannot be resumed"))?;
+        self.create(NewSession {
+            argv: resume::launch_argv(&owner.command),
+            cwd: owner.command.cwd,
+            label,
+            cols: 80,
+            rows: 24,
+            ..NewSession::default()
+        })
+        .await
+    }
+
+    /// Spends what `id` names without running it, the way a resume that failed is spent.
+    pub fn dismiss(&self, id: &str) -> Result<()> {
+        let resume = self.inner.config.resume.as_ref().context("resume is off")?;
+        resume::take(resume, &self.session_ids(), id)
+            .map(drop)
+            .with_context(|| format!("{id} cannot be dismissed"))
+    }
+
+    /// `[native] resume = "auto"`: everything `resumable` lists, started now.
+    pub async fn resume_all(&self) {
+        for record in self.resumable() {
+            if let Err(e) = self.resume(&record.id).await {
+                tracing::warn!(record = %record.id, error = %format!("{e:#}"), "resuming after a restart");
+            }
+        }
+    }
+
+    fn session_ids(&self) -> std::collections::HashSet<String> {
+        kampr_keep::list(&self.inner.config.root)
+            .map(|sessions| sessions.iter().map(|s| s.id().to_string()).collect())
+            .unwrap_or_default()
     }
 
     /// Refuses a live session, as `fleet.forget` does: forgetting one would leave a program
@@ -349,7 +423,7 @@ impl NativeProvider {
     }
 
     pub fn program(&self, pane: &str) -> Option<ProgramStatus> {
-        self.live(pane).ok()?.program()
+        self.live(pane).ok()?.program()?.fold()
     }
 
     pub fn visible(&self, pane: &str) -> Option<String> {
@@ -434,14 +508,25 @@ impl Inner {
         let mut lives = self.lives.lock().unwrap();
         lives
             .entry(session.id().to_string())
-            .or_insert_with(|| Live::start(session, self.topology.clone()))
+            .or_insert_with(|| {
+                let token = self.tokens.lock().unwrap().remove(session.id());
+                Live::start(session, self.topology.clone(), self.config.resume.clone(), token)
+            })
             .clone()
+    }
+
+    /// Closing a session on purpose is the person saying it needs no resuming.
+    fn unresume(&self, session: &str) {
+        if let Some(resume) = &self.config.resume {
+            resume::forget(resume, session);
+        }
     }
 
     fn forget(&self, session: &SessionDir) -> Result<()> {
         if let Some(live) = self.lives.lock().unwrap().remove(session.id()) {
             live.stop();
         }
+        self.unresume(session.id());
         self.holds
             .lock()
             .unwrap()
@@ -506,6 +591,10 @@ impl Inner {
 
     fn pane_info(&self, session: &SessionDir, live: Option<&Live>) -> Option<PaneInfo> {
         let spec = session.spec().ok()?;
+        // A pipe-mode session is a headless Claude, listed by kampr-claude as a `c:` pane.
+        if spec.mode == Mode::Pipe {
+            return None;
+        }
         let keeper = session.keeper();
         let ending = session.ending();
         let lost = ending == Some(Ending::Lost);
@@ -535,6 +624,11 @@ impl Inner {
                 (cols, rows, 0, String::new(), String::new())
             }
         };
+        // A program that died with mouse tracking on leaves it on, and nothing at the prompt it left
+        // behind has asked for a report, so the modes are only the program's while one is running.
+        let modes = live
+            .filter(|_| exit.is_none() && matches!(&job, Some((_, Some(_)))))
+            .map(|live| live.with_screen(Screen::modes));
         let program = live.and_then(Live::program).filter(|_| exit.is_none());
         let mut status = live.map_or(AgentStatus::Idle, Live::status);
         if agent.is_some()
@@ -606,6 +700,7 @@ impl Inner {
                 program,
                 container: spec.container.clone(),
             }),
+            modes,
             ..PaneInfo::default()
         })
     }
@@ -767,18 +862,12 @@ impl Provider for NativeProvider {
             .unwrap_or_default()
     }
 
-    /// A pager takes the alternate screen for a moment and gives it back (#244); only a harness
-    /// holds it for its whole life, so only a harness supersedes the ring.
+    /// Whatever the program is called: the node sees the alternate screen itself, and a terminal
+    /// shows nothing else while it is up. A pager that gives it back gets the era back as a new one
+    /// (`ScrollbackRing::ingest`, #244).
     fn harness_owns_the_screen(&self, pane_id: &str) -> bool {
-        let Ok(live) = self.live(split_view(pane_id).0) else {
-            return false;
-        };
-        live.with_screen(|s| s.alternate_screen())
-            && live
-                .dir
-                .keeper()
-                .and_then(|k| procs::foreground(k.child))
-                .is_some_and(|fg| procs::harness(&fg).is_some())
+        self.live(split_view(pane_id).0)
+            .is_ok_and(|live| live.with_screen(|s| s.alternate_screen()))
     }
 
     fn reflow(&self, pane_id: &str) -> Reflow {
@@ -864,13 +953,6 @@ fn remove_settled(path: &Path) -> std::io::Result<()> {
             Err(e) => return Err(e),
         }
     }
-}
-
-pub fn login_shell() -> String {
-    std::env::var("SHELL")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "/bin/sh".to_string())
 }
 
 #[cfg(test)]

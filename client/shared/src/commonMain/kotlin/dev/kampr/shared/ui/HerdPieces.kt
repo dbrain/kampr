@@ -92,6 +92,7 @@ fun StatusMark(status: AgentStatus, size: Dp = 8.dp, modifier: Modifier = Modifi
 fun paneSpoken(pane: PaneInfo, now: Double): String = listOfNotNull(
     paneTitle(pane),
     statusWord(statusOf(pane)),
+    programFailure(pane),
     pane.container?.let { "container $it" },
     pane.cwd,
     "updated ${relativeTime(pane.updatedAt, now)}",
@@ -369,6 +370,7 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
     val manage = LocalManage.current
     Surface(
         modifier
+            .progressEdge(pane.programProgress, tokens.color.working, tokens.radii.lg)
             .paneMenu(pane.id)
             .action(
                 "Open ${paneSpoken(pane, now)}",
@@ -382,7 +384,7 @@ fun PaneCard(pane: PaneInfo, now: Double, onClick: () -> Unit, modifier: Modifie
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Badge(36.dp, 16.dp, statusIcon(status), statusColor(status), statusWord(status))
+            ProgramMarked(pane, badge = true) { Badge(36.dp, 16.dp, statusIcon(status), statusColor(status), statusWord(status)) }
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 KText(
                     paneTitle(pane),
@@ -416,6 +418,7 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
             .fillMaxWidth()
             .let { if (active) it.background(tokens.color.raise, shape) else it }
             .touchable(LANDSCAPE_TOUCH)
+            .progressEdge(pane.programProgress, tokens.color.working, tokens.radii.sm)
             .paneMenu(pane.id)
             .action(
                 "Open ${paneSpoken(pane, now)}",
@@ -429,7 +432,7 @@ fun PaneRow(pane: PaneInfo, now: Double, active: Boolean, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-        StatusMark(status, 7.dp)
+        ProgramMarked(pane) { StatusMark(status, 7.dp) }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             KText(
                 paneTitle(pane),

@@ -27,6 +27,12 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 
 #[path = "conversation/answers.rs"]
 mod answers;
+#[path = "conversation/declared.rs"]
+mod declared;
+#[path = "conversation/headless.rs"]
+mod headless;
+#[path = "conversation/programs.rs"]
+mod programs;
 
 const BEAT: Duration = Duration::from_secs(2);
 /// Long enough for a frame the client wrote to reach the scripted node over a loopback socket,

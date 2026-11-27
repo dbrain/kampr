@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Whether this node starts Claude with no terminal at all; off, no op makes one.
+    #[serde(default = "headless_default")]
+    pub headless: bool,
     /// Guard 1: `plan` starts a session that would be paid any other way refuses.
     pub billing: Billing,
     /// Guard 6: what an overage (`isUsingOverage`) does to a turn.
@@ -17,13 +20,14 @@ pub struct Config {
     pub mode: String,
     /// A `CLAUDE_CONFIG_DIR` to run under; empty is the operator's own `~/.claude`.
     pub config_dir: String,
-    /// The `claude` binary; empty is `claude` on `PATH`.
+    /// The `claude` binary; a bare name, and empty is `claude`, is found by the login shell.
     pub binary: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            headless: headless_default(),
             billing: Billing::default(),
             overage: Overage::default(),
             unattended_turns: unattended_default(),
@@ -33,6 +37,10 @@ impl Default for Config {
             binary: String::new(),
         }
     }
+}
+
+fn headless_default() -> bool {
+    true
 }
 
 fn unattended_default() -> u32 {
@@ -80,6 +88,7 @@ mod tests {
     #[test]
     fn a_missing_section_is_a_plan_session_at_the_default_cap() {
         let config: Config = toml::from_str("").unwrap();
+        assert!(config.headless);
         assert_eq!(config.billing, Billing::Plan);
         assert_eq!(config.overage, Overage::Refuse);
         assert_eq!(config.unattended_turns, 20);
@@ -90,6 +99,7 @@ mod tests {
     fn a_configured_section_reads_its_words() {
         let config: Config = toml::from_str(
             r#"
+headless = false
 billing = "api"
 overage = "ask"
 unattended_turns = 4
@@ -100,6 +110,7 @@ binary = "/usr/local/bin/claude"
 "#,
         )
         .unwrap();
+        assert!(!config.headless);
         assert_eq!(config.billing, Billing::Api);
         assert_eq!(config.overage, Overage::Ask);
         assert_eq!(config.unattended_turns, 4);

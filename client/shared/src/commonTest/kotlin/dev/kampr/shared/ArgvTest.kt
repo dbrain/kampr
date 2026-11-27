@@ -2,6 +2,7 @@ package dev.kampr.shared
 
 import dev.kampr.shared.util.bypassesSafety
 import dev.kampr.shared.util.commandLine
+import dev.kampr.shared.util.displayArgv
 import dev.kampr.shared.util.parseArgs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -38,6 +39,26 @@ class ArgvTest {
             commandLine("claude", listOf("--dangerously-skip-permissions")),
         )
         assertEquals("""claude --p "two words"""", commandLine("claude", listOf("--p", "two words")))
+    }
+
+    // docs/25: a stored command is shown before it is run, so what is shown has to be exactly what
+    // runs. An element is one argument whatever is in it, and nothing in one may move the cursor,
+    // reorder the line or hide a character.
+    @Test
+    fun aStoredCommandIsShownEscapedOneArgumentPerWord() {
+        val cases = listOf(
+            listOf("nvim", "-S", "/home/u/s.vim") to "nvim -S /home/u/s.vim",
+            listOf("echo", "two words") to "echo 'two words'",
+            listOf("sh", "-c", "a; b") to "sh -c 'a; b'",
+            listOf("echo", "$(reboot)") to "echo '$(reboot)'",
+            listOf("echo", "it's") to "echo 'it'\\''s'",
+            listOf("echo", "") to "echo ''",
+            listOf("echo", "a\nb") to "echo $'a\\nb'",
+            listOf("printf", "\u001b[2J") to "printf $'\\x1b[2J'",
+            listOf("cat", "evil\u202Etxt.sh") to "cat $'evil\\u{202e}txt.sh'",
+            listOf("echo", "café") to "echo 'café'",
+        )
+        for ((argv, shown) in cases) assertEquals(shown, displayArgv(argv), "argv: $argv")
     }
 
     // A flag that removes a confirmation step is the one thing that must never be remembered

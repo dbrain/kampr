@@ -913,9 +913,10 @@ async fn warm(
         && let Some((session, local)) = node.resolve(pane)
         && let Some(link) = session.muffit_link(&local)
     {
-        if let Some(prompt) = crate::muffit::prompt(&link.provider, &link.session) {
+        let asks = crate::muffit::standing(&link);
+        if !asks.is_empty() {
             body["pending"] =
-                serde_json::to_value(crate::muffit::pending(pane, Some(&prompt))).unwrap_or_default();
+                serde_json::to_value(crate::conversations::pending(pane, &asks)).unwrap_or_default();
         }
     } else if let Some(pane) = query.pane.as_deref()
         && blocked(pane)

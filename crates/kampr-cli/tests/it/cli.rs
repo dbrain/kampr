@@ -119,6 +119,13 @@ impl Cli {
         // Port 1 refuses instantly, which is the "could not ask" verdict; a test that wants one of
         // the other three points this at an `Upstream` of its own through `with_env`.
         command.env("KAMPR_ASSETLINKS_API", "http://127.0.0.1:1/v1/statements:list");
+        // `doctor`'s muffit check would otherwise read the operator's server.token and ask the
+        // daemon they run.
+        command
+            .env("HOME", self.nowhere.join("home"))
+            .env_remove("MUFFIT_SERVER_TOKEN")
+            .env_remove("MUFFIT_HOME")
+            .env_remove("MUFFIT_CONFIG_FILE");
         for (key, value) in &self.env {
             command.env(key, value);
         }

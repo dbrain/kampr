@@ -1,3 +1,4 @@
+use crate::program::{ProgramRecords, ProgramState, ProgramStatus};
 use crate::provider::{AgentStatus, PaneInfo};
 use crate::registry::PaneUpdate;
 use crate::scrollback::ScrollbackDoc;
@@ -181,6 +182,14 @@ pub struct NodeEntry {
     /// addressed at it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub muffit: Option<bool>,
+    /// Whether this node starts Claude with no terminal (docs/21), so the `claude.*` ops may be
+    /// addressed at it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claude: Option<bool>,
+    /// Whether this node keeps what a boot left (docs/25), so `native.resumable` may be
+    /// addressed at it. `native` alone is not enough: 0.1.153 keeps sessions and refuses the op.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume: Option<bool>,
     /// `Some(false)` is a node with herdr off, by its config or by herdr not being installed:
     /// nothing herdr-shaped is offered on it and nothing says herdr is missing. `None` is an older
     /// node, for which herdr is as on as it always was.
@@ -400,6 +409,67 @@ pub struct PaneEntry {
     /// docs/19: the name of the container this pane is a shell into.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
+    /// `true` while what the pane's programs reported over `OSC 7501` folds to `error` (docs/24).
+    /// `agent_status` has no such word and an older client draws an unknown one blank, so the
+    /// pane's status stays `idle` and this says it failed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub program_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_msg: Option<String>,
+    /// The record set behind the status, most urgent first and at most
+    /// [`crate::program::WIRE_ROWS`]; absent while the root record is all there is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program: Option<Vec<ProgramEntry>>,
+    /// 0–100 from the working record the status folds to, the root's included, which `program`
+    /// leaves out while the root is all there is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub program_progress: Option<u8>,
+    /// What the pane's program asked of the mouse and the cursor keys (docs/26), which is what a
+    /// client chooses its wheel, drag and click bytes by. Absent where the node cannot know: a herdr
+    /// pane reports none (probe #686), and a node that predates it sends none. A client without it
+    /// keeps choosing by `agent`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modes: Option<crate::modes::PaneModes>,
+}
+
+/// One record of a pane's `OSC 7501` set; the root record's `id` is empty and `app` is the one it
+/// inherits.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramEntry {
+    pub id: String,
+    pub state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress: Option<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub msg: Option<String>,
+}
+
+impl ProgramEntry {
+    fn rows(records: &ProgramRecords) -> Vec<Self> {
+        records
+            .rows()
+            .into_iter()
+            .map(|r| Self {
+                id: r.id.clone(),
+                state: r.state.word().to_string(),
+                kind: r.kind.map(|k| k.word().to_string()),
+                progress: r.progress,
+                app: records.app_of(&r.id).map(str::to_string),
+                title: r.title.clone(),
+                msg: r.msg.clone(),
+            })
+            .collect()
+    }
+}
+
+fn folded(p: &PaneInfo) -> Option<ProgramStatus> {
+    p.native.as_ref()?.program.as_ref()?.fold()
 }
 
 /// **A signal is reported as a signal**, as on a fleet run, and a keeper that died without
@@ -518,6 +588,22 @@ impl PaneEntry {
                 path: t.path.clone(),
             }),
             container: p.native.as_ref().and_then(|n| n.container.clone()),
+            program_error: folded(p).is_some_and(|s| s.state == ProgramState::Error),
+            program_msg: folded(p)
+                .filter(|s| s.state == ProgramState::Error)
+                .and_then(|s| s.message),
+            program: p
+                .native
+                .as_ref()
+                .and_then(|n| n.program.as_ref())
+                .map(ProgramEntry::rows)
+                .filter(|rows| !rows.is_empty()),
+            program_progress: p
+                .native
+                .as_ref()
+                .and_then(|n| n.program.as_ref())
+                .and_then(ProgramRecords::progress),
+            modes: p.modes,
         }
     }
 
@@ -604,12 +690,39 @@ pub struct PendingOption {
     pub text: bool,
 }
 
+/// What answering a `pending` means, where the node knows. A permission is allowed or denied, a
+/// question chosen or worded, a plan approved or revised with what to change, and a form filled
+/// from its `fields`. Absent on a dialog read off a screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PendingKind {
+    Permission,
+    Question,
+    Plan,
+    Form,
+}
+
+impl PendingKind {
+    pub fn of(ability: crate::conversation::AskAbility) -> Self {
+        use crate::conversation::AskAbility as A;
+        match ability {
+            A::Permission | A::Always | A::EditInput => Self::Permission,
+            A::Question | A::FreeText => Self::Question,
+            A::Plan => Self::Plan,
+            A::Form | A::Url => Self::Form,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PendingSource {
     Transcript,
     Screen,
     Hook,
+    /// The conversation seam's own question (a headless Claude, Codex or muffit): answered to
+    /// the source directly, never by keys into a pane.
+    Conversation,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -803,6 +916,12 @@ pub enum ServerMsg {
         /// Which question this is, on one a hook asked. An `answer` naming another is refused.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<PendingKind>,
+        /// A form's inputs. Its `Submit` is answered with `reply.form.values`, one per field
+        /// by `name`, typed as the field says.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fields: Vec<crate::conversation::AskField>,
     },
     /// The harness's own word that a prompt was submitted, with its exact text (#631).
     #[serde(rename = "convo.heard")]
@@ -1022,6 +1141,9 @@ pub enum ErrorCode {
     /// A native session refused what was asked of it: it has ended, or its keeper is not
     /// answering. Never herdr's fault, so never `herdr_unavailable`.
     SessionUnavailable,
+    /// A Claude hand-over that would stop a turn, a question or a command in flight. The message
+    /// names what; the same op with `interrupt` stops it and moves.
+    Busy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

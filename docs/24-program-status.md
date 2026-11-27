@@ -24,7 +24,7 @@ Read from `crates/kampr-native/src/answer.rs` (`program()`) and `kampr-core/src/
 | `kind` only on `blocked`; an unknown kind is absent | kept on any state | ignore it elsewhere |
 | Lifetime: `working`/`blocked` dropped on process exit or a new shell prompt (`OSC 133 A`); `done`/`error` survive both; no heartbeat | cleared by `state=clear` or the session's exit; `OSC 133` is not handled anywhere (grep) | a shell that runs a program reporting `working` and is killed leaves `working` for ever |
 | `RIS` removes every record, `DECSTR` does not, an alternate-screen switch does nothing | not checked | check, then test |
-| `error` is its own state | held as `ProgramState::Error`, shown on the wire as `idle` ("the wire has no error state") | decision below |
+| `error` is its own state | held as `ProgramState::Error`, shown on the wire as `idle` ("the wire has no error state") | decided: `program_error` carries it (below) |
 | Rate-limit anything a record causes outside the terminal | not checked for per-record causes | check when records can raise pushes |
 
 ## The model
@@ -90,9 +90,40 @@ found panes change nothing. If herdr ever relays 7501, the same parser applies.
 4. A node test that a worker's `blocked` makes the pane `blocked` and raises one push.
 5. Mutation-check each: restore the defect, watch it fail (#191).
 
-## Decisions for the operator
+## Status (built 2026-11-27)
 
-- Fold subagent records into the session, or keep ignoring them? (recommend fold, after the probe)
-- Add `program_error`/`program`, or leave `error` as `idle` and ship only the parser hardening?
-  (recommend the fields: it is the only way the phone ever says "failed")
-- Per-record rows in the client, or only the fold plus a progress bar?
+Steps 1–4 are built, and step 5 below: the web client and the TUI (`kampr-tui/src/program.rs`) draw the records.
+
+- `kampr-core/src/program.rs` holds the record set, the fold and the wire rows;
+  `program/report.rs` is the strict parser (every limit above, the id and app grammar, base64 with
+  exact padding when padded, no control character after decoding, a bad `msg`/`title`/`id`/`app`
+  discards the report, any other bad pair is skipped). `ProgramStatus` is now the fold's answer.
+- `answer.rs` hands each `OSC 7501` body to the parser, `OSC 133 A` and `RIS` become lifetime
+  events; `DECSTR` and the alternate screen do nothing. The session's child exiting ends
+  `working`/`blocked` once the screen has read the whole log (`Live::settle_exit`).
+- The checkpoint is version 2: the records ride after `Saved`; version 1's single report is read
+  back as a root record.
+- `state.rs` takes the program's status wherever the fold has an answer; push's question for a
+  native pane is the fold's `msg`, so a worker's `blocked` raises one push like the root's.
+- Wire: `program_error`, `program_msg`, `program[]` (docs/04).
+
+Measured since: Claude 2.1.326 reports each subagent as `id=<17 hex>:title=<description>` and
+clears it when it ends, and reports a subagent's permission on the **root**, so folding changes only
+that a session stays `working` while a subagent runs (probe #690). Neither zsh nor bash here emits
+`OSC 133 A` (#693), so in practice it is the child's exit that ends a killed program's `working`.
+codex 0.171.0 carries a 7501 string (#692) and is not driven yet.
+
+## Decisions taken
+
+- **Subagent records are folded into the session**, after the probe: Claude's subagent records
+  only keep a session `working` while a subagent runs (#690).
+- **`program_error` and `program[]` are on the wire** (with `program_msg`), so the phone can say
+  "failed"; `error` is no longer flattened to `idle` with nothing beside it.
+
+Step 5 is built (2026-11-27): the herd row and the pane header mark `program_error` with the
+warning corner and a "Failed" status (`program_msg` on hover or a long press), a working row and
+header carry a hairline for `program_progress` (a new pane field, the folded working record's
+progress, so a root-only report reaches the client too), and the header's "N programs" status opens a
+Programs sheet listing every record under its parent (an upright phone opens it with a long press on
+its status mark). `ProgramStatusUiTest`, `ProgramLinesTest`; artboards in
+`ProgramResumeArtboardTest`.

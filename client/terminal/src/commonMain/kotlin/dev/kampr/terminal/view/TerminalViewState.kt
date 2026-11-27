@@ -87,6 +87,10 @@ class TerminalViewState {
     var minPanX = 0f
     var maxScroll = 0f
 
+    // How far up a hand may take the surface while the pane's program has the wheel. Above it is
+    // nothing of the program's screen (TerminalView sets it).
+    var ceiling = Float.POSITIVE_INFINITY
+
     // Where a hand may go, and the half of the drag's clamp that `maxScroll` is not. Zero is the
     // bottom of the *grid*, and a herdr pane is as tall as the desk made it — so on a pane whose
     // output stops above the last row, everything between the end of the record and the end of the
@@ -273,7 +277,10 @@ class TerminalViewState {
     // `maxScroll` rather than trusted against it because the two are written from different points
     // of one composition, and a frame in which the content floor is a rectangle old is a frame in
     // which it can be the larger of the two.
-    private fun clampScroll(value: Float): Float = value.coerceIn(min(contentFloor, maxScroll), max(maxScroll, 0f))
+    private fun clampScroll(value: Float): Float {
+        val low = min(contentFloor, maxScroll)
+        return value.coerceIn(low, max(min(maxScroll, ceiling), max(low, 0f)))
+    }
 
     // The horizontal half of `following`, and it was missing. `followCursorPan` puts the caret a
     // margin in from the left, and a caret inside that margin lands the surface on `panX = 0` —

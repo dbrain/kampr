@@ -109,6 +109,8 @@ pub struct Managed {
     pub message: Option<String>,
     pub layout: Option<Value>,
     pub detail: Option<Value>,
+    /// `claude.resumable` and `native.resumable` answer with a list under this one name.
+    pub resumable: Option<Value>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
@@ -165,12 +167,73 @@ pub struct Pending {
     /// Which question this is, where the node names one. An answer carries it back so the node can
     /// refuse a press aimed at a question that has since been replaced.
     pub id: Option<String>,
+    /// `permission`, `question`, `plan` or `form`, where the node knows. An open string: a
+    /// word this build has never heard of is answered by its keys, as before there was one.
+    pub kind: Option<String>,
+    pub fields: Vec<PendingField>,
 }
 
 impl Pending {
     /// A prompt is cleared by the same message with a null question; there is no resolved event.
     pub fn outstanding(&self) -> bool {
         self.question.is_some()
+    }
+
+    /// A form answered from here: its `1` is sent with the values of its `fields`. A hooked
+    /// form publishes none, and is the terminal's.
+    pub fn form(&self) -> bool {
+        self.kind.as_deref() == Some("form") && !self.fields.is_empty()
+    }
+
+    /// What it acts on: its context, or a form's fields one per line.
+    pub fn described(&self) -> Option<String> {
+        match self.context.as_deref().filter(|c| !c.trim().is_empty()) {
+            Some(context) => Some(context.to_string()),
+            None if self.fields.is_empty() => None,
+            None => Some(
+                self.fields
+                    .iter()
+                    .map(PendingField::described)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+        }
+    }
+}
+
+/// One input of a form, as `pending.fields` carries it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct PendingField {
+    pub name: String,
+    pub title: Option<String>,
+    pub detail: Option<String>,
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub required: bool,
+    pub choices: Vec<String>,
+}
+
+impl PendingField {
+    pub fn label(&self) -> &str {
+        self.title.as_deref().unwrap_or(&self.name)
+    }
+
+    /// `Colour (colour) · string · required · red|teal`, the hook card's wording for a field.
+    pub fn described(&self) -> String {
+        let mut parts = vec![match &self.title {
+            Some(title) => format!("{title} ({})", self.name),
+            None => self.name.clone(),
+        }];
+        parts.push(self.kind.clone());
+        if self.required {
+            parts.push("required".into());
+        }
+        if !self.choices.is_empty() {
+            parts.push(self.choices.join("|"));
+        }
+        parts.extend(self.detail.clone());
+        parts.join(" · ")
     }
 }
 
@@ -305,6 +368,11 @@ pub enum Event {
         text: String,
     },
     ClaudeHooks(ClaudeHooks),
+    /// One of the frames a conversation's source declares beyond its turns (docs/21 Phase 2).
+    ConvoUpdate {
+        pane: String,
+        update: crate::convo::ConvoUpdate,
+    },
     /// The answer to a `caps` request: the agent kinds this node knows and the sessions it has.
     Caps(NodeCaps),
     /// A `managed` ack nothing was waiting on — one sent without an `rid`, or one whose caller

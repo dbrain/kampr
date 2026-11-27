@@ -383,6 +383,17 @@ the only place any of it is exercised. What differs:
   `.bashrc`.
 - **A keeper's `ctl.sock` must fit in 104 bytes.** The default root, `/tmp/kampr-<uid>/s`, does; a
   root under `$TMPDIR` (`/var/folders/…`) does not.
+- **The default root stays under `/tmp` on a Mac.** `/private/tmp` is emptied at boot, which is the
+  intent, and may also be swept of files nothing has touched for days (not measured: no Mac was in reach).
+  `~/Library/Caches/kampr/s` would survive the sweep, and `<root>/<26-character id>/ctl.sock` there is
+  65 bytes plus the user's name. It is not the default because a node upgrade would stop seeing every
+  session under the old root, and a home on a long path would need a length check and a fallback, none of
+  which can be tested without a Mac. A Mac that wants it sets `native.root` in `config.toml` to an
+  absolute path that keeps `<root>/<id>/ctl.sock` under 104 bytes.
+- **A keeper that crashes ends its session.** Linux hands the PTY to systemd's fd store (#590) and a
+  restarted keeper takes it back; launchd has no equivalent. The keepers outlive the node
+  because they double-fork with `setsid`; the plist's `AbandonProcessGroup` is the counterpart of the
+  unit's `KillMode=process`, not what keeps them.
 - **Hanging up a group whose processes have all exited answers `EPERM`** rather than `ESRCH`, which
   `close` takes as an ending.
 

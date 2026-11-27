@@ -11,6 +11,7 @@ mod herd;
 mod host;
 mod integrations;
 mod keep;
+mod muffit;
 mod observe;
 mod origin;
 mod render;
@@ -132,6 +133,7 @@ async fn collect(dirs: &Dirs) -> Report {
     checks.push(host::linger(&service));
     checks.push(host::fleet_path(&config));
     checks.push(keep::check(&config));
+    checks.push(muffit::check(&config).await);
     let service_path = service.installed.then(crate::service::manager_path).flatten();
     let running = match config.docker.enabled {
         Some(false) => None,

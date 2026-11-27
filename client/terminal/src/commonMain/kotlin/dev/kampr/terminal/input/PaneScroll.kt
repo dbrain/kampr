@@ -1,5 +1,6 @@
 package dev.kampr.terminal.input
 
+import dev.kampr.shared.wire.PaneModes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
@@ -27,6 +28,11 @@ enum class ScrollKeys {
     // recalled the operator's input history.
     Notch,
 
+    // A program that took the mouse and is not one of the two above: a report moves it a row, which
+    // scrolls it correctly if not smoothly, so a program nobody has measured degrades in smoothness
+    // rather than breaking.
+    Report,
+
     // Alternate scroll, and the default for everything else: the wheel becomes cursor keys. The
     // caret moves and the view follows it at the edge — which is exactly what herdr does with vim,
     // so the two surfaces behave alike rather than one of them inventing something.
@@ -36,35 +42,73 @@ enum class ScrollKeys {
     CursorKeys,
 }
 
-// Harnesses measured to do better than the default: they take a real wheel report, so their view
-// moves without their caret moving. Claude Code 2.1.252 sets `?1000h` and `?1006h` at startup and
-// scrolls its transcript on one (#388). Same stance `SUBMIT_KEYS` takes on the node — a harness
-// nobody has probed is not guessed at, it just gets the default.
-private val TAKES_THE_WHEEL = setOf("claude")
+// How far a report moves a program that took the mouse, by name, because that is what is measured
+// and nothing the program says. Claude ramps (#567); muffit's TUI moves a fixed three rows a report.
+// A program in neither gets a row a report, which scrolls it correctly if not smoothly, so a program
+// nobody has measured degrades in smoothness rather than breaking.
+private val RAMPS = setOf("claude")
 
-private val TAKES_A_NOTCH = setOf("muffit")
+private val FIXED_NOTCH = setOf("muffit")
+
+// herdr labels a muffit TUI pane nothing and names its job `muffit-tui` however it was started
+// (#699), so the job names it. Claude is still named by its label alone: a ring under an unlabelled
+// `claude` job is history to scroll until its label arrives.
+private val BY_JOB = mapOf("muffit-tui" to "muffit")
+
+private fun program(agent: String?, cmd: String?): String? = agent ?: BY_JOB[cmd?.substringAfterLast('/')]
+
+private fun tuned(program: String?): ScrollKeys? = when (program) {
+    in RAMPS -> ScrollKeys.Wheel
+    in FIXED_NOTCH -> ScrollKeys.Notch
+    else -> null
+}
 
 private const val NOTCH_ROWS = 3
 
 // Which keys this pane is scrolled with, or nothing at all.
 //
-// **`cmd` is the gate, and it fails closed.** It is the pane's foreground job as the node reports
-// it, and it is null both when the pane is sitting at its prompt and when nothing could tell —
-// ble.sh keeps a job in the shell's own process group, so herdr answers nothing for it (#297) and
-// the node's procfs walk is what recovers the name. Either way, null means the shell may be the
-// thing listening, and cursor keys into a shell's line editor recall its history. Nothing is sent
-// there, whatever else is known about the pane: a harness label outlives the harness, so `agent`
-// alone would still be typing into the prompt a minute after the agent quit.
-fun paneScrollKeys(agent: String?, cmd: String?): ScrollKeys? = when {
+// **What the program asked for decides, when the node said** (`modes`, docs/26): a mouse mode it set
+// is a report, the alternate screen with alternate scroll on is cursor keys, and anything else is
+// nothing, whatever the pane's `agent` says. A shell at its prompt has set none of those. A mouse
+// mode without SGR encoding is sent nothing: its reports stop at column 223 and no program measured
+// needs them.
+//
+// **Without modes, `cmd` is the gate, and it fails closed**, for a herdr pane (#292, #686) and a node
+// that predates the field. It is the pane's foreground job as the node reports it, and it is null both
+// when the pane is sitting at its prompt and when nothing could tell — ble.sh keeps a job in the
+// shell's own process group, so herdr answers nothing for it (#297) and the node's procfs walk is what
+// recovers the name. Either way, null means the shell may be the thing listening, and cursor keys into
+// a shell's line editor recall its history. Nothing is sent there, whatever else is known about the
+// pane: a harness label outlives the harness, so `agent` alone would still be typing into the prompt a
+// minute after the agent quit.
+fun paneScrollKeys(agent: String?, cmd: String?, modes: PaneModes? = null): ScrollKeys? = when {
+    modes != null -> when {
+        modes.tracksMouse -> if (modes.mouseSgr) tuned(program(agent, cmd)) ?: ScrollKeys.Report else null
+        modes.altScreen && modes.altScroll -> ScrollKeys.CursorKeys
+        else -> null
+    }
+
     cmd == null -> null
-    agent != null && agent in TAKES_THE_WHEEL -> ScrollKeys.Wheel
-    agent != null && agent in TAKES_A_NOTCH -> ScrollKeys.Notch
-    else -> ScrollKeys.CursorKeys
+
+    else -> tuned(program(agent, cmd)) ?: ScrollKeys.CursorKeys
 }
+
+// Whether the wheel goes to the program while Kampr holds a ring for the pane. The ring under a
+// program that holds the alternate screen is the shell session from before it started. A native
+// pane's node drops it under any such program, but a herdr pane's node only under one it can name
+// (#686, #699), and an older node never named muffit, so muffit keeps a by-name fallback here.
+//
+// **With modes, rules 1 and 2 of docs/26 beat the ring**, as in every terminal. **Without them, only a
+// program measured to hold the alternate screen for its whole run does**: muffit-tui sets `?1049h`
+// before it draws anything, where Claude's classic renderer writes its turns into a ring that is
+// the conversation itself (#588), so a ring under a labelled Claude is history to scroll.
+private val HOLDS_THE_SCREEN = setOf("muffit")
+
+fun paneWheelBeatsTheRing(agent: String?, cmd: String?, modes: PaneModes?): Boolean = modes != null || program(agent, cmd) in HOLDS_THE_SCREEN
 
 // SGR (`?1006h`): a wheel is a press with no release — 64 up, 65 down — at 1-based cell coordinates.
 internal fun scrollReport(keys: ScrollKeys, up: Boolean, col: Int, row: Int): String = when (keys) {
-    ScrollKeys.Wheel, ScrollKeys.Notch -> "\u001b[<${if (up) 64 else 65};${col + 1};${row + 1}M"
+    ScrollKeys.Wheel, ScrollKeys.Notch, ScrollKeys.Report -> "\u001b[<${if (up) 64 else 65};${col + 1};${row + 1}M"
     ScrollKeys.CursorKeys -> if (up) "\u001bOA" else "\u001bOB"
 }
 
@@ -78,7 +122,7 @@ internal fun scrollReport(keys: ScrollKeys, up: Boolean, col: Int, row: Int): St
 internal class Landing(val rows: Int, val ramp: Double?)
 
 internal fun ScrollKeys.land(count: Int, reversed: Boolean, ramp: Double? = null): Landing = when (this) {
-    ScrollKeys.CursorKeys -> Landing(count, null)
+    ScrollKeys.CursorKeys, ScrollKeys.Report -> Landing(count, null)
 
     ScrollKeys.Notch -> Landing(count * NOTCH_ROWS, null)
 
@@ -160,6 +204,7 @@ class PaneScroll(
     private var atCol = 0
     private var atRow = 0
     private var pump: Job? = null
+    private var overshot = 0
     private val answers = Channel<Boolean>(Channel.CONFLATED)
 
     val queued: Int get() = pending
@@ -171,12 +216,23 @@ class PaneScroll(
     // makes 10-30 detents a second, and the ramp is what Claude does for a wheel spun fast.
     fun wheel(rows: Int, col: Int, row: Int) {
         if (rows == 0) return
+        if (lastUp != (rows > 0)) overshot = 0
         lastUp = rows > 0
-        val reports = if (keys == ScrollKeys.Notch) (abs(rows) + NOTCH_ROWS - 1) / NOTCH_ROWS else abs(rows)
+        val reports = if (keys == ScrollKeys.Notch) notches(abs(rows)) else abs(rows)
         repeat(reports) {
             trace?.sent(keys, reports = 1, rows = 1)
             send(scrollReport(keys, rows > 0, col, row))
         }
+    }
+
+    // A part-notch is rounded up so that it moves the program at all, and the rows that moved
+    // beyond it are paid back by the next ones, or a trackpad's row-an-event stream moves muffit
+    // three rows for each.
+    private fun notches(rows: Int): Int {
+        val owed = rows - overshot
+        val reports = if (owed <= 0) 0 else (owed + NOTCH_ROWS - 1) / NOTCH_ROWS
+        overshot = reports * NOTCH_ROWS - owed
+        return reports
     }
 
     fun refused(distance: Float, step: Float, col: Int, row: Int) {

@@ -17,6 +17,7 @@ class GridProbe {
     var cellHeight = 1f
     var cols = 1
     var totalRows = 1
+    var historyRows = 0
     var contentTop = 0f
     var contentBottom = 0f
 
@@ -30,6 +31,13 @@ class GridProbe {
         val col = floor((position.x - originX) / cellWidth).toInt().coerceIn(0, cols - 1)
         val row = floor((position.y - originY) / cellHeight).toInt().coerceIn(0, totalRows - 1)
         return GridPoint(row, col)
+    }
+
+    // The cell as a row of the program's own screen, which is what a report to the program names:
+    // the surface counts the ring above it as rows too.
+    fun screenCellAt(position: Offset): GridPoint {
+        val cell = cellAt(position)
+        return GridPoint((cell.row - historyRows).coerceIn(0, (totalRows - historyRows - 1).coerceAtLeast(0)), cell.col)
     }
 }
 

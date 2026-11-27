@@ -124,6 +124,8 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "reachable": true,          // its kampr answers; ABSENT from an older node
                "native": true,             // it keeps native sessions; ABSENT when it does not
                "muffit": true,             // it lists its muffit daemon's sessions; ABSENT when it does not
+               "claude": true,             // it starts Claude with no terminal (docs/21); ABSENT when it does not
+               "resume": true,             // it answers native.resumable (docs/25); ABSENT on 0.1.153, which keeps sessions and refuses it
                "rtt_ms": 0.4, "herdr_version": "0.8.2",
                "build": "0.1.21",          // this node's kampr build — see "Version skew"
                "update": "0.1.2",          // ABSENT unless a newer release exists — see below
@@ -149,6 +151,13 @@ this arrives, so a client must gate on it rather than on the role it was greeted
                "fleet": { },                          // ABSENT on every ordinary pane — see "Fleet runs"
                "provider": "native",                 // ABSENT unless Kampr keeps the session ("native") or muffit does ("muffit")
                "container": "kobbler-postgres-1",    // ABSENT unless it is a `docker.shell` into that container
+               "modes": { "mouse": "press", "mouse_sgr": true, "alt_scroll": true,
+                          "app_cursor": false, "alt_screen": true },   // ABSENT on herdr panes — see "`modes`"
+               "program_error": true,                // ABSENT unless the OSC 7501 records fold to `error` — see "`program`"
+               "program_msg": "API Error: 400",      // ABSENT unless `program_error`
+               "program": [ { "id": "us-east", "state": "working", "progress": 40, "app": "deploy",
+                              "title": "US East", "msg": "Pushing image" } ],   // ABSENT unless more than a root record
+               "program_progress": 40,               // ABSENT unless the record the status folds to is working with a progress
                "tile": { "group": "01J.../w3:t1",    // ABSENT on a pane in no tree — see "Tiles"
                          "path": [ { "split": "right", "ratio": 600, "second": true },
                                    { "split": "down",  "ratio": 300 } ] },
@@ -232,6 +241,55 @@ desk (probe #294). That is a node-side setting (`naming.report_to_herdr`), **off
 because marking somebody's screen because a phone is looking at it is the side effect
 [ADR 0002](./adr/0002-kampr-never-resizes-a-pane.md) exists to refuse. Nothing about it appears on
 this wire.
+
+**`modes` is what the pane's program asked of the mouse and the cursor keys**, which is what a
+client chooses a wheel notch, a drag or a click by ([docs/26](./26-pane-modes.md)). `mouse` is
+`none`, `press` (`?1000`), `drag` (`?1002`) or `any` (`?1003`), the widest wins; `mouse_sgr` is
+`?1006`; `alt_scroll` is `?1007`; `app_cursor` is `?1`; `alt_screen` is `?1049`. It rides on the pane
+entry because a pane's `cmd` and `agent` already do and change as often: a program turning a mode on or
+off re-sends the entry through `herd.patch`, and the field is replaced whole.
+
+- **Absent is not all-off, and it is permanent.** Only a node that owns the program's bytes can say:
+  a native session (docs/17) reads them off its own emulator, which starts with `alt_scroll` on as
+  xterm-likes do. herdr consumes the program's mode sets and re-emits none of them, on its observe
+  stream or any other surface (probe #292, #293, #686), so **a herdr pane never carries `modes`**,
+  and neither does a pane served by a node that predates it. A client without `modes` keeps
+  choosing by `agent` and `cmd`; an older node behind a hub is the ordinary case.
+- **Only while a job is running.** A program that dies with mouse tracking on leaves it set, and the
+  prompt it left behind has asked for nothing, so a native pane whose foreground job the node cannot
+  name has no `modes` (probe #688).
+- **`alt_screen` is `?1049` alone**: a native session's emulator does not track `?47` or `?1047`
+  (probe #687).
+- **What a client does with it.** A mouse mode with SGR encoding is a wheel report a notch (and a
+  button-1 report for a click); the alternate screen with `alt_scroll` is cursor keys; anything else is
+  nothing, whatever the agent. A mouse mode without SGR is sent nothing: the legacy form stops at
+  column 223 and no program measured needs it. `app_cursor` is carried and not yet followed, because
+  the application form moved `less` where the normal one moved nothing (probe #390). The agent
+  only sets how many rows a report moves: Claude ramps, muffit moves three, anything else one.
+
+**`program` is what the pane's programs reported over `OSC 7501`** ([docs/24](./24-program-status.md)),
+on a native session only: herdr answers no `OSC 7501;?` (probe #611). `agent_status` is still the
+one word a client draws, folded from the records: `blocked` anywhere, else `working` anywhere, else
+the root's own `done`/`idle`. It has no `error` word, because an older client draws an unknown status
+blank, so a session whose records fold to `error` is `idle` there and says so with `program_error:
+true` and `program_msg`.
+
+- `program` lists the records most urgent first (blocked, working, error, done, idle; newest first
+  within one), at most 32 of the up to 256 the node holds, and is absent while the root record is the
+  only one. Each row is `id` (the slash path; `""` for the root), `state` (`idle`, `working`,
+  `blocked`, `done`, `error`), and, each absent when unset, `kind` (`permission`, `question`,
+  `auth`; only on `blocked`), `progress` (0–100; only on `working`/`blocked`), `app` (the nearest
+  ancestor's, the record's own first), `title` and `msg` (decoded text with no control characters,
+  untrusted: draw it as text, never markup).
+- Claude Code reports each subagent as a record of its own and its permissions on the root (probe
+  #690), so a running subagent keeps a session `working`.
+- `program_progress` is the `progress` of the record the status folds to, while that record is
+  `working`; it is the one way a root record's progress reaches a client, since `program` is absent
+  while the root is all there is.
+- The client marks `program_error` with the warning corner on the herd row and a "Failed" status in
+  the pane header (`program_msg` on hover or a long press), draws `program_progress` as a hairline
+  along the bottom of the row and the header, and lists `program` in a Programs sheet opened from the
+  header's "N programs" status (an upright phone's status mark, on a long press).
 
 ### `styles` — append-only style table, per connection
 ```jsonc
@@ -1206,13 +1264,15 @@ every other agent kind serves its transcript and nothing more.
   "options": [ { "key": "1", "label": "Tabs", "detail": "Indent with tab characters." },
                { "key": "2", "label": "Two spaces", "detail": "Indent with two spaces per level." },
                { "key": "3", "label": "Type something", "text": true } ],  // `text`: answered with words
-  "source": "screen",                   // "transcript" | "screen" | "hook"
+  "source": "screen",                   // "transcript" | "screen" | "hook" | "conversation"
   "context": "echo probe > probe.txt", // what a hooked tool would act on; absent otherwise
   "id": "toolu_01ABC" }                 // which question, on a hook's only; "<id>#<n>" per question of several
 ```
 `source` records where the question came from. Claude does **not** write a pending tool request to its
 transcript before approval, so its questions come from the screen; Codex does, so an unmatched tool
-call is its signal (probes #42, #43). **Clients must not care which.**
+call is its signal (probes #42, #43). **Clients must not care which.** `source: "conversation"` is a
+conversation source's own question (headless Claude, Codex's app server, muffit): the node answers it
+to the source directly and never types into a pane.
 
 **`source: "hook"` is Claude telling the node itself**, through a `PermissionRequest` hook the
 operator installed (`claude.hooks` below; [docs/12 W11](./12-harness-briefs.md)). The hook fires
@@ -1253,6 +1313,21 @@ dropped, so a client that got this wrong finds out.
 one published, and the next is published when it is answered or let go. `id` is the request's
 `tool_use_id` (with `#<n>` for each question of a multi-question `AskUserQuestion`), and a client
 that sends it back on `answer` / `answer.submit` cannot have a late press land on the next request.
+
+**`kind` says what answering means, where the node knows**: `permission` (allowed or denied),
+`question` (chosen, ticked, or answered in words), `plan` (approved, or revised with the words of its
+`text` option) or `form`. Absent on a dialog read off a screen; an unknown word is answered by its
+keys. **A key is the node's to read against the ask it holds**, on every source: a client sends the
+key it was offered (and words for a `text` option), never a guessed `reply`. A `reply` the shape of a
+permission's (`allow` with no input, `deny` with no message) beside a key is read as that key, which
+is what installed clients send.
+
+**`fields` are a form's inputs**, in the order the server asked for them: `name`, `title`, `detail`,
+`type` (`string`, `number`, `integer`, `boolean`), `required` and `choices` (the values a string is
+limited to). A form with `fields` is answered from the client: its `1` carries
+`reply: {"form": {"values": {<name>: <value typed as its field>}}}`, a field left empty is left out,
+and `3` declines. A hooked form publishes `kind: "form"` and no `fields` or options: it is the
+terminal's.
 
 **A prompt is cleared by the same message with `question: null, options: []`.** There is no separate
 "resolved" message — a client should treat null as "no prompt outstanding" and hide the strip.
@@ -1583,7 +1658,8 @@ request has no say in. Everything else is `not_found`, in the one wording every 
 Codes: `not_writer` · `unknown_pane` · `node_offline` · `herdr_unavailable` · `bad_request` ·
 `not_found` · `revoked` · `unsupported` (the node does not implement that op) ·
 `stream_unavailable` (the herd is reachable and this pane's *screen* is not) ·
-`session_unavailable` (a native session refused: it has ended, or its keeper is not answering).
+`session_unavailable` (a native session refused: it has ended, or its keeper is not answering) ·
+`busy` (a Claude hand-over would stop a turn, a question or a command; `message` names it).
 
 There is no `rate_limited` error code. Pairing throttling is an HTTP **429**, so nothing ever
 emitted one and a client written to expect it was written against a code that does not exist.
@@ -1669,6 +1745,14 @@ the same path but is **not** an error and does not close anything — it arrives
 // keeps the frame on so a node that predates the mark, or a peer behind a hub that does, writes
 // what every node always wrote; a hub relays the mark to the pane's node.
 { "t": "input", "pane": "01J.../w3:p2", "text": "\u001b[200~one\ntwo\u001b[201~", "paste": true, "typed": true }
+// Optional `id` and `when`, from a conversation pane's composer. `id` is the message's own id,
+// minted by the client: the pane queues the message under it and `input.unqueue` names it. Absent,
+// the node mints one that client cannot name. `when` is the queue word: `now` preempts the turn in
+// flight, `next` waits behind it; absent, the message goes when the conversation is idle.
+{ "t": "input", "pane": "01J.../c:01k8…", "text": "and the tests", "id": "m-7f3a", "when": "next" }
+// Drop a queued message before it goes, by its `id`. A new `t` rather than a flag on `input`: a
+// node that predates it ignores the frame, which leaves the queue as it was.
+{ "t": "input.unqueue", "pane": "01J.../c:01k8…", "id": "m-7f3a" }
 
 { "t": "answer",      "pane": "01J.../w3:p2", "key": "1" }
 // The NODE decides whether a submit key follows, per harness — Claude selects on the digit alone,
@@ -2123,6 +2207,30 @@ A session leaves the herd by itself once it ends after `native.close`, or when i
 with status 0, as a herdr pane does when its shell exits. Any other end is kept, with its `exited`,
 until `native.forget`, which refuses a session that is still running.
 
+#### Resume after a reboot
+
+A program in a native session may register the command that brings it back (`OSC 7577`,
+[docs/25](./25-program-resume.md)); a keeper and its log are on tmpfs, the records are not. After a
+boot, what is left is listed and started on request, both routed by `node`:
+
+```jsonc
+{ "t":"manage", "op":"native.resumable", "node":"01J…" }
+// ack: { "t":"managed", "op":"native.resumable", "ok":true,
+//        "resumable":[ { "id":"01k8…/74877", "label":"work", "argv":["nvim","-S","/home/u/s.vim"], "cwd":"/home/u" } ] }
+{ "t":"manage", "op":"native.resume", "node":"01J…", "id":"01k8…/74877" }   // acks the new pane's `id`
+{ "t":"manage", "op":"native.resume.dismiss", "node":"01J…", "id":"01k8…/74877" }   // spends it unrun
+```
+
+`argv` is a list and is run as one, never through a shell; a client shows each element escaped. A
+record is listed only while its session is gone, its `cwd` exists and no resume was tried; one
+`native.resume` spends it whatever becomes of the run, and a second is `bad_request`. Under
+`[native] resume = "auto"` the node starts them itself at start, and under `"off"` (or as root)
+nothing is stored and both answer empty or refuse. `native.resume.dismiss` spends a record the way a
+tried one is spent, without running it, and a second is `bad_request`. The client asks
+`native.resumable` of each reachable node that keeps sessions, once per socket and again when a node
+drops out of the herd and comes back, with the node in the `rid` (the ack names none), and draws the
+answer as that node's **Resume after reboot** group; a node that refuses the op shows nothing.
+
 #### Workspaces, tabs, agents, worktrees and layouts of Kampr sessions
 
 The structure ops are Kampr's as well as herdr's (docs/17 §5). One goes to herdr when its `at`
@@ -2210,7 +2318,7 @@ typed into it as a bracketed paste, which the TUI attaches as a picture.
   result is folded into its `tool` block, revising the turn that made the call. The `live` turn
   comes from muffit's own stream of the turn in progress, not from a screen, and follows the same
   three rules.
-- **`pending`** is a permission prompt: `source: "transcript"`, the tool as `header`, what it wants
+- **`pending`** is a permission prompt: `source: "conversation"` (`"transcript"` from a node before 0.1.154), the tool as `header`, what it wants
   to do as `question`, and the options `1` Allow, `2` Always allow, `3` Deny. `answer` posts that
   answer to muffit; it is never keystrokes. A prompt answered elsewhere clears.
   `answer.submit` is `bad_request`.
@@ -2234,6 +2342,39 @@ typed into it as a bracketed paste, which the TUI attaches as a picture.
 native session running the TUI with `terminal`, else the session's `m:` pane. `close`,
 `native.close` and `muffit.close` stop a muffit session; every other management op is
 `bad_request` on one.
+
+### Claude with no terminal
+
+A node with `"claude": true` on its `nodes[]` entry starts `claude -p` under a keeper as a `c:`
+pane with no screen ([docs/21](./21-conversation-sources.md), "Starting a conversation without a
+terminal"). `input` to one is the conversation's: text is one message, and named `keys` are a
+line the composer model reads, where `Enter` sends it, `ctrl+c` and `Escape` interrupt, and a key
+with no text meaning is dropped.
+
+```jsonc
+{ "t":"manage", "op":"claude.create", "node":"01J…", "cwd":"/w", "prompt":"fix the test" }  // prompt optional
+{ "t":"manage", "op":"claude.resumable", "node":"01J…", "cwd":"/w" }    // cwd optional
+// ack: { "t":"managed", "op":"claude.resumable", "ok":true,
+//        "resumable":[ { "id":"3f…-uuid", "cwd":"/w", "title":"fix the build" } ] }
+{ "t":"manage", "op":"claude.resume", "node":"01J…", "id":"3f…-uuid" }  // cwd optional: where it ran
+{ "t":"manage", "op":"claude.to_terminal", "at":"01J…/c:c4a…",
+  "cols":100, "rows":30 }                                               // both or neither, 80x24 when absent; ack id: the n: session
+{ "t":"manage", "op":"claude.from_terminal", "at":"01J…/n:01j…" }       // ack id: the c: pane
+// either hand-over of a busy Claude:
+// ack: { "t":"managed", "op":"claude.from_terminal", "ok":false, "code":"busy",
+//        "message":"Claude is busy: moving it now stops the turn in progress." }
+{ "t":"manage", "op":"claude.from_terminal", "at":"01J…/n:01j…", "interrupt":true }  // the operator said yes
+{ "t":"manage", "op":"claude.end", "at":"01J…/c:c4a…" }
+```
+
+`create`, `resume` and both hand-overs ack the pane they made in `id`. A hand-over of a Claude at
+rest needs no confirmation. One that would stop something (a turn, a permission, question, plan or
+form waiting, or a terminal Claude's `!` command) is refused with `busy` and a `message` naming
+what, which a client shows as its confirmation; the same op with `interrupt: true` interrupts it,
+waits up to 5 s for it to come to rest and moves it. A node older than this refuses a busy
+`from_terminal` with `bad_request` and stops a busy headless turn unasked. `from_terminal` is
+`bad_request` before Claude's first prompt and on a pane whose Claude session the node cannot
+read; `resume` is `bad_request` on a conversation another process holds open.
 
 ### Docker containers
 

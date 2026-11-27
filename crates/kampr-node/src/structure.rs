@@ -369,8 +369,8 @@ impl Manager<'_> {
         match node["type"].as_str() {
             Some("pane") => {
                 let argv = match node["command"].as_str().filter(|c| !c.trim().is_empty()) {
-                    Some(line) => vec![kampr_native::login_shell(), "-lc".into(), line.to_string()],
-                    None => vec![kampr_native::login_shell(), "-l".into()],
+                    Some(line) => vec![kampr_core::login::shell(), "-lc".into(), line.to_string()],
+                    None => vec![kampr_core::login::shell(), "-l".into()],
                 };
                 let cwd = node["cwd"]
                     .as_str()

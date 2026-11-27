@@ -469,6 +469,13 @@ is writing.
   a harness nobody has measured one for is offered nothing, because a guess deletes part of
   somebody's sentence or quits their agent.
 
+### What a source declares, and Claude with no terminal
+
+The rest of the wire (docs/21 Phase 2's frames, headless Claude, OSC 7501 and 7577) is
+[docs/27](./27-tui-parity.md): a table of every frame, verb and op against the web client, and the
+`alt` keys the conversation view answers (`alt+k` stop, `alt+n` send now, `alt+u` take back,
+`alt+s` session, `alt+t` tasks, `tab` a suggestion), each only where the source declared it.
+
 ---
 
 ## W9 — Naming that says what a pane *is*

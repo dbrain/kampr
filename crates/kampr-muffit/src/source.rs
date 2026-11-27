@@ -1,10 +1,9 @@
 use crate::follow::{self, Follow};
 use crate::provider::AGENT;
-use crate::wire::{Image, PermissionPrompt, SessionState};
-use kampr_core::conversation::abilities::{AskAbility, Fact, InputAbility, Lifecycle, Steer, Stream};
+use crate::wire::{Image, PermissionPrompt, Question, SessionState};
+use kampr_core::conversation::abilities::AskAbility;
 use kampr_core::conversation::{
-    Abilities, Ask, AskOption, Command, Conversation, Emit, Ending, NewSession, Refusal, Source, Stored,
-    Update,
+    Ask, AskOption, Command, Conversation, Emit, Ending, NewSession, Refusal, Source, Stored, Update,
 };
 use std::path::Path;
 use std::sync::Arc;
@@ -94,46 +93,12 @@ impl MuffitConversation {
     pub fn new(provider: Arc<crate::provider::MuffitProvider>, session: String) -> Self {
         Self { provider, session }
     }
-
-    pub fn abilities() -> Abilities {
-        let capabilities = follow::CAPABILITIES;
-        let has = |capability: &str| capabilities.contains(&capability);
-        let mut abilities = Abilities::default();
-        if has("input") {
-            abilities.input.insert(InputAbility::Images);
-        }
-        if has("interrupt") {
-            abilities.steer.insert(Steer::Interrupt);
-            abilities.steer.insert(Steer::Continue);
-        }
-        abilities.steer.insert(Steer::Pause);
-        abilities.steer.insert(Steer::Resume);
-        abilities.steer.insert(Steer::Stop);
-        abilities.steer.insert(Steer::Compact);
-        if has("permissions") {
-            abilities.asks.insert(AskAbility::Permission);
-            abilities.asks.insert(AskAbility::Always);
-        }
-        if has("status") {
-            abilities.streams.insert(Stream::Text);
-            abilities.streams.insert(Stream::TaskOutput);
-            abilities.facts.insert(Fact::Context);
-            abilities.facts.insert(Fact::Cost);
-            abilities.facts.insert(Fact::Trouble);
-        }
-        abilities.lifecycle.insert(Lifecycle::Create);
-        abilities.lifecycle.insert(Lifecycle::Resume);
-        abilities.lifecycle.insert(Lifecycle::End);
-        abilities
-    }
 }
 
 #[async_trait::async_trait]
 impl Conversation for MuffitConversation {
     async fn run(self: Box<Self>, commands: mpsc::Receiver<Command>, mut emit: Emit) {
         let MuffitConversation { provider, session } = *self;
-        (emit)(Update::Abilities(Self::abilities()));
-        (emit)(Update::Actions(follow::actions()));
         let (outgoing, incoming) = mpsc::channel(COMMANDS);
         let mapper = tokio::spawn(commands_to_follow(commands, outgoing));
         let client = provider.client().clone();
@@ -177,7 +142,10 @@ async fn commands_to_follow(mut commands: mpsc::Receiver<Command>, outgoing: mps
             Command::Act { action, args } => Some(follow::Command::Act { action, args }),
             Command::Task { id, from } => Some(follow::Command::FollowTask { id, from }),
             Command::Unfollow { id } => Some(follow::Command::Unfollow { id }),
-            _ => None,
+            Command::Answer { ask, reply } => Some(follow::Command::Answer { ask, reply }),
+            Command::Suggest { kind, query } => Some(follow::Command::Suggest { kind, query }),
+            Command::Unqueue { msg_id } => Some(follow::Command::Unqueue { msg_id }),
+            Command::Refresh(_) | Command::Press { .. } | Command::Submit { .. } => None,
         };
         let Some(mapped) = mapped else {
             continue;
@@ -194,10 +162,12 @@ fn update_of(update: follow::Update) -> Update {
         follow::Update::Turns(turns) => Update::Turns(turns),
         follow::Update::Older(page) => Update::Older(page),
         follow::Update::Facets(facets) => Update::Facets(facets),
-        follow::Update::Pending(prompt) => Update::Asks(match prompt {
-            Some(prompt) => vec![ask_of(&prompt)],
-            None => Vec::new(),
-        }),
+        follow::Update::Abilities(abilities) => Update::Abilities(abilities),
+        follow::Update::Asks { permission, question } => {
+            Update::Asks(asks_of(permission.as_ref(), question.as_ref()))
+        }
+        follow::Update::Limits(limits) => Update::Limits(limits),
+        follow::Update::Suggested { kind, query, items } => Update::Suggested { kind, query, items },
         follow::Update::Found { query, found } => Update::Found { query, found },
         follow::Update::SubPage { id, page } => Update::SubPage { id, page },
         follow::Update::SubTurns { id, turns } => Update::SubTurns { id, turns },
@@ -214,6 +184,50 @@ fn update_of(update: follow::Update) -> Update {
         follow::Update::Acted { action, ok, text } => Update::Acted { action, ok, text },
         follow::Update::Missing(message) => Update::Missing(message),
         follow::Update::Failed(message) => Update::Failed(message),
+    }
+}
+
+/// What a session waits on, as the pane's asks: a permission prompt, then the model's question.
+pub fn asks_of(permission: Option<&PermissionPrompt>, question: Option<&Question>) -> Vec<Ask> {
+    permission
+        .map(ask_of)
+        .into_iter()
+        .chain(question.map(question_ask))
+        .collect()
+}
+
+fn option(key: String, label: &str, text: bool) -> AskOption {
+    AskOption {
+        key,
+        label: label.into(),
+        detail: None,
+        chosen: false,
+        text,
+    }
+}
+
+/// The model's question: its options keyed `1`.., and one more taking words where it allows them.
+/// Its id is `q<id>`, so an answer can't be read as one to a permission prompt.
+fn question_ask(question: &Question) -> Ask {
+    let mut options: Vec<AskOption> = question
+        .options
+        .iter()
+        .enumerate()
+        .map(|(at, label)| option((at + 1).to_string(), label, false))
+        .collect();
+    if question.free_text {
+        options.push(option((options.len() + 1).to_string(), "Type something", true));
+    }
+    Ask {
+        id: Some(format!("q{}", question.id)),
+        kind: AskAbility::Question,
+        by: None,
+        header: None,
+        question: question.text.clone(),
+        multi: false,
+        context: None,
+        options,
+        fields: Vec::new(),
     }
 }
 
@@ -236,6 +250,7 @@ fn ask_of(prompt: &PermissionPrompt) -> Ask {
                 text: false,
             })
             .collect(),
+        fields: Vec::new(),
     }
 }
 
@@ -254,6 +269,24 @@ mod tests {
             tool: "bash".into(),
             action: "run the tests".into(),
         }
+    }
+
+    #[test]
+    fn a_lone_question_is_the_ask_a_notification_names() {
+        let question = Question {
+            id: 3,
+            text: "Which approach?".into(),
+            options: vec!["Refactor".into()],
+            free_text: true,
+        };
+        let asks = asks_of(None, Some(&question));
+        assert_eq!(asks.len(), 1);
+        assert_eq!(asks[0].question, "Which approach?");
+        assert_eq!(asks[0].id.as_deref(), Some("q3"));
+        assert_eq!(
+            asks_of(Some(&prompt()), Some(&question))[0].question,
+            "run the tests"
+        );
     }
 
     #[test]
@@ -292,10 +325,19 @@ mod tests {
                 Update::Facets(Facets::default()),
             ),
             (
-                follow::Update::Pending(Some(prompt())),
+                follow::Update::Asks {
+                    permission: Some(prompt()),
+                    question: None,
+                },
                 Update::Asks(vec![ask_of(&prompt())]),
             ),
-            (follow::Update::Pending(None), Update::Asks(Vec::new())),
+            (
+                follow::Update::Asks {
+                    permission: None,
+                    question: None,
+                },
+                Update::Asks(Vec::new()),
+            ),
             (
                 follow::Update::Found {
                     query: "q".into(),
@@ -525,6 +567,10 @@ mod tests {
                         data: "aGk=".into(),
                     }],
                 },
+                follow::Command::Answer {
+                    ask: "1".into(),
+                    reply: Reply::Dismiss,
+                },
                 follow::Command::Older {
                     before: Some("m50".into()),
                 },
@@ -555,27 +601,5 @@ mod tests {
                 follow::Command::Unfollow { id: "call_7".into() },
             ]
         );
-    }
-
-    #[test]
-    fn the_abilities_are_what_the_greeting_lists() {
-        let abilities = MuffitConversation::abilities();
-        assert!(abilities.input.contains(&InputAbility::Images));
-        assert!(abilities.steer.contains(&Steer::Interrupt));
-        assert!(abilities.steer.contains(&Steer::Continue));
-        assert!(abilities.steer.contains(&Steer::Pause));
-        assert!(abilities.steer.contains(&Steer::Resume));
-        assert!(abilities.steer.contains(&Steer::Stop));
-        assert!(abilities.steer.contains(&Steer::Compact));
-        assert!(abilities.asks.contains(&AskAbility::Permission));
-        assert!(abilities.asks.contains(&AskAbility::Always));
-        assert!(abilities.streams.contains(&Stream::Text));
-        assert!(abilities.streams.contains(&Stream::TaskOutput));
-        assert!(abilities.facts.contains(&Fact::Context));
-        assert!(abilities.facts.contains(&Fact::Cost));
-        assert!(abilities.facts.contains(&Fact::Trouble));
-        assert!(abilities.lifecycle.contains(&Lifecycle::Create));
-        assert!(abilities.lifecycle.contains(&Lifecycle::Resume));
-        assert!(abilities.lifecycle.contains(&Lifecycle::End));
     }
 }

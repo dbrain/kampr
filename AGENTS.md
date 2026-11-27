@@ -28,6 +28,7 @@ first.** Several deliberate conventions here look like defects without it.
 | What Claude reports without its terminal, and the plan for a pane that needs none | [`docs/20`](./docs/20-conversation-parity.md), [`docs/21`](./docs/21-conversation-sources.md) |
 | `OSC 7501` status records and `OSC 7577` program resume (Rex's protocols) | [`docs/24`](./docs/24-program-status.md), [`docs/25`](./docs/25-program-resume.md) |
 | What to send a program for a wheel, drag or click, decided by the modes it set rather than its name | [`docs/26`](./docs/26-pane-modes.md) |
+| What the terminal client draws and sends of the wire, against the web client, and its keys | [`docs/27`](./docs/27-tui-parity.md) |
 
 `docs/01`, `02`, `05` and `06` are history, not status.
 

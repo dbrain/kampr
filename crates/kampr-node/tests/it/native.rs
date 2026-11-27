@@ -15,10 +15,14 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite};
 
 mod adopt;
+mod claude;
 mod convo;
 mod docker;
+mod history;
 mod hooks;
+mod modes;
 mod reflow;
+mod resume;
 mod structure;
 
 const NODE: &str = "01JNATIVENODE";
@@ -181,6 +185,7 @@ pub(crate) struct Client {
     grids: HashMap<String, (Value, BTreeMap<u64, Value>)>,
     pub(crate) resets: HashMap<String, Value>,
     pub(crate) history: HashMap<String, Vec<String>>,
+    pub(crate) docs: HashMap<String, Value>,
     pub(crate) others: Vec<Value>,
 }
 
@@ -194,6 +199,7 @@ impl Client {
             grids: HashMap::new(),
             resets: HashMap::new(),
             history: HashMap::new(),
+            docs: HashMap::new(),
             others: Vec::new(),
         }
     }
@@ -254,6 +260,10 @@ impl Client {
                 }
             }
             "scrollback" => {
+                if self.docs.get(&pane).is_some_and(|d| d["era"] != value["era"]) {
+                    self.history.remove(&pane);
+                }
+                self.docs.insert(pane.clone(), value.clone());
                 let rows = self.history.entry(pane).or_default();
                 for r in value["rows"].as_array().into_iter().flatten() {
                     rows.push(text_of(&r["runs"]));

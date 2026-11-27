@@ -308,10 +308,14 @@ The guards:
 
 1. **A billing policy per node, default `plan`.** `[claude] billing = "plan" | "api" | "any"`.
    Under `plan` a session that would be paid any other way does not start.
-2. **A scrubbed environment.** The headless child is started from an allow-list, not the node's
-   environment minus a deny-list: `HOME`, `PATH`, `USER`, `LANG`, `TERM`, `XDG_*`, `SSH_AUTH_SOCK`,
-   and `CLAUDE_CONFIG_DIR` only when the operator configured it. Nothing beginning `ANTHROPIC_`,
-   `AWS_`, `GOOGLE_` or `CLAUDE_CODE_USE_` crosses under `plan`.
+2. **A scrubbed environment.** The headless child gets the operator's login environment, read once
+   per source from `<login shell> -lc` the way a native session's terminal gets it, because a node
+   run as a service has the service manager's `PATH` (`/usr/local/bin:/usr/bin` on .208) and the
+   child's tools need `~/.local/bin`, cargo, nvm, proxies and certificates. Under `plan`,
+   everything beginning `ANTHROPIC_` or `CLAUDE_CODE_USE_` and `CLAUDE_CODE_OAUTH_TOKEN` are
+   removed from it; `api` and `any` keep them. `CLAUDE_CONFIG_DIR` crosses only when the operator
+   configured it. The list lives in `kampr_core::child_env` beside the Codex one (probe row 697),
+   and the keeper starts a pipe child from it alone.
 3. **Asked before a word is sent.** The source sends `initialize` and reads `account` before the
    first prompt, which costs no turn (#658, #661). Under `plan` it requires a `subscriptionType`
    and no `apiKeySource`. Anything else ends the process and raises `Trouble { fix: Billing }`
@@ -323,7 +327,9 @@ The guards:
 6. **Overage is refused unless allowed.** `[claude] overage = "refuse" | "ask" | "allow"`, default
    `refuse`. On `isUsingOverage: true` the source interrupts, holds whatever was queued and raises
    `Trouble { fix: Billing }`. `ask` holds the prompt behind a confirmation instead. Limits are
-   read before a prompt is sent, so a session at its limit is told so rather than started.
+   read before a prompt is sent, so a session at its limit is told so rather than started. While
+   `ask` holds, only prompts wait: a word starting with `/` (`/compact` above all, how a spent
+   window is made to last) goes to the child at once. `refuse`'s hold keeps everything.
 7. **Turns the model starts are counted and capped.** A turn whose `result.origin` is a task
    notification or a schedule is marked self-started in the pane. `[claude] unattended_turns`,
    default 20 since the operator's last prompt, pauses the session when reached.
@@ -454,6 +460,46 @@ In the muffit repository, each a wire minor bump, tracked in its `docs/api/kampr
 - **Done when** a session is created from the phone, asks and is answered, has a shell watched
   live and a subagent opened, has its model changed, survives a node restart, is handed to a
   terminal and back, and every billing guard's test passes.
+
+#### Starting a conversation without a terminal
+
+- **Config.** `[claude] headless = true` is the default; `false` builds no source, so the herd's
+  `nodes[].claude` is absent, the client offers nothing, and every `claude.*` op is refused with
+  `headless Claude is off on this node ([claude] headless = false)`. The billing keys are the
+  guards above: `billing` (default `plan`), `overage` (default `refuse`), `unattended_turns`,
+  `turn_budget_usd`, and `mode`, `config_dir`, `binary` for how it starts (`binary` is resolved
+  through the login shell when not set).
+- **Phone.** New, Kampr side, *Claude (no terminal)*: a directory and an optional first prompt,
+  sent as `claude.create {node, cwd, prompt?}`. The ack names the new `c:<keeper id>` pane and the
+  client opens it; the first prompt is sent when that pane's conversation opens, after guard 3.
+- **Resume.** The same step lists `claude.resumable {node, cwd?}`: the transcripts on disk for that
+  directory, newest first, without any a live process holds. Picking one sends
+  `claude.resume {node, id}`, which starts `claude -p -r <id>` where the conversation ran. A
+  conversation open anywhere else is refused, because a second writer forks it (#655).
+- **Hand-over.** A headless pane's actions offer *Open in terminal*: `claude.to_terminal {at, cols?, rows?,
+  interrupt?}` stops the child, waits for it to exit, and starts `claude -r <id>` as a Kampr session
+  in the same directory. A Kampr session running Claude offers *Continue without terminal*:
+  `claude.from_terminal {at, interrupt?}` reads the session id from Claude's `sessions/<pid>.json`,
+  refuses a session with no transcript yet (before its first prompt), hangs up that Claude
+  (closing the session when Claude is the session itself) and resumes it headless.
+  `claude.end {at}` ends a headless pane.
+- **A busy Claude is asked about, an idle one is just moved.** Either hand-over of a Claude at rest
+  goes on the first press, with no dialog. A busy one is refused with the code `busy` and a
+  sentence naming what would stop: a headless child is read off its keeper's log (a prompt or a
+  `system/init` with no `result` after it is the turn in progress; an unanswered permission,
+  question, plan or form is named too), and a terminal Claude off its marker's status (`busy` the
+  turn, `waiting` the question or permission, `shell` the `!` command; `idle` or no status at
+  all, a Claude too old to write one, is at rest). The client shows that sentence as the
+  confirmation, and on yes sends the same op with `interrupt: true`: the node sends a headless
+  child an `interrupt` control request, or a terminal Claude Escape through its pane, waits up to
+  5 s for it to come to rest, and moves it either way, since the hang-up stops whatever is left.
+- **CLI.** The terminal client (`kampr-tui`) offers the `claude.*` ops; [docs/27](./27-tui-parity.md)
+  lists them. A CLI that started a session itself, rather than asking the node, would not reach the
+  node's herd until the node restarted.
+- **What the guards refuse.** Under `plan`: a key, token or `apiKeyHelper` in reach, a
+  third-party provider, or no login, before any word is sent; a turn whose `system/init` reports an
+  `apiKeySource`; overage unless `overage` allows it; and self-started turns past
+  `unattended_turns`. Each is a `Trouble { fix: Billing }` in the pane, never a silent fallback.
 
 ### Phase 6: Claude in a terminal, the gaps that need no trait
 

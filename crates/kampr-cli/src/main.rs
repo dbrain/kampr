@@ -10,6 +10,7 @@ mod peer_stdio;
 mod recovery;
 mod report;
 mod resize;
+mod restored;
 mod service;
 mod setup;
 mod update;
@@ -186,6 +187,10 @@ enum Command {
         dirs: Dirs,
         /// A session id, or any prefix of one that names a single session
         id: String,
+        /// Set by the command herdr re-runs after a restart: an id the machine lost starts a shell
+        /// instead of failing
+        #[arg(long, hide = true)]
+        restored: bool,
     },
     #[command(hide = true)]
     Keep { dir: std::path::PathBuf },
@@ -272,7 +277,7 @@ fn main() -> Result<()> {
             },
         ),
         Some(Command::Ls { dirs }) => native::ls(&dirs),
-        Some(Command::Attach { dirs, id }) => native::attach(&dirs, &id),
+        Some(Command::Attach { dirs, id, restored }) => native::attach(&dirs, &id, restored),
         Some(Command::Serve {
             dirs,
             peer_stdio: true,

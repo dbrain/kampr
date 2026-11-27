@@ -55,7 +55,7 @@ impl Job {
         }
     }
 
-    /// What is actually `exec`ed. `shell` is [`crate::env::login_shell`]'s answer — the operator's
+    /// What is actually `exec`ed. `shell` is [`kampr_core::login::shell`]'s answer — the operator's
     /// own, so their bashisms work — invoked with neither `-l` nor `-i`.
     pub fn argv(&self, shell: &str) -> Vec<String> {
         match self {

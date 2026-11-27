@@ -1,7 +1,7 @@
 use crate::wire::Wire;
 use kampr_core::conversation::ask::Ask;
 use kampr_core::conversation::{Command, Source, Update};
-use kampr_core::wire::{ErrorCode, PendingOption, PendingSource, ServerMsg};
+use kampr_core::wire::{ErrorCode, PendingKind, PendingOption, PendingSource, ServerMsg};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -199,7 +199,7 @@ fn emit(wire: &Wire, pane: &str, update: Update) -> bool {
     }
 }
 
-fn pending(pane: &str, asks: &[Ask]) -> ServerMsg {
+pub(crate) fn pending(pane: &str, asks: &[Ask]) -> ServerMsg {
     let ask = asks.first();
     ServerMsg::Pending {
         pane: pane.into(),
@@ -208,6 +208,8 @@ fn pending(pane: &str, asks: &[Ask]) -> ServerMsg {
         multi: ask.is_some_and(|ask| ask.multi),
         context: ask.and_then(|ask| ask.context.clone()),
         id: ask.and_then(|ask| ask.id.clone()),
+        kind: ask.map(|ask| PendingKind::of(ask.kind)),
+        fields: ask.map(|ask| ask.fields.clone()).unwrap_or_default(),
         options: ask
             .map(|ask| {
                 ask.options
@@ -222,11 +224,35 @@ fn pending(pane: &str, asks: &[Ask]) -> ServerMsg {
                     .collect()
             })
             .unwrap_or_default(),
-        source: PendingSource::Transcript,
+        source: PendingSource::Conversation,
     }
 }
 
 /// A pane with no herdr behind it: a native run or a muffit session, each kept by its own keeper.
 pub fn session_pane(local: &str) -> bool {
     local.starts_with(kampr_native::PREFIX) || local.starts_with(kampr_muffit::PREFIX)
+}
+
+#[cfg(test)]
+mod tests {
+    use kampr_core::conversation::{Ask, AskAbility};
+
+    // The conversation seam answers its own questions — a headless Claude, Codex or muffit is
+    // told the answer, never typed at — so its card must not say it came off a transcript.
+    #[test]
+    fn a_seam_question_names_the_conversation_as_its_source() {
+        let ask = Ask {
+            id: Some("q1".into()),
+            kind: AskAbility::Permission,
+            by: None,
+            header: None,
+            question: "Run it?".into(),
+            multi: false,
+            context: None,
+            options: vec![],
+            fields: vec![],
+        };
+        let frame = serde_json::to_value(super::pending("p", &[ask])).unwrap();
+        assert_eq!(frame["source"], "conversation", "{frame}");
+    }
 }

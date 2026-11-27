@@ -75,7 +75,7 @@ impl FleetProvider {
             runs: Mutex::new(HashMap::new()),
             topology: watch::channel(0).0,
             path: crate::env::fleet_path(configured_path),
-            shell: crate::env::login_shell(),
+            shell: kampr_core::login::shell(),
         });
         if let Ok(native) = &inner.native {
             for session in kampr_keep::list(native.root()).unwrap_or_default() {
