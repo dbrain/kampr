@@ -1691,6 +1691,8 @@ impl Session {
         }
     }
 
+    // too_many_arguments: the pane's wiring is one flat hand-off; a params struct would hide which caller owns each piece
+    #[allow(clippy::too_many_arguments)]
     async fn input(
         &mut self,
         pane: &str,

@@ -271,7 +271,8 @@ async fn a_headless_pane_carries_the_seams_full_control_surface() {
     // What the pane draws is what the source declared: the stop control, the completions, the
     // queue words and the context bar.
     let declared = &abilities["abilities"];
-    for word in ["interrupt"] {
+    {
+        let word = "interrupt";
         assert!(
             declared["steer"]
                 .as_array()

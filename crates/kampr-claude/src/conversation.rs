@@ -1152,7 +1152,7 @@ mod tests {
     /// and the stdin lines it writes.
     fn speak(lines: &[&str], policy: Policy, overage: Overage, cap: u32) -> (Vec<String>, Vec<Update>) {
         script(
-            &lines.iter().map(|l| Event::Line(*l)).collect::<Vec<_>>(),
+            &lines.iter().map(|l| Event::Line(l)).collect::<Vec<_>>(),
             policy,
             overage,
             cap,
