@@ -82,8 +82,25 @@ The headless integration test proves the source declares the full control surfac
 (`~/.cache/.muffit` data on this machine), not from the conv-sources work.
 **Phase 9 probe DONE (s34):** Codex app-server protocol measured (26-row probe log). Key finding:
 stdio transport flushes responses one request behind — the source must pipeline.
-**In progress:** Phase 5b-3 (s35: subagent-live + search/older, DONE 2f851351), Phase 9 build (s36: Codex source, DONE 1ace3aea).
-**Next: screenshots before/after on 4 sources, both repos' gates green, final review.**
+**Phase 5b-3 DONE (2f851351):** subagent-live stream and paging + search over the session
+transcript. The headless conversation now emits `Update::SubLive` for live subagent output and
+handles `Older`/`Search` commands against the transcript journal.
+**Phase 9 DONE (1ace3aea, 1c2d3df3):** the Codex app-server as the third conversation source
+(`crates/kampr-codex/`). NDJSON JSON-RPC 2.0 over stdio, pipelined with `account/read` nudges
+(probe row 3: the server flushes responses one request behind). 7 lib tests + 4 integration
+tests (turn completes, interrupt, 429→Trouble, create-with-prompt). The mock-stdio.py captures
+the measured wire behaviour including the one-behind flush rule. Key bug found: the real server's
+notifications carry no `jsonrpc` field — the untagged enum required it and silently dropped
+every such line. Fixed with `jsonrpc: Option<String>`, pinned by a regression test.
+**Crate graph (8b380f31):** `kampr-codex` added to the ALLOWED list in the guard test.
+**Gate status:** `make check` is blocked by pre-existing flaky tests that fail under load but
+pass in isolation (verified: `the_port_is_bound_before_herdr_is_needed`,
+`a_line_written_to_the_transcript_reaches_the_client_at_once`,
+`what_the_operator_left_in_the_panes_own_composer`,
+`the_herd_lists_the_machines_containers`, `reopening_a_conversation_serves_the_one_it_already_had`,
+and 2 `kampr-native` push tests). None are related to the conv-sources work. All conv-sources
+tests pass: 222 kampr-claude, 476 kampr-node, 7+4 kampr-codex, 10 kampr-testkit guards.
+**Next: screenshots before/after on 4 sources, final review.**
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
