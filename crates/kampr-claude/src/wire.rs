@@ -15,6 +15,7 @@ pub enum Line {
     BackgroundTasks(Vec<TaskInfo>),
     ApiRetry(ApiRetry),
     StreamEvent(StreamEvent),
+    SubagentLive(SubagentLive),
     Assistant(Assistant),
     User(UserLine),
     Result(ResultLine),
@@ -36,6 +37,7 @@ impl Line {
         Some(match ty {
             "system" => system(&v),
             "stream_event" => Line::StreamEvent(stream_event(&v)),
+            "subagent_live" => Line::SubagentLive(subagent_live(&v)),
             "assistant" => Line::Assistant(assistant(&v)),
             "user" => Line::User(user(&v)),
             "result" => Line::Result(result(&v)),
@@ -305,6 +307,24 @@ fn block_start(v: &Value) -> BlockStart {
         },
         Some("thinking") => BlockStart::Thinking,
         _ => BlockStart::Other,
+    }
+}
+
+/// A subagent's live edge: a stream event filed under the subagent that is speaking, not the
+/// parent turn. `parent_tool_use_id` is the call that launched it — the name its own
+/// `assistant` lines carry — and `task_id` is the binary's task ledger, when the line names one.
+#[derive(Debug, Clone)]
+pub struct SubagentLive {
+    pub parent_tool_use_id: Option<String>,
+    pub task_id: Option<String>,
+    pub event: StreamEvent,
+}
+
+fn subagent_live(v: &Value) -> SubagentLive {
+    SubagentLive {
+        parent_tool_use_id: Line::str_of(v, "parent_tool_use_id"),
+        task_id: Line::str_of(v, "task_id"),
+        event: stream_event(v),
     }
 }
 
@@ -700,6 +720,35 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(block, Line::StreamEvent(StreamEvent::BlockStart { .. })));
+    }
+
+    #[test]
+    fn a_subagent_live_line_reads_its_name_and_its_event() {
+        let line = Line::parse(
+            r#"{"type":"subagent_live","parent_tool_use_id":"tu1","task_id":"t1","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"digging"}}}"#,
+        )
+        .unwrap();
+        let Line::SubagentLive(live) = line else {
+            panic!("wanted subagent live, got {line:?}")
+        };
+        assert_eq!(live.parent_tool_use_id.as_deref(), Some("tu1"));
+        assert_eq!(live.task_id.as_deref(), Some("t1"));
+        assert!(matches!(
+            live.event,
+            StreamEvent::TextDelta { ref text } if text == "digging"
+        ));
+
+        // A line that names neither carries the event alone; the seam decides what to do with it.
+        let unnamed = Line::parse(
+            r#"{"type":"subagent_live","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t9","name":"Read"}}}"#,
+        )
+        .unwrap();
+        let Line::SubagentLive(live) = unnamed else {
+            panic!("wanted subagent live, got {live:?}")
+        };
+        assert!(live.parent_tool_use_id.is_none());
+        assert!(live.task_id.is_none());
+        assert!(matches!(live.event, StreamEvent::BlockStart { .. }));
     }
 
     #[test]

@@ -20,6 +20,8 @@ use crate::config::{Billing as Policy, Overage};
 use crate::wire::{self, Assistant, BlockStart, ContentBlock, Line, StreamEvent};
 
 const COMMANDS: usize = 64;
+/// How many turns one page of the transcript holds, opening on and paging back through it.
+const PAGE: usize = 200;
 
 /// A headless Claude pane: the stream-json child under a keeper's pipes, mapped to the seam.
 pub struct ClaudeConversation {
@@ -66,6 +68,7 @@ impl ClaudeConversation {
         abilities.asks.insert(AskAbility::Always);
         abilities.streams.insert(Stream::Text);
         abilities.streams.insert(Stream::TaskOutput);
+        abilities.streams.insert(Stream::SubLive);
         abilities.facts.insert(Fact::Context);
         abilities.facts.insert(Fact::Cost);
         abilities.facts.insert(Fact::Trouble);
@@ -236,8 +239,8 @@ impl Conversation for ClaudeConversation {
         let session = SessionDir::at(session_path);
         let mut inner = Inner::new();
 
-        if let Some(path) = transcript
-            && let Some(page) = history_page(&path)
+        if let Some(path) = &transcript
+            && let Some(page) = transcript_page(path, None)
             && !push(&mut emit, Update::Page(page))
         {
             return;
@@ -300,7 +303,7 @@ impl Conversation for ClaudeConversation {
                 }
                 command = commands.recv() => {
                     let Some(command) = command else { continue; };
-                    dispatch_command(command, &mut inner, &mut write_line, &mut emit, policy);
+                    dispatch_command(command, &mut inner, &mut write_line, &mut emit, policy, &transcript);
                 }
             }
         }
@@ -369,6 +372,7 @@ fn process_line(
         }
         Line::Assistant(a) => assistant_updates(a, emit),
         Line::StreamEvent(e) => stream_event_updates(e, emit),
+        Line::SubagentLive(live) => sub_live_updates(live, emit),
         Line::Result(result) => {
             // Guard 7: a turn the model started is counted, and the cap pauses the session.
             if billing::is_self_started(result.origin.as_deref()) {
@@ -667,44 +671,57 @@ fn assistant_updates(a: Assistant, emit: &mut Emit) -> bool {
     }
 }
 
-fn stream_event_updates(e: StreamEvent, emit: &mut Emit) -> bool {
+/// The live edge a stream event is: the pane's words while a turn writes them. `None` is an
+/// event the live edge does not draw.
+fn live_of(e: StreamEvent) -> Option<Live> {
     match e {
-        StreamEvent::TextDelta { text } => push(
-            emit,
-            Update::Live(Live {
-                text,
-                ..Live::default()
-            }),
-        ),
-        StreamEvent::ThinkingDelta { .. } => push(emit, Update::Live(Live::default())),
-        StreamEvent::InputJsonDelta { partial_json } => push(
-            emit,
-            Update::Live(Live {
-                tools: vec![LiveTool {
-                    id: String::new(),
-                    tool: String::new(),
-                    args: partial_json,
-                    state: kampr_journal::ToolState::Running,
-                }],
-                ..Live::default()
-            }),
-        ),
+        StreamEvent::TextDelta { text } => Some(Live {
+            text,
+            ..Live::default()
+        }),
+        StreamEvent::ThinkingDelta { .. } => Some(Live::default()),
+        StreamEvent::InputJsonDelta { partial_json } => Some(Live {
+            tools: vec![LiveTool {
+                id: String::new(),
+                tool: String::new(),
+                args: partial_json,
+                state: kampr_journal::ToolState::Running,
+            }],
+            ..Live::default()
+        }),
         StreamEvent::BlockStart {
             block: BlockStart::ToolUse { id, name },
             ..
-        } => push(
-            emit,
-            Update::Live(Live {
-                tools: vec![LiveTool {
-                    id,
-                    tool: name,
-                    args: String::new(),
-                    state: kampr_journal::ToolState::Running,
-                }],
-                ..Live::default()
-            }),
-        ),
-        StreamEvent::MessageDelta { .. } | StreamEvent::BlockStart { .. } | StreamEvent::Other => true,
+        } => Some(Live {
+            tools: vec![LiveTool {
+                id,
+                tool: name,
+                args: String::new(),
+                state: kampr_journal::ToolState::Running,
+            }],
+            ..Live::default()
+        }),
+        StreamEvent::MessageDelta { .. } | StreamEvent::BlockStart { .. } | StreamEvent::Other => None,
+    }
+}
+
+fn stream_event_updates(e: StreamEvent, emit: &mut Emit) -> bool {
+    match live_of(e) {
+        Some(live) => push(emit, Update::Live(live)),
+        None => true,
+    }
+}
+
+/// A subagent's live edge: the same mapping as the main turn's, filed under the subagent's name
+/// so nothing files a subagent's words as the parent's.
+fn sub_live_updates(live: wire::SubagentLive, emit: &mut Emit) -> bool {
+    let Some(id) = live.parent_tool_use_id.or(live.task_id) else {
+        // Unnamed: no subagent pane to file it under, and no guess to make.
+        return true;
+    };
+    match live_of(live.event) {
+        Some(edge) => push(emit, Update::SubLive { id, live: edge }),
+        None => true,
     }
 }
 
@@ -716,6 +733,7 @@ fn dispatch_command(
     write_line: &mut dyn FnMut(&str) -> std::io::Result<()>,
     emit: &mut Emit,
     policy: Policy,
+    transcript: &Option<PathBuf>,
 ) {
     match command {
         Command::Input {
@@ -865,8 +883,17 @@ fn dispatch_command(
         Command::Refresh(Fact::Context) => fetch_context(inner, write_line),
         Command::Refresh(_) => {},
         Command::Older { before } => {
-            if let Some(page) = inner_transcript_page(before) {
+            if let Some(path) = transcript
+                && let Some(page) = transcript_page(path, before.as_deref())
+            {
                 push(emit, Update::Older(page));
+            }
+        }
+        Command::Find { query, cap } => {
+            if let Some(path) = transcript
+                && let Some(found) = transcript_search(path, &query, cap)
+            {
+                push(emit, Update::Found { query, found });
             }
         }
         _ => {}
@@ -874,19 +901,28 @@ fn dispatch_command(
     let _ = policy;
 }
 
-/// The history edge: the transcript through the existing `ClaudeParser`.
-fn history_page(path: &Path) -> Option<kampr_journal::Page> {
+/// The session's transcript as a journal: the history the pane opens on, the pages it pages
+/// back through and the finds it searches, all through the existing `ClaudeParser`. A
+/// transcript that cannot be read is an empty one, not an error: the pane asks again later,
+/// and the child is still writing the file.
+fn transcript_journal(path: &Path) -> kampr_journal::FileJournal {
     let mut journal = kampr_journal::FileJournal::new(
         path.to_path_buf(),
         Box::new(kampr_journal::claude::ClaudeParser::default()),
         None,
     );
     let _ = journal.poll();
-    Some(journal.page_before(None, 200))
+    journal
 }
 
-fn inner_transcript_page(_before: Option<String>) -> Option<kampr_journal::Page> {
-    None
+/// A page of the transcript, back from `before`, or from the newest turn when it is `None`.
+fn transcript_page(path: &Path, before: Option<&str>) -> Option<kampr_journal::Page> {
+    Some(transcript_journal(path).page_before(before, PAGE))
+}
+
+/// A search of the whole transcript.
+fn transcript_search(path: &Path, query: &str, cap: usize) -> Option<kampr_journal::ConvoFound> {
+    Some(transcript_journal(path).search(query, cap))
 }
 
 fn session_facts(
@@ -1048,6 +1084,17 @@ mod tests {
         overage: Overage,
         cap: u32,
     ) -> (Vec<String>, Vec<Update>) {
+        script_with(events, None, policy, overage, cap)
+    }
+
+    /// The same harness with a transcript on disk: the Older pages and the finds read it.
+    fn script_with(
+        events: &[Event<'_>],
+        transcript: Option<PathBuf>,
+        policy: Policy,
+        overage: Overage,
+        cap: u32,
+    ) -> (Vec<String>, Vec<Update>) {
         let mut inner = Inner::new();
         // The run loop spends `k1` on `initialize` before the first line; the harness mirrors
         // it, so the ids the tests see are the ids the pane sees.
@@ -1082,7 +1129,14 @@ mod tests {
                     }
                 }
                 Event::Command(command) => {
-                    dispatch_command(command.clone(), &mut inner, &mut write_line, &mut emit, policy)
+                    dispatch_command(
+                        command.clone(),
+                        &mut inner,
+                        &mut write_line,
+                        &mut emit,
+                        policy,
+                        &transcript,
+                    )
                 }
             }
         }
@@ -1276,6 +1330,239 @@ mod tests {
         assert!(
             !updates.iter().any(|u| matches!(u, Update::State(_))),
             "the state comes from the turn's own result line, not a local flip: {updates:?}"
+        );
+    }
+
+    // Subagent-live: the binary's `subagent_live` line is a subagent's live edge, filed under
+    // the subagent's name — the parent pane does not draw it as its own words.
+    #[test]
+    fn a_subagent_live_line_is_a_sublive_under_the_subagents_name() {
+        let live = r#"{"type":"subagent_live","parent_tool_use_id":"tu1","task_id":"t1","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"digging"}}}"#;
+        let (_, updates) = speak(&[live], Policy::Any, Overage::Refuse, 20);
+        let (id, edge) = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::SubLive { id, live } => Some((id.clone(), live.clone())),
+                _ => None,
+            })
+            .expect("a SubLive for the pane");
+        assert_eq!(id, "tu1");
+        assert_eq!(edge.text, "digging");
+        assert!(
+            !updates.iter().any(|u| matches!(u, Update::Live(_))),
+            "a subagent's words are not the parent's: {updates:?}"
+        );
+    }
+
+    // A line that names no `parent_tool_use_id` falls back to the task ledger's id, and a tool
+    // start is a tool the pane can draw under the subagent.
+    #[test]
+    fn a_subagent_live_tool_start_falls_back_to_the_task_id() {
+        let live = r#"{"type":"subagent_live","task_id":"t2","event":{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu9","name":"Read"}}}"#;
+        let (_, updates) = speak(&[live], Policy::Any, Overage::Refuse, 20);
+        let (id, edge) = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::SubLive { id, live } => Some((id.clone(), live.clone())),
+                _ => None,
+            })
+            .expect("a SubLive for the pane");
+        assert_eq!(id, "t2");
+        assert_eq!(edge.tools.len(), 1);
+        assert_eq!(edge.tools[0].id, "tu9");
+        assert_eq!(edge.tools[0].tool, "Read");
+    }
+
+    // A live edge no name carries is dropped, not guessed at.
+    #[test]
+    fn an_unnamed_subagent_live_line_is_dropped() {
+        let live =
+            r#"{"type":"subagent_live","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"?"}}}"#;
+        let (_, updates) = speak(&[live], Policy::Any, Overage::Refuse, 20);
+        assert!(updates.is_empty(), "{updates:?}");
+    }
+
+    #[test]
+    fn the_source_declares_subagent_live_streaming() {
+        let abilities = ClaudeConversation::abilities();
+        assert!(abilities.streams.contains(&Stream::SubLive));
+    }
+
+    // Search and older turns: the session's transcript, the file the child writes, is what the
+    // pane pages back through and searches.
+    /// A transcript on disk: two exchanges, in the shape the child writes them.
+    fn transcript_file() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("a transcript dir");
+        let path = dir.path().join("session.jsonl");
+        std::fs::write(
+            &path,
+            [
+                r#"{"type":"user","uuid":"u1","timestamp":"2025-01-01T00:00:00Z","message":{"content":"hello there agent"}}"#,
+                r#"{"type":"assistant","uuid":"a1","parentUuid":"u1","timestamp":"2025-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"general kenobi standing by"}]}}"#,
+                r#"{"type":"user","uuid":"u2","timestamp":"2025-01-01T00:00:02Z","message":{"content":"what is the answer to life"}}"#,
+                r#"{"type":"assistant","uuid":"a2","parentUuid":"u2","timestamp":"2025-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"forty two needles on the dial"}]}}"#,
+            ]
+            .join("\n")
+            + "\n",
+        )
+        .expect("the transcript");
+        (dir, path)
+    }
+
+    fn turn_text(turn: &kampr_journal::Turn) -> String {
+        turn.blocks
+            .iter()
+            .filter_map(|b| match b {
+                kampr_journal::Block::Md { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    #[test]
+    fn an_older_command_pages_the_transcript() {
+        let (_dir, path) = transcript_file();
+        let (_, updates) = script_with(
+            &[Event::Command(Command::Older { before: None })],
+            Some(path),
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        let page = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Older(page) => Some(page),
+                _ => None,
+            })
+            .expect("an Older page for the pane");
+        assert!(
+            page
+                .turns
+                .iter()
+                .any(|t| turn_text(t).contains("hello there agent")),
+            "{page:?}"
+        );
+        assert!(
+            page
+                .turns
+                .iter()
+                .any(|t| turn_text(t).contains("forty two needles")),
+            "{page:?}"
+        );
+    }
+
+    // The cursor a page hands back reaches the page above it: the older page holds nothing the
+    // first page held, and `more` says there is still transcript above it.
+    #[test]
+    fn an_older_command_pages_back_from_the_cursor() {
+        let dir = tempfile::tempdir().expect("a transcript dir");
+        let path = dir.path().join("session.jsonl");
+        // 210 exchanges: more than a page, so the first page is not the whole transcript.
+        let mut lines = Vec::new();
+        for i in 1..=210 {
+            lines.push(format!(
+                r#"{{"type":"user","uuid":"u{i}","timestamp":"2025-01-01T00:00:00Z","message":{{"content":"prompt number {i}"}}}}"#
+            ));
+            lines.push(format!(
+                r#"{{"type":"assistant","uuid":"a{i}","parentUuid":"u{i}","timestamp":"2025-01-01T00:00:01Z","message":{{"content":[{{"type":"text","text":"answer number {i}"}}]}}}}"#
+            ));
+        }
+        std::fs::write(&path, lines.join("\n") + "\n").expect("the transcript");
+
+        let (_, first_updates) = script_with(
+            &[Event::Command(Command::Older { before: None })],
+            Some(path.clone()),
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        let first = first_updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Older(page) => Some(page.clone()),
+                _ => None,
+            })
+            .expect("the first page");
+        assert!(first.more, "there is transcript above the first page: {first:?}");
+        let cursor = first.cursor.clone().expect("a cursor to page back from");
+        let oldest = first.turns.first().expect("a turn on the first page");
+
+        let (_, updates) = script_with(
+            &[Event::Command(Command::Older {
+                before: Some(cursor),
+            })],
+            Some(path),
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        let older = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Older(page) => Some(page),
+                _ => None,
+            })
+            .expect("the older page");
+        assert!(
+            older.turns.iter().all(|t| t.id != oldest.id),
+            "the older page holds nothing the first page held: {older:?}"
+        );
+        assert!(
+            older
+                .turns
+                .iter()
+                .any(|t| turn_text(t).contains("prompt number 1")),
+            "the older page reaches further back: {older:?}"
+        );
+    }
+
+    #[test]
+    fn a_find_command_searches_the_transcript() {
+        let (_dir, path) = transcript_file();
+        let (_, updates) = script_with(
+            &[Event::Command(Command::Find {
+                query: "needle".into(),
+                cap: 10,
+            })],
+            Some(path),
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        let found = updates
+            .iter()
+            .find_map(|u| match u {
+                Update::Found { query, found } => Some((query.clone(), found.clone())),
+                _ => None,
+            })
+            .expect("a Found for the pane");
+        assert_eq!(found.0, "needle");
+        assert_eq!(found.1.total, 1, "{found:?}");
+        assert_eq!(found.1.hits.len(), 1, "{found:?}");
+        assert!(found.1.hits[0].text.contains("needle"), "{found:?}");
+    }
+
+    // No transcript on disk: the pane is not answered with a guess.
+    #[test]
+    fn older_and_find_without_a_transcript_are_dropped() {
+        let (_, updates) = script_with(
+            &[
+                Event::Command(Command::Older { before: None }),
+                Event::Command(Command::Find {
+                    query: "needle".into(),
+                    cap: 10,
+                }),
+            ],
+            None,
+            Policy::Any,
+            Overage::Refuse,
+            20,
+        );
+        assert!(
+            updates.iter().all(|u| !matches!(u, Update::Older(_) | Update::Found { .. })),
+            "{updates:?}"
         );
     }
 

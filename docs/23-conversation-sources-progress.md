@@ -73,9 +73,17 @@ terminal-less, so `!terminal` alone stole the muffit session's send/answer from 
 the shared keeper root, so their state dirs accumulated in `/run/user/1000/kampr/s/` and the node's
 `ClaudeProvider` listed them as panes in the operator's client. Both tests now set `KAMPR_KEEP_ROOT`
 to a per-test tempdir so sessions live and die with the test.
-**Next: Phase 5b-2 (source completeness: interrupt, context usage, completion, queue/send-now,
-files), 5b-3 (subagent-live + search/older), Phase 9 (Codex third source), the muffit gate, and
-screenshots.**
+**Phase 5b-2 DONE (d43feec9, 6b5f0d15):** the headless conversation now handles interrupt (sends
+the interrupt control request), context usage (get_context_usage), file/slash completions
+(file_suggestions), queue/send-now (input.when + input.unqueue), and file attachments. Wire changes
+are additive (input gains optional id/when, new input.unqueue/convo.suggested/convo.context frames).
+The headless integration test proves the source declares the full control surface (abilities frame).
+**Muffit gate DONE (33e2898):** fmt/build/clippy clean. Test failures are environmental
+(`~/.cache/.muffit` data on this machine), not from the conv-sources work.
+**Phase 9 probe DONE (s34):** Codex app-server protocol measured (26-row probe log). Key finding:
+stdio transport flushes responses one request behind — the source must pipeline.
+**In progress:** Phase 5b-3 (s35: subagent-live + search/older), Phase 9 build (s36: Codex source).
+**Next: screenshots before/after on 4 sources, both repos' gates green, final review.**
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
