@@ -8,8 +8,24 @@ pub(crate) enum Change {
     Session(String),
 }
 
-/// One blocking thread per provider, which ends as soon as the returned [`Stop`] is dropped.
-pub(crate) fn spawn(root: PathBuf, mut on: impl FnMut(BTreeSet<Change>) + Send + 'static) -> Option<Stop> {
+/// One blocking thread per provider, ended and joined by dropping the returned [`Watcher`].
+pub(crate) struct Watcher {
+    stop: Option<Stop>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for Watcher {
+    fn drop(&mut self) {
+        drop(self.stop.take());
+        if let Some(thread) = self.thread.take()
+            && thread.thread().id() != std::thread::current().id()
+        {
+            let _ = thread.join();
+        }
+    }
+}
+
+pub(crate) fn spawn(root: PathBuf, mut on: impl FnMut(BTreeSet<Change>) + Send + 'static) -> Option<Watcher> {
     let (mut sessions, stop) = match Sessions::new(&root) {
         Ok(watching) => watching,
         Err(e) => {
@@ -17,7 +33,7 @@ pub(crate) fn spawn(root: PathBuf, mut on: impl FnMut(BTreeSet<Change>) + Send +
             return None;
         }
     };
-    std::thread::Builder::new()
+    let thread = std::thread::Builder::new()
         .name("kampr-native-watch".into())
         .spawn(move || {
             while let Some(changes) = sessions.next() {
@@ -25,7 +41,10 @@ pub(crate) fn spawn(root: PathBuf, mut on: impl FnMut(BTreeSet<Change>) + Send +
             }
         })
         .expect("a watcher thread");
-    Some(stop)
+    Some(Watcher {
+        stop: Some(stop),
+        thread: Some(thread),
+    })
 }
 
 enum Watched {

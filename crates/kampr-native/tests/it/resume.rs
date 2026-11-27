@@ -440,6 +440,44 @@ async fn auto_starts_what_ask_would_list() {
     .await;
 }
 
+// A watcher left running re-adopts a session whose keeper was just killed, and the new intake's
+// reconcile drops the record of the program that died with it: on a Mac, almost every restart.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_shutdown_provider_whose_root_changes_does_not_rescan_or_touch_the_store() {
+    let root = Root::new();
+    let provider = root.provider(ResumeMode::Ask);
+    let pane = session(&provider, &[("ARGV", &sleeping())]).await;
+    let owner = until("the record", || {
+        root.owners(&pane).first().and_then(|o| o["pid"].as_i64())
+    })
+    .await;
+    let id = pane.strip_prefix(PREFIX).unwrap();
+    let stored = root.store().join(format!("{id}.json"));
+    let before = std::fs::read(&stored).expect("the record");
+
+    provider.shutdown();
+    kampr_testkit::stop_keepers(root.sessions.path());
+    until("the owner to die", || {
+        (unsafe { libc::kill(owner as i32, 0) } != 0).then_some(())
+    })
+    .await;
+    let topology = *provider.topology().borrow();
+    std::fs::create_dir(root.sessions.path().join("later")).unwrap();
+    std::fs::write(root.sessions.path().join(id).join("spec.json.touched"), b"").unwrap();
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+
+    assert_eq!(
+        *provider.topology().borrow(),
+        topology,
+        "a shutdown provider rescanned"
+    );
+    assert_eq!(
+        std::fs::read(&stored).ok(),
+        Some(before),
+        "a shutdown provider touched the store"
+    );
+}
+
 // A Mac's /tmp sweep deletes files nobody has touched in days, and spec.json is written once: a
 // session still running must not look gone to a restarted node under `auto`, nor to attach.
 #[tokio::test(flavor = "multi_thread")]

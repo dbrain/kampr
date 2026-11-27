@@ -1,7 +1,7 @@
 //! The production launch path, `CodexSource::from_env`, against the probe's mock: the node's own
 //! environment and the operator's login profile carry every variable codex reads for auth or an
-//! endpoint (probe row 697), and the child's actual environment, read back from `/proc`, carries
-//! the profile's `PATH` and the rest of it, and none of those.
+//! endpoint (probe row 697), and the child's actual environment, which the launcher writes down
+//! before it becomes the mock, carries the profile's `PATH` and the rest of it, and none of those.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -34,7 +34,11 @@ fn launcher(dir: &Path) -> String {
     let path = dir.join("codex");
     std::fs::write(
         &path,
-        format!("#!/bin/sh\nexec python3 {} \"$@\"\n", mock.display()),
+        format!(
+            "#!/bin/sh\npython3 -c 'import os, sys; open(sys.argv[1], \"wb\").write(b\"\\0\".join(k + b\"=\" + v for k, v in os.environb.items()))' '{}'\nexec python3 '{}' \"$@\"\n",
+            dir.join("environ").display(),
+            mock.display()
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -69,8 +73,8 @@ fn login_shell(dir: &Path, home: &Path, codex_home: &Path) -> String {
     shell.display().to_string()
 }
 
-fn environ(pid: u32) -> Vec<(String, String)> {
-    std::fs::read(format!("/proc/{pid}/environ"))
+fn environ(dir: &Path) -> Vec<(String, String)> {
+    std::fs::read(dir.join("environ"))
         .unwrap()
         .split(|b| *b == 0)
         .filter_map(|kv| {
@@ -123,8 +127,7 @@ fn the_codex_child_starts_with_the_login_environment_less_the_provider_keys() {
                 .unwrap()
                 .unwrap()
             {}
-            let pid = source.herd().pid(&id).expect("the open pane is in the herd");
-            let env = environ(pid);
+            let env = environ(dir.path());
             source.herd().end(&id).await;
             env
         });

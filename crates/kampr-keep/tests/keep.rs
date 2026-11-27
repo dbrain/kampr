@@ -613,17 +613,21 @@ fn an_overlong_write_is_refused_and_never_reaches_the_child() {
 
     // Straight at the socket, past any client cap: the keeper must refuse, not ack.
     let mut stream = UnixStream::connect(live.session.path().join("ctl.sock")).expect("connect");
+    // Before the write: macOS refuses setsockopt (EINVAL) on a socket the keeper has hung up.
+    stream.set_read_timeout(Some(SOON)).expect("timeout");
     let long = format!("write {}\n", "x".repeat(64 * 1024 + 100));
     // macOS's small socket buffer lets the keeper refuse and hang up before the whole line is
-    // written, so the write may end in EPIPE with the refusal already waiting to be read.
+    // written, so the write may end in EPIPE (Linux) or ENOTCONN (macOS) with the refusal already
+    // waiting to be read.
     if let Err(e) = stream.write_all(long.as_bytes()) {
-        assert_eq!(
-            e.kind(),
-            std::io::ErrorKind::BrokenPipe,
+        assert!(
+            matches!(
+                e.kind(),
+                std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::NotConnected
+            ),
             "send the overlong request: {e}"
         );
     }
-    stream.set_read_timeout(Some(SOON)).expect("timeout");
     let mut reply = String::new();
     BufReader::new(stream).read_line(&mut reply).expect("a reply");
     assert!(

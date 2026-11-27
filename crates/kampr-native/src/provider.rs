@@ -11,15 +11,15 @@ use async_trait::async_trait;
 use kampr_core::desk::{Desk, DeskReport, Hosting};
 use kampr_core::program::ProgramStatus;
 use kampr_core::provider::{
-    AgentStatus, Found, Input, NativeExit, NativePane, PaneInfo, PaneStream, Provider, RawScrollback, Reflow,
-    split_view,
+    AgentStatus, Found, Input, NativeExit, NativePane, PaneEvent, PaneInfo, PaneStream, Provider,
+    RawScrollback, Reflow, split_view,
 };
 use kampr_core::tile::Split;
 use kampr_journal::process::{Harness, PaneProcess};
 use kampr_keep::{Ending, Launch, Mode, SessionDir, Spec};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::{broadcast, watch};
 
@@ -101,7 +101,7 @@ pub struct NewSession {
 
 pub struct NativeProvider {
     pub(crate) inner: Arc<Inner>,
-    _watch: Option<kampr_watch::Stop>,
+    watch: Mutex<Option<watcher::Watcher>>,
 }
 
 pub(crate) struct Inner {
@@ -117,6 +117,10 @@ pub(crate) struct Inner {
     views: Views,
     pub(crate) layouts: Mutex<Layouts>,
     pub(crate) workspaces: Mutex<Workspaces>,
+    /// Set by `shutdown`, after which nothing is adopted and no intake edits the resume store: a
+    /// keeper killed after its node let go must not read as a program that ended by itself.
+    closing: Arc<AtomicBool>,
+    streams: Mutex<Vec<tokio::task::AbortHandle>>,
 }
 
 struct Hold {
@@ -139,6 +143,8 @@ impl NativeProvider {
             views: Views::default(),
             layouts: Mutex::new(Layouts::load(&config.root)),
             workspaces: Mutex::new(Workspaces::load(&config.root)),
+            closing: Arc::new(AtomicBool::new(false)),
+            streams: Mutex::new(Vec::new()),
             config,
         });
         inner.rescan();
@@ -148,7 +154,10 @@ impl NativeProvider {
                 inner.changed(changes);
             }
         });
-        Ok(Self { inner, _watch: watch })
+        Ok(Self {
+            inner,
+            watch: Mutex::new(watch),
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -176,6 +185,12 @@ impl NativeProvider {
     }
 
     pub fn shutdown(&self) {
+        self.inner.closing.store(true, Ordering::SeqCst);
+        // Joined outside the lives lock: a rescan the watcher is part way through takes it.
+        drop(self.watch.lock().unwrap().take());
+        for stream in self.inner.streams.lock().unwrap().drain(..) {
+            stream.abort();
+        }
         for live in self.inner.lives.lock().unwrap().drain().map(|(_, l)| l) {
             live.stop();
             live.checkpoint(true);
@@ -489,7 +504,9 @@ impl NativeProvider {
         if let Some(live) = self.inner.lives.lock().unwrap().get(session.id()) {
             return Ok(live.clone());
         }
-        Ok(self.inner.adopt(session))
+        self.inner
+            .adopt(session)
+            .ok_or_else(|| anyhow!("{pane}: the native provider has shut down"))
     }
 }
 
@@ -504,15 +521,38 @@ impl Inner {
         self.topology.send_modify(|n| *n += 1);
     }
 
-    fn adopt(&self, session: SessionDir) -> Arc<Live> {
+    fn adopt(&self, session: SessionDir) -> Option<Arc<Live>> {
         let mut lives = self.lives.lock().unwrap();
-        lives
-            .entry(session.id().to_string())
-            .or_insert_with(|| {
-                let token = self.tokens.lock().unwrap().remove(session.id());
-                Live::start(session, self.topology.clone(), self.config.resume.clone(), token)
-            })
-            .clone()
+        if self.closing.load(Ordering::SeqCst) {
+            return None;
+        }
+        let live = lives.entry(session.id().to_string()).or_insert_with(|| {
+            let token = self.tokens.lock().unwrap().remove(session.id());
+            Live::start(
+                session,
+                self.topology.clone(),
+                self.config.resume.clone(),
+                token,
+                self.closing.clone(),
+            )
+        });
+        Some(live.clone())
+    }
+
+    /// Ended by `shutdown` as well as by its stream being dropped.
+    fn supervised(
+        &self,
+        rx: tokio::sync::mpsc::Receiver<PaneEvent>,
+        task: tokio::task::JoinHandle<()>,
+    ) -> PaneStream {
+        let mut streams = self.streams.lock().unwrap();
+        streams.retain(|s| !s.is_finished());
+        if self.closing.load(Ordering::SeqCst) {
+            task.abort();
+        } else {
+            streams.push(task.abort_handle());
+        }
+        PaneStream::supervised(rx, task)
     }
 
     /// Closing a session on purpose is the person saying it needs no resuming.
@@ -577,7 +617,7 @@ impl Inner {
     }
 
     fn changed(&self, changes: BTreeSet<Change>) {
-        if changes.is_empty() {
+        if changes.is_empty() || self.closing.load(Ordering::SeqCst) {
             return;
         }
         for change in &changes {
@@ -755,7 +795,8 @@ impl Provider for NativeProvider {
 
     async fn watch_pane(&self, pane_id: &str) -> Result<PaneStream> {
         if let Some((live, view)) = self.view(pane_id)? {
-            return Ok(reflow::stream(live, view));
+            let (rx, task) = reflow::stream(live, view);
+            return Ok(self.inner.supervised(rx, task));
         }
         let live = self.live(pane_id)?;
         let (tx, rx) = tokio::sync::mpsc::channel(256);
@@ -780,7 +821,7 @@ impl Provider for NativeProvider {
                 }
             }
         });
-        Ok(PaneStream::supervised(rx, task))
+        Ok(self.inner.supervised(rx, task))
     }
 
     async fn write_pane(&self, pane_id: &str, input: Input) -> Result<()> {

@@ -3,9 +3,7 @@
 //! (`tests/support/fake-claude.py`), so no turn is spent and nothing reaches Anthropic, and what
 //! it records is what the node really sent it.
 
-use crate::live::Harness;
-use crate::native::Client;
-use kampr_auth::Role;
+use crate::native::{Client, Harness};
 use kampr_core::conversation::{Ending, NewSession, Source};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -61,7 +59,7 @@ struct Headless {
 }
 
 impl Headless {
-    async fn start(tag: &str, turn: Value) -> Self {
+    async fn start(turn: Value) -> Self {
         let turn_lock = ONE_AT_A_TIME.lock().await;
         let dir = tempfile::tempdir().expect("a scratch dir");
         let keep_root = tempfile::tempdir().expect("a throwaway keeper root");
@@ -87,7 +85,7 @@ impl Headless {
             unsafe { std::env::set_var(k, v) };
         }
         let config_dir = dir.path().join("claude");
-        let h = Harness::start_with(tag, |config| {
+        let h = Harness::start_with(Harness::home(), |config| {
             config.claude.binary = fake.display().to_string();
             config.claude.config_dir = config_dir.display().to_string();
         })
@@ -111,9 +109,7 @@ impl Headless {
         })
         .await;
 
-        let token = h.token(Role::Full).await;
-        let socket = h.connect(&token).await;
-        let client = Client::over(socket, token);
+        let client = h.client().await;
         Self {
             _turn: turn_lock,
             dir,
@@ -220,7 +216,7 @@ async fn a_headless_panes_composer_send_and_answer_reach_the_child() {
         {"wait": "answer"},
         done(),
     ]);
-    let mut s = Headless::start("headless-convo", turn).await;
+    let mut s = Headless::start(turn).await;
     let abilities = s.open().await;
     for word in ["slash", "queuenext", "sendnow", "unqueue", "files", "images"] {
         assert!(
@@ -286,7 +282,7 @@ async fn a_headless_question_plan_and_form_are_answered_with_what_the_clients_se
         {"wait": "answer"},
         done(),
     ]);
-    let mut s = Headless::start("headless-asks", turn).await;
+    let mut s = Headless::start(turn).await;
     s.open().await;
     s.say("go").await;
 

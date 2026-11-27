@@ -51,6 +51,7 @@ pub(crate) struct Live {
     /// can write in between, and what it writes then is asked of this node.
     replay_end: Option<u64>,
     resume: Option<Resume>,
+    closing: Arc<AtomicBool>,
     intake: Mutex<Option<Arc<Intake>>>,
 }
 
@@ -123,11 +124,12 @@ impl Live {
         topology: watch::Sender<u64>,
         resume: Option<Resume>,
         token: Option<kampr_core::resume::Token>,
+        closing: Arc<AtomicBool>,
     ) -> Arc<Self> {
         let (cols, rows) = size_of(&dir);
         let typed_at_report = read_at(&dir);
         let replay_end = dir.log_end().ok();
-        let intake = Intake::open(resume.as_ref(), &dir, token);
+        let intake = Intake::open(resume.as_ref(), &dir, token, &closing);
         let live = Arc::new(Self {
             dir,
             state: Mutex::new(State {
@@ -154,6 +156,7 @@ impl Live {
             replay_end,
             intake: Mutex::new(intake),
             resume,
+            closing,
         });
         let tail = live.clone();
         std::thread::Builder::new()
@@ -653,7 +656,7 @@ impl Live {
         let intake = {
             let mut held = self.intake.lock().unwrap();
             if held.is_none() {
-                *held = Intake::open(self.resume.as_ref(), &self.dir, None);
+                *held = Intake::open(self.resume.as_ref(), &self.dir, None, &self.closing);
             }
             held.clone()
         };

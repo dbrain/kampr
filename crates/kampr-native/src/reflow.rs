@@ -3,7 +3,7 @@ use crate::history::{self, Row};
 use crate::live::Live;
 use crate::procs;
 use crate::screen::Screen;
-use kampr_core::provider::{Found, PaneEvent, PaneStream, RawScrollback, Reflow};
+use kampr_core::provider::{Found, PaneEvent, RawScrollback, Reflow};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::hash::{DefaultHasher, Hash, Hasher};
@@ -527,7 +527,13 @@ impl Views {
 /// A view's stream rides the session's own: every frame the session publishes is a cue to re-lay
 /// the screen, and the cues queued behind one are taken with it, so a busy log costs one lay-out
 /// per batch rather than one per read. The session's emulator is not touched.
-pub(crate) fn stream(live: Arc<Live>, view: Arc<Mutex<View>>) -> PaneStream {
+pub(crate) fn stream(
+    live: Arc<Live>,
+    view: Arc<Mutex<View>>,
+) -> (
+    tokio::sync::mpsc::Receiver<PaneEvent>,
+    tokio::task::JoinHandle<()>,
+) {
     let (tx, rx) = tokio::sync::mpsc::channel(256);
     let task = tokio::spawn(async move {
         loop {
@@ -574,7 +580,7 @@ pub(crate) fn stream(live: Arc<Live>, view: Arc<Mutex<View>>) -> PaneStream {
             }
         }
     });
-    PaneStream::supervised(rx, task)
+    (rx, task)
 }
 
 #[cfg(test)]

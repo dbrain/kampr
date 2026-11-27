@@ -29,9 +29,9 @@ const NODE: &str = "01JNATIVENODE";
 const DEVICE: &str = "native";
 const SOON: Duration = Duration::from_secs(15);
 
-struct Harness {
+pub(crate) struct Harness {
     home: Option<tempfile::TempDir>,
-    node: Arc<Node>,
+    pub(crate) node: Arc<Node>,
     origin: String,
     port: u16,
     server: tokio::task::JoinHandle<()>,
@@ -52,7 +52,7 @@ impl Harness {
         Self::start_in(Self::home()).await
     }
 
-    fn home() -> tempfile::TempDir {
+    pub(crate) fn home() -> tempfile::TempDir {
         tempfile::Builder::new()
             .prefix("kn")
             .tempdir_in("/tmp")
@@ -63,7 +63,7 @@ impl Harness {
         Self::start_with(home, |_| {}).await
     }
 
-    async fn start_with(home: tempfile::TempDir, tweak: fn(&mut Config)) -> Self {
+    pub(crate) async fn start_with(home: tempfile::TempDir, tweak: impl FnOnce(&mut Config)) -> Self {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("a port");
@@ -93,7 +93,7 @@ impl Harness {
         home: tempfile::TempDir,
         listener: tokio::net::TcpListener,
         port: u16,
-        tweak: fn(&mut Config),
+        tweak: impl FnOnce(&mut Config),
     ) -> Self {
         let config_dir = home.path().join("config");
         let state_dir = home.path().join("state");
@@ -149,7 +149,7 @@ impl Harness {
         dir
     }
 
-    async fn client(&self) -> Client {
+    pub(crate) async fn client(&self) -> Client {
         let pairing = self
             .node
             .auth

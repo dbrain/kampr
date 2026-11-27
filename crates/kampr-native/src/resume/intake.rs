@@ -21,13 +21,23 @@ pub(crate) struct Intake {
     token: Token,
     label: Option<String>,
     stopped: AtomicBool,
+    /// The provider's: once it is shutting down, an owner found dead was killed with its keeper.
+    closing: Arc<AtomicBool>,
 }
 
 impl Intake {
     /// `None` for a session with no token: resume is off, the node is root, the session is a
     /// Docker shell, or it predates tokens.
-    pub fn open(resume: Option<&Resume>, session: &SessionDir, known: Option<Token>) -> Option<Arc<Self>> {
+    pub fn open(
+        resume: Option<&Resume>,
+        session: &SessionDir,
+        known: Option<Token>,
+        closing: &Arc<AtomicBool>,
+    ) -> Option<Arc<Self>> {
         let resume = resume.filter(|r| r.active())?;
+        if closing.load(Ordering::SeqCst) {
+            return None;
+        }
         let token = known.or_else(|| read_token(session.path()))?;
         let intake = Arc::new(Self {
             store: Store::new(resume.dir.clone()),
@@ -35,6 +45,7 @@ impl Intake {
             token,
             label: session.spec().ok().and_then(|spec| spec.label),
             stopped: AtomicBool::new(false),
+            closing: closing.clone(),
         });
         intake.reconcile();
         Some(intake)
@@ -42,6 +53,10 @@ impl Intake {
 
     pub fn stop(&self) {
         self.stopped.store(true, Ordering::Relaxed);
+    }
+
+    fn stopped(&self) -> bool {
+        self.stopped.load(Ordering::Relaxed) || self.closing.load(Ordering::SeqCst)
     }
 
     /// `replayed` is a report read again after a restart: it counts only past what was stored, and
@@ -143,6 +158,9 @@ impl Intake {
             .store
             .update(self.session.id(), |file| {
                 let mut running = Vec::new();
+                if self.stopped() {
+                    return Vec::new();
+                }
                 file.owners.retain(|o| {
                     let alive = lives(o.pid, &o.start);
                     if alive {
@@ -165,7 +183,7 @@ impl Intake {
             .spawn(move || {
                 loop {
                     while lives(pid, &start) {
-                        if intake.stopped.load(Ordering::Relaxed) {
+                        if intake.stopped() {
                             return;
                         }
                         std::thread::sleep(POLL);
@@ -175,10 +193,7 @@ impl Intake {
                         break;
                     }
                 }
-                if intake.stopped.load(Ordering::Relaxed)
-                    || intake.session.exit().is_some()
-                    || !intake.session.alive()
-                {
+                if intake.stopped() || intake.session.exit().is_some() || !intake.session.alive() {
                     return;
                 }
                 let _ = intake.store.update(intake.session.id(), |file| {

@@ -83,6 +83,10 @@ impl Store {
             .filter(|(_, id, _)| !skip.contains(id))
             .collect();
         files.sort_by_key(|f| std::cmp::Reverse(f.0));
+        // Claude records the resolved cwd, and a client may name it through a symlink (macOS's
+        // /tmp and /var are both links into /private).
+        let resolved = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let want = cwd.map(resolved);
         files
             .into_iter()
             .map(|(_, id, path)| {
@@ -93,7 +97,10 @@ impl Store {
                     title,
                 }
             })
-            .filter(|s| cwd.is_none_or(|want| s.cwd.as_deref() == Some(want)))
+            .filter(|s| {
+                want.as_ref()
+                    .is_none_or(|want| s.cwd.as_deref().map(resolved).as_ref() == Some(want))
+            })
             .take(LISTED)
             .collect()
     }
@@ -210,6 +217,33 @@ mod tests {
 
         let skipped = store.stored(None, &HashSet::from(["11111111-aaaa".to_string()]));
         assert!(skipped.iter().all(|s| s.id != "11111111-aaaa"));
+    }
+
+    #[test]
+    fn a_cwd_reached_through_a_symlink_is_the_same_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().canonicalize().unwrap().join("real");
+        std::fs::create_dir_all(real.join("w")).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+        let resolved = real.join("w").display().to_string();
+        let linked = dir.path().join("link").join("w").display().to_string();
+        transcript(dir.path(), "-a", "resolved-id", &[&json_line(&resolved)]);
+        transcript(dir.path(), "-b", "linked-id", &[&json_line(&linked)]);
+        let store = store(dir.path());
+
+        for asked in [&resolved, &linked] {
+            let mut ids: Vec<String> = store
+                .stored(Some(Path::new(asked)), &HashSet::new())
+                .into_iter()
+                .map(|s| s.id)
+                .collect();
+            ids.sort();
+            assert_eq!(ids, ["linked-id", "resolved-id"], "asked for {asked}");
+        }
+    }
+
+    fn json_line(cwd: &str) -> String {
+        serde_json::json!({"type": "user", "cwd": cwd, "message": {"content": "x"}}).to_string()
     }
 
     #[test]
