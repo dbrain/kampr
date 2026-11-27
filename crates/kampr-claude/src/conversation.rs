@@ -578,7 +578,11 @@ fn process_line(
 fn fetch_context(inner: &mut Inner, write_line: &mut dyn FnMut(&str) -> std::io::Result<()>) {
     let id = inner.next_request();
     inner.context_request = Some(id.clone());
-    let _ = write_line(&wire::control_request(&id, "get_context_usage", serde_json::json!({})));
+    let _ = write_line(&wire::control_request(
+        &id,
+        "get_context_usage",
+        serde_json::json!({}),
+    ));
 }
 
 /// The `get_context_usage` answer, in the shape the binary sends it: `totalTokens` against
@@ -588,7 +592,11 @@ fn context_use(body: &serde_json::Value) -> Option<kampr_core::conversation::Con
     let total = body
         .get("maxTokens")
         .and_then(serde_json::Value::as_u64)
-        .or_else(|| breakdown.and_then(|b| b.get("max_tokens")).and_then(serde_json::Value::as_u64))?;
+        .or_else(|| {
+            breakdown
+                .and_then(|b| b.get("max_tokens"))
+                .and_then(serde_json::Value::as_u64)
+        })?;
     let used = body
         .get("totalTokens")
         .and_then(serde_json::Value::as_u64)
@@ -805,13 +813,11 @@ fn dispatch_command(
         Command::Task { id, from } => {
             inner.followed.insert(id.clone());
             let rid = inner.next_request();
-            let _ = write_line(
-                &wire::control_request(
-                    &rid,
-                    "get_task_output",
-                    serde_json::json!({ "task_id": id, "from": from }),
-                ),
-            );
+            let _ = write_line(&wire::control_request(
+                &rid,
+                "get_task_output",
+                serde_json::json!({ "task_id": id, "from": from }),
+            ));
         }
         Command::Unfollow { id } => {
             inner.followed.remove(&id);
@@ -851,7 +857,8 @@ fn dispatch_command(
                         init.slash_commands
                             .iter()
                             .filter(|c| {
-                                query.is_empty() || c.name.to_ascii_lowercase().contains(&query.to_ascii_lowercase())
+                                query.is_empty()
+                                    || c.name.to_ascii_lowercase().contains(&query.to_ascii_lowercase())
                             })
                             .map(|c| kampr_core::conversation::Suggestion {
                                 id: c.name.clone(),
@@ -881,7 +888,7 @@ fn dispatch_command(
             }
         },
         Command::Refresh(Fact::Context) => fetch_context(inner, write_line),
-        Command::Refresh(_) => {},
+        Command::Refresh(_) => {}
         Command::Older { before } => {
             if let Some(path) = transcript
                 && let Some(page) = transcript_page(path, before.as_deref())
@@ -1070,7 +1077,7 @@ fn api_trouble(error: &Option<String>, terminal_reason: Option<&str>) -> Trouble
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kampr_core::conversation::{FileRef, Suggestion, SuggestKind, When};
+    use kampr_core::conversation::{FileRef, SuggestKind, Suggestion, When};
 
     /// The seam's events in order: lines from the child, commands from the pane.
     enum Event<'a> {
@@ -1128,16 +1135,14 @@ mod tests {
                         break;
                     }
                 }
-                Event::Command(command) => {
-                    dispatch_command(
-                        command.clone(),
-                        &mut inner,
-                        &mut write_line,
-                        &mut emit,
-                        policy,
-                        &transcript,
-                    )
-                }
+                Event::Command(command) => dispatch_command(
+                    command.clone(),
+                    &mut inner,
+                    &mut write_line,
+                    &mut emit,
+                    policy,
+                    &transcript,
+                ),
             }
         }
         (written.lock().unwrap().clone(), updates.lock().unwrap().clone())
@@ -1145,12 +1150,7 @@ mod tests {
 
     /// Feed lines straight through the seam's line processor and collect the `Update`s it speaks
     /// and the stdin lines it writes.
-    fn speak(
-        lines: &[&str],
-        policy: Policy,
-        overage: Overage,
-        cap: u32,
-    ) -> (Vec<String>, Vec<Update>) {
+    fn speak(lines: &[&str], policy: Policy, overage: Overage, cap: u32) -> (Vec<String>, Vec<Update>) {
         script(
             &lines.iter().map(|l| Event::Line(*l)).collect::<Vec<_>>(),
             policy,
@@ -1376,8 +1376,7 @@ mod tests {
     // A live edge no name carries is dropped, not guessed at.
     #[test]
     fn an_unnamed_subagent_live_line_is_dropped() {
-        let live =
-            r#"{"type":"subagent_live","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"?"}}}"#;
+        let live = r#"{"type":"subagent_live","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"?"}}}"#;
         let (_, updates) = speak(&[live], Policy::Any, Overage::Refuse, 20);
         assert!(updates.is_empty(), "{updates:?}");
     }
@@ -1438,15 +1437,13 @@ mod tests {
             })
             .expect("an Older page for the pane");
         assert!(
-            page
-                .turns
+            page.turns
                 .iter()
                 .any(|t| turn_text(t).contains("hello there agent")),
             "{page:?}"
         );
         assert!(
-            page
-                .turns
+            page.turns
                 .iter()
                 .any(|t| turn_text(t).contains("forty two needles")),
             "{page:?}"
@@ -1490,9 +1487,7 @@ mod tests {
         let oldest = first.turns.first().expect("a turn on the first page");
 
         let (_, updates) = script_with(
-            &[Event::Command(Command::Older {
-                before: Some(cursor),
-            })],
+            &[Event::Command(Command::Older { before: Some(cursor) })],
             Some(path),
             Policy::Any,
             Overage::Refuse,
@@ -1561,7 +1556,9 @@ mod tests {
             20,
         );
         assert!(
-            updates.iter().all(|u| !matches!(u, Update::Older(_) | Update::Found { .. })),
+            updates
+                .iter()
+                .all(|u| !matches!(u, Update::Older(_) | Update::Found { .. })),
             "{updates:?}"
         );
     }
@@ -1722,8 +1719,7 @@ mod tests {
             Overage::Refuse,
             20,
         );
-        let v: serde_json::Value =
-            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        let v: serde_json::Value = serde_json::from_str(&written[1]).expect("a user line: {written:?}");
         assert_eq!(v["priority"], "now", "{v}");
         assert_eq!(v["uuid"], "m1", "{v}");
     }
@@ -1736,8 +1732,7 @@ mod tests {
             Overage::Refuse,
             20,
         );
-        let v: serde_json::Value =
-            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        let v: serde_json::Value = serde_json::from_str(&written[1]).expect("a user line: {written:?}");
         assert_eq!(v["priority"], "next", "{v}");
 
         let (written, _) = script(
@@ -1746,8 +1741,7 @@ mod tests {
             Overage::Refuse,
             20,
         );
-        let v: serde_json::Value =
-            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        let v: serde_json::Value = serde_json::from_str(&written[1]).expect("a user line: {written:?}");
         assert!(v.get("priority").is_none(), "{v}");
     }
 
@@ -1759,8 +1753,7 @@ mod tests {
             Overage::Refuse,
             20,
         );
-        let v: serde_json::Value =
-            serde_json::from_str(&written[0]).expect("a control request: {written:?}");
+        let v: serde_json::Value = serde_json::from_str(&written[0]).expect("a control request: {written:?}");
         assert_eq!(v["request"]["subtype"], "cancel_async_message", "{v}");
         assert_eq!(v["request"]["message_uuid"], "m9", "{v}");
     }
@@ -1783,8 +1776,7 @@ mod tests {
             Overage::Refuse,
             20,
         );
-        let v: serde_json::Value =
-            serde_json::from_str(&written[1]).expect("a user line: {written:?}");
+        let v: serde_json::Value = serde_json::from_str(&written[1]).expect("a user line: {written:?}");
         let text = v["message"]["content"].as_str().expect("a plain-text prompt");
         assert!(text.contains("@/tmp/a.txt"), "{text}");
     }

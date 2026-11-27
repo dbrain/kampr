@@ -1103,10 +1103,7 @@ pub enum ClientMsg {
     /// `t` rather than a flag on `input`: a node that has never heard of it ignores the frame,
     /// which leaves the queue exactly where it was.
     #[serde(rename = "input.unqueue")]
-    InputUnqueue {
-        pane: String,
-        id: String,
-    },
+    InputUnqueue { pane: String, id: String },
     /// Bytes for the pane to work on, written to a file on the pane's own node and typed in as
     /// the path to it.
     ///

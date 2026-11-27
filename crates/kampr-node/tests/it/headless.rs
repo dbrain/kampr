@@ -90,8 +90,6 @@ fn errors(client: &Client) -> Vec<serde_json::Value> {
         .collect()
 }
 
-
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_terminal() {
     let mock = Mock::start();
@@ -106,10 +104,7 @@ async fn a_headless_panes_composer_send_and_answer_reach_the_conversation_not_a_
             "KAMPR_KEEP_EXE",
             kampr_testkit::keeper().display().to_string().as_str(),
         ),
-        (
-            "KAMPR_KEEP_ROOT",
-            keep_root.path().display().to_string().as_str(),
-        ),
+        ("KAMPR_KEEP_ROOT", keep_root.path().display().to_string().as_str()),
     ] {
         unsafe { std::env::set_var(k, v) };
     }
@@ -226,10 +221,7 @@ async fn a_headless_pane_carries_the_seams_full_control_surface() {
             "KAMPR_KEEP_EXE",
             kampr_testkit::keeper().display().to_string().as_str(),
         ),
-        (
-            "KAMPR_KEEP_ROOT",
-            keep_root.path().display().to_string().as_str(),
-        ),
+        ("KAMPR_KEEP_ROOT", keep_root.path().display().to_string().as_str()),
     ] {
         unsafe { std::env::set_var(k, v) };
     }
@@ -281,11 +273,21 @@ async fn a_headless_pane_carries_the_seams_full_control_surface() {
     let declared = &abilities["abilities"];
     for word in ["interrupt"] {
         assert!(
-            declared["steer"].as_array().is_some_and(|s| s.iter().any(|w| w == word)),
+            declared["steer"]
+                .as_array()
+                .is_some_and(|s| s.iter().any(|w| w == word)),
             "steer declares {word}: {declared}"
         );
     }
-    for word in ["slash", "mention", "queuenext", "sendnow", "unqueue", "files", "images"] {
+    for word in [
+        "slash",
+        "mention",
+        "queuenext",
+        "sendnow",
+        "unqueue",
+        "files",
+        "images",
+    ] {
         assert!(
             declared["input"]
                 .as_array()
@@ -322,5 +324,3 @@ async fn a_headless_pane_carries_the_seams_full_control_surface() {
         unsafe { std::env::remove_var(k) };
     }
 }
-
-

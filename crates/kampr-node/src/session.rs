@@ -1820,9 +1820,7 @@ impl Session {
                         .collect(),
                     files: files
                         .into_iter()
-                        .map(|path| kampr_core::conversation::FileRef {
-                            path: path.into(),
-                        })
+                        .map(|path| kampr_core::conversation::FileRef { path: path.into() })
                         .collect(),
                     when: match when.as_deref() {
                         Some("now") => kampr_core::conversation::When::Now,
@@ -2095,7 +2093,16 @@ impl Session {
         };
         if typed
             && !self
-                .input(pane, Some(text.clone()), None, None, Typing::default(), None, None, None)
+                .input(
+                    pane,
+                    Some(text.clone()),
+                    None,
+                    None,
+                    Typing::default(),
+                    None,
+                    None,
+                    None,
+                )
                 .await
         {
             if answered {
