@@ -266,6 +266,12 @@ async fn the_widened_answer_names_the_reply_and_the_old_shape_still_decodes() {
                       "id": 2, "tool": "bash" });
     fake.update("s1", |row| row["permission"] = prompt2.clone());
     fake.status(prompt2, json!([]));
+    // A key-only answer resolves against the prompt the node holds, and under load that is still
+    // the first one until the second's pending frame lands — so the answer waits for it, as the
+    // first does.
+    client
+        .frame("the second prompt", |f| f["t"] == "pending" && f["id"] == "2")
+        .await;
     client
         .send(json!({ "t": "answer", "pane": id, "key": "3" }))
         .await;

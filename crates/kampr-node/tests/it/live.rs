@@ -2478,8 +2478,10 @@ async fn the_port_is_bound_before_herdr_is_needed() {
 
     let started = tokio::time::Instant::now();
     let (node, origin, server) = serve_config(config, &state).await;
+    // 15 s, not 5: the budget must clear a full-suite run (measured 5.8 s on one) while staying
+    // far below the 30 s the herdr-wait this test exists to refuse used to spend.
     assert!(
-        started.elapsed() < Duration::from_secs(5),
+        started.elapsed() < Duration::from_secs(15),
         "Node::start must not wait on herdr, took {:?}",
         started.elapsed()
     );

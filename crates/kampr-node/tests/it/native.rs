@@ -1665,8 +1665,10 @@ async fn input_held_for_a_booting_harness_goes_on_the_frame_that_shows_it_readin
             (waits.len() == 5).then_some(waits)
         })
         .await;
+    // 100 ms a round, not 28: a full-suite run has cost 299 ms of the five (measured), and the
+    // budget stays far below the 500 ms stream backstop per round it exists to rule out.
     assert!(
-        waited.iter().sum::<u64>() < 5 * 28,
+        waited.iter().sum::<u64>() < 5 * 100,
         "held input reached the harness {waited:?} ms after it showed a dialog"
     );
 }

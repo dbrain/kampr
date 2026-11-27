@@ -70,11 +70,35 @@ async fn an_oom_kill_says_so() {
     let dir = tempfile::tempdir().unwrap();
     let directory = follow(&dir.path().join("events.jsonl"));
     until_up(&directory).await;
-    let oom = Container::run(&["-m", "16m", "--", r#"x=a; while true; do x="$x$x"; done"#]);
-    let entry = until(&directory, &oom.0, |c| c.last_crash.is_some()).await;
-    assert!(entry.oom, "{entry:?}");
-    assert_eq!(entry.exit_code, Some(137));
-    assert_eq!(entry.last_crash.map(|c| (c.exit_code, c.oom)), Some((137, true)));
+    // The daemon's own OOM detection misses some kills under load (measured once in eight: an
+    // exit 137 with no `oom` event and no OOMKilled, and no later event to make a follower re-read
+    // it) — a race in the daemon, not in what the node reports, so the kill is retried. An attempt
+    // the daemon *does* report as an OOM must be one the node reports as one, at once.
+    for _ in 0..4 {
+        let oom = Container::run(&["-m", "16m", "--", r#"x=a; while true; do x="$x$x"; done"#]);
+        let entry = until(&directory, &oom.0, |c| c.last_crash.is_some()).await;
+        assert_eq!(
+            entry.exit_code,
+            Some(137),
+            "the 16m container was not killed: {entry:?}"
+        );
+        if entry.oom {
+            assert_eq!(
+                entry.last_crash.as_ref().map(|c| (c.exit_code, c.oom)),
+                Some((137, true))
+            );
+            return;
+        }
+        let daemon_said_oom = directory
+            .events_of(&entry.id, 32)
+            .iter()
+            .any(|e| e.action == "oom");
+        assert!(
+            !daemon_said_oom,
+            "the daemon journalled an OOM and the node did not say so: {entry:?}"
+        );
+    }
+    panic!("the daemon never reported an OOM in four 16m kills");
 }
 
 #[tokio::test]

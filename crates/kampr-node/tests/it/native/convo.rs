@@ -151,8 +151,10 @@ async fn a_line_written_to_the_transcript_reaches_the_client_at_once() {
         c.append(FIRST, &line);
         slowest = slowest.max(c.arrives(&text, written).await);
     }
+    // 300 ms, not 100: a full-suite run has cost 150 ms of this (measured), and the budget must
+    // stay under the 400 ms tick it exists to rule out.
     assert!(
-        slowest < Duration::from_millis(100),
+        slowest < Duration::from_millis(300),
         "a line took {slowest:?} to arrive"
     );
 }
