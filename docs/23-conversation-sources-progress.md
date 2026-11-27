@@ -82,7 +82,7 @@ The headless integration test proves the source declares the full control surfac
 (`~/.cache/.muffit` data on this machine), not from the conv-sources work.
 **Phase 9 probe DONE (s34):** Codex app-server protocol measured (26-row probe log). Key finding:
 stdio transport flushes responses one request behind — the source must pipeline.
-**In progress:** Phase 5b-3 (s35: subagent-live + search/older), Phase 9 build (s36: Codex source).
+**In progress:** Phase 5b-3 (s35: subagent-live + search/older, DONE 2f851351), Phase 9 build (s36: Codex source, DONE 1ace3aea).
 **Next: screenshots before/after on 4 sources, both repos' gates green, final review.**
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
@@ -271,6 +271,6 @@ Deviations, all forced by the "no wire change" + "tests unmodified" constraints:
 
 ## Phase 8 — nothing left that needs the terminal — not started
 
-## Phase 9 — a third source — not started
+## Phase 9 — a third source — **DONE** (1ace3aea; `kampr-codex` crate, 13 files +2752; 7 wire tests + 4 integration tests against the probe's mock, all green; clippy clean, workspace check green). Codex `app-server --stdio` as the seam's third source: the pipelined pump (probe row 3's one-behind flush, nudge per call + 250 ms timer), `CodexConversation` mapping the turn/item/status notifications to `Live`/`Turns`/`State`/`Trouble`/`Notice`, `CodexSource` (create with optional first prompt, open, resumable, end through the herd), and the mock (`research/probe/codex-app-server/mock-stdio.py`) reproducing the measured wire behaviour including threads persisting across process restarts. The stress test's finding: the seam carried everything, including the one edge only a server that asks back exercises — a server→client request becomes an `Ask` and the `Answer` goes out as a best-effort decision (the schema leaves that reply free-form).
 
 ## Screenshots + gates — not started
