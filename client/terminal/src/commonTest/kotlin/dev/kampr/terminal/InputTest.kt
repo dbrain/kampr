@@ -558,6 +558,23 @@ class PaneScrollTest {
         assertEquals(List(3) { "\u001b[<65;41;21M" }, reports(ScrollKeys.Wheel, up = false))
     }
 
+    // muffit's TUI turns mouse capture on and moves its transcript three lines a wheel report, with no
+    // ramp. Cursor keys reached its composer instead and recalled the operator's input history.
+    @Test
+    fun muffitGetsOneWheelReportForEveryThreeRowsAndAFingerRowIsNotRounded() {
+        fun sent(rows: Int): List<String> {
+            val out = mutableListOf<String>()
+            PaneScroll(ScrollKeys.Notch) { out += it }.wheel(rows = rows, col = 40, row = 20)
+            return out
+        }
+        assertEquals(listOf("\u001b[<64;41;21M"), sent(3))
+        assertEquals(listOf("\u001b[<65;41;21M"), sent(-3))
+        assertEquals(2, sent(6).size)
+        assertEquals(1, sent(1).size, "a part-notch still moves the view")
+        assertEquals(6, ScrollKeys.Notch.land(count = 2, reversed = false).rows)
+        assertEquals(6, ScrollKeys.Notch.land(count = 2, reversed = true).rows, "no first-report-after-reversal loss")
+    }
+
     // Alternate scroll, which is what herdr does at the desk. The **application** form: `less`,
     // `man` and `vim` all set DECCKM, and the normal `ESC [ B` moved less by nothing (#390).
     @Test
@@ -578,6 +595,7 @@ class PaneScrollTest {
     @Test
     fun aMeasuredHarnessIsUpgradedAndEverythingElseTakesTheDefault() {
         assertEquals(ScrollKeys.Wheel, paneScrollKeys(agent = "claude", cmd = "claude"))
+        assertEquals(ScrollKeys.Notch, paneScrollKeys(agent = "muffit", cmd = "muffit"))
         assertEquals(ScrollKeys.CursorKeys, paneScrollKeys(agent = "codex", cmd = "codex"))
         assertEquals(ScrollKeys.CursorKeys, paneScrollKeys(agent = null, cmd = "less"))
         assertEquals(ScrollKeys.CursorKeys, paneScrollKeys(agent = null, cmd = "vim"))

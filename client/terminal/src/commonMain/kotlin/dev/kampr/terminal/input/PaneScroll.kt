@@ -21,6 +21,12 @@ enum class ScrollKeys {
     // arrived just before it (#567), which is `land`.
     Wheel,
 
+    // A program that took the mouse and moves a fixed three rows a report: muffit's TUI enables
+    // mouse capture and scrolls its transcript `WHEEL_LINES` (3) a wheel report, with no ramp and no
+    // loss on a change of direction (`muffit-tui/src/keys.rs`). Cursor keys went to its composer and
+    // recalled the operator's input history.
+    Notch,
+
     // Alternate scroll, and the default for everything else: the wheel becomes cursor keys. The
     // caret moves and the view follows it at the edge — which is exactly what herdr does with vim,
     // so the two surfaces behave alike rather than one of them inventing something.
@@ -36,6 +42,10 @@ enum class ScrollKeys {
 // nobody has probed is not guessed at, it just gets the default.
 private val TAKES_THE_WHEEL = setOf("claude")
 
+private val TAKES_A_NOTCH = setOf("muffit")
+
+private const val NOTCH_ROWS = 3
+
 // Which keys this pane is scrolled with, or nothing at all.
 //
 // **`cmd` is the gate, and it fails closed.** It is the pane's foreground job as the node reports
@@ -48,12 +58,13 @@ private val TAKES_THE_WHEEL = setOf("claude")
 fun paneScrollKeys(agent: String?, cmd: String?): ScrollKeys? = when {
     cmd == null -> null
     agent != null && agent in TAKES_THE_WHEEL -> ScrollKeys.Wheel
+    agent != null && agent in TAKES_A_NOTCH -> ScrollKeys.Notch
     else -> ScrollKeys.CursorKeys
 }
 
 // SGR (`?1006h`): a wheel is a press with no release — 64 up, 65 down — at 1-based cell coordinates.
 internal fun scrollReport(keys: ScrollKeys, up: Boolean, col: Int, row: Int): String = when (keys) {
-    ScrollKeys.Wheel -> "\u001b[<${if (up) 64 else 65};${col + 1};${row + 1}M"
+    ScrollKeys.Wheel, ScrollKeys.Notch -> "\u001b[<${if (up) 64 else 65};${col + 1};${row + 1}M"
     ScrollKeys.CursorKeys -> if (up) "\u001bOA" else "\u001bOB"
 }
 
@@ -68,6 +79,8 @@ internal class Landing(val rows: Int, val ramp: Double?)
 
 internal fun ScrollKeys.land(count: Int, reversed: Boolean, ramp: Double? = null): Landing = when (this) {
     ScrollKeys.CursorKeys -> Landing(count, null)
+
+    ScrollKeys.Notch -> Landing(count * NOTCH_ROWS, null)
 
     ScrollKeys.Wheel -> {
         var rows = 0
@@ -159,7 +172,8 @@ class PaneScroll(
     fun wheel(rows: Int, col: Int, row: Int) {
         if (rows == 0) return
         lastUp = rows > 0
-        repeat(abs(rows)) {
+        val reports = if (keys == ScrollKeys.Notch) (abs(rows) + NOTCH_ROWS - 1) / NOTCH_ROWS else abs(rows)
+        repeat(reports) {
             trace?.sent(keys, reports = 1, rows = 1)
             send(scrollReport(keys, rows > 0, col, row))
         }

@@ -26,6 +26,8 @@ first.** Several deliberate conventions here look like defects without it.
 | Terminal client, harness transcripts, fleet runs, agent status | [`docs/11`](./docs/11-cli-briefs.md), [`docs/12`](./docs/12-harness-briefs.md), [`docs/13`](./docs/13-fleet-runs.md), [`docs/14`](./docs/14-agent-status.md) |
 | Native sessions, muffit sessions, Docker containers | [`docs/17`](./docs/17-native-sessions.md), [`docs/18`](./docs/18-muffit.md), [`docs/19`](./docs/19-docker.md) |
 | What Claude reports without its terminal, and the plan for a pane that needs none | [`docs/20`](./docs/20-conversation-parity.md), [`docs/21`](./docs/21-conversation-sources.md) |
+| `OSC 7501` status records and `OSC 7577` program resume (Rex's protocols) | [`docs/24`](./docs/24-program-status.md), [`docs/25`](./docs/25-program-resume.md) |
+| What to send a program for a wheel, drag or click, decided by the modes it set rather than its name | [`docs/26`](./docs/26-pane-modes.md) |
 
 `docs/01`, `02`, `05` and `06` are history, not status.
 

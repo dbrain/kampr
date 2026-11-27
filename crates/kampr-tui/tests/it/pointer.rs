@@ -1372,13 +1372,17 @@ async fn a_drag_that_leaves_its_pane_takes_nothing_from_whatever_it_landed_on() 
 /// **A pane with no ring is scrolled by its program, or the wheel does nothing at all.** Claude
 /// Code takes the alternate screen, so herdr keeps no ring for it (#387, #438) and there is nothing
 /// above the viewport for kampr to move into. The phone hands the wheel to the program by the gate
-/// `PaneScroll.kt` writes down: Claude takes a real SGR report (#388), everything else alternate
+/// `PaneScroll.kt` writes down: Claude and muffit's TUI (which enables mouse capture and scrolls its
+/// transcript on a wheel report, where an arrow recalls composer history) take a real SGR report
+/// (#388), everything else alternate
 /// scroll in the *application* cursor form (#390), and a pane whose foreground job nobody named is
 /// the shell's line editor, where a cursor key recalls history — so it gets nothing (#391).
 #[tokio::test]
 async fn the_wheel_over_a_pane_with_no_ring_scrolls_the_program_in_it() {
     type Case<'a> = (Option<&'a str>, Option<&'a str>, bool, Option<&'a str>);
-    let cases: [Case; 5] = [
+    let cases: [Case; 7] = [
+        (Some("muffit"), Some("muffit"), true, Some("\u{1b}[<64;")),
+        (Some("muffit"), Some("muffit"), false, Some("\u{1b}[<65;")),
         (Some("claude"), Some("claude"), true, Some("\u{1b}[<64;")),
         (Some("claude"), Some("claude"), false, Some("\u{1b}[<65;")),
         (None, Some("less"), true, Some("\u{1b}OA\u{1b}OA\u{1b}OA")),

@@ -524,9 +524,11 @@ fn focus(arriving: bool, pane: String) -> Click {
     }
 }
 
-/// Harnesses measured to take a real wheel report: Claude Code sets `?1000h` and `?1006h` and
-/// scrolls its transcript on one (#388). Anything nobody has probed gets alternate scroll.
-const TAKES_THE_WHEEL: &[&str] = &["claude"];
+/// Harnesses known to take a real wheel report: Claude Code sets `?1000h` and `?1006h` and
+/// scrolls its transcript on one (#388); muffit's TUI enables mouse capture and scrolls three lines
+/// on one (`muffit-tui/src/keys.rs` `handle_mouse`), where an arrow recalls its composer's history.
+/// Anything nobody has looked at gets alternate scroll.
+const TAKES_THE_WHEEL: &[&str] = &["claude", "muffit"];
 
 /// What a wheel notch over a pane with no ring is sent to the pane's program as, the gate the
 /// phone's `PaneScroll.kt` writes down.
