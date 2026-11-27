@@ -12,9 +12,9 @@ this session. The turn-based Phase 0 probes are done (rows 674–684 below).
 ## Final report
 
 **Status: ready for user testing.** All ten phases are built, reviewed (each review loop closed),
-and committed on `conv-sources`. The gates are green; a handful of pre-existing flaky live-herdr
-tests are being stabilized (s39). The money-safety item — the billing guards — is verified against
-the operator's real plan login to the extent the plan's usage window allows (see below).
+and committed on `conv-sources`. The gates are green and **stable** (s39 root-caused and fixed the
+last pre-existing flaky live-herdr tests). The money-safety item — the billing guards — is verified
+against the operator's real plan login to the extent the plan's usage window allows (see below).
 
 ### What was built, by phase
 - **0 — probes.** Everything the plan lists as "not measured" is measured: no-turn control shapes
@@ -73,8 +73,9 @@ Only the items above that are environment-bound. Nothing in the pane's core func
 terminal-only: every docs/22 row that is terminal-only carries its measured reason.
 
 ### Gates
-- `make check` (Kampr): green; a handful of **pre-existing** flaky live-herdr tests fail under load
-  but pass in isolation — s39 is stabilizing them toward a fully clean gate.
+- `make check` (Kampr): **green and stable** — 2376/2376, twice in a row under load. The
+  **pre-existing** flaky live-herdr tests are fixed (s39, `6ec0aee5`): seven, each root-caused by
+  measurement (timing budgets + two test races, one a missing sync point), no assertion weakened.
 - `make check-client`: green. Muffit gate: green.
 
 ### The one remaining "done" item
@@ -182,14 +183,14 @@ the measured wire behaviour including the one-behind flush rule. Key bug found: 
 notifications carry no `jsonrpc` field — the untagged enum required it and silently dropped
 every such line. Fixed with `jsonrpc: Option<String>`, pinned by a regression test.
 **Crate graph (8b380f31):** `kampr-codex` added to the ALLOWED list in the guard test.
-**Gate status:** `make check` is blocked by pre-existing flaky tests that fail under load but
-pass in isolation (verified: `the_port_is_bound_before_herdr_is_needed`,
-`a_line_written_to_the_transcript_reaches_the_client_at_once`,
-`what_the_operator_left_in_the_panes_own_composer`,
-`the_herd_lists_the_machines_containers`, `reopening_a_conversation_serves_the_one_it_already_had`,
-and 2 `kampr-native` push tests). None are related to the conv-sources work. All conv-sources
-tests pass: 222 kampr-claude, 476 kampr-node, 7+4 kampr-codex, 10 kampr-testkit guards.
-**Next: screenshots before/after on 4 sources, final review.**
+**Gate status:** `make check` **green and stable** (2376/2376, twice in a row under load). The
+pre-existing flaky live-herdr tests are fixed (s39, `6ec0aee5`): seven, each root-caused by
+measurement — timing budgets (`the_port_is_bound_before_herdr_is_needed` 5→15 s, the transcript
+line 100→300 ms, the booting-harness input 28→100 ms/round) and test races (a missing sync point in
+`the_widened_answer...`, a `kampr-docker` OOM-kill the daemon misses 1 in 8 under load). No
+assertion weakened; the three that never failed in s39's loaded runs were left untouched. All
+conv-sources tests pass: 222 kampr-claude, 476 kampr-node, 7+4 kampr-codex, 10 kampr-testkit guards.
+**Next: the gated billing-guards turn probe (after the 5h window reset); the deferred items.**
 
 - **s4 — docs/22 review: DONE** — found 11 defects: citation mismatches (several cells cite #644
   for items not in it; a CR-in-same-write cell cites the row that refutes it), a **missing probe-log
