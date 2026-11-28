@@ -383,7 +383,7 @@ fn host<Q: Fn(&str) -> Option<String>>(
     match area {
         Area::Terminals => terminals(rows, branch, look, !tabs.is_empty()),
         Area::Containers => docker::containers(rows, branch, look),
-        Area::Muffit => docker::background(rows, branch, look),
+        Area::Background => docker::background(rows, branch, look),
     }
     docker::strays(rows, branch, look, area == Area::Terminals);
 }
@@ -400,7 +400,7 @@ fn terminals<Q: Fn(&str) -> Option<String>>(
         .panes
         .iter()
         .copied()
-        .filter(|p| docker::terminal(p))
+        .filter(|p| crate::kind::has_terminal(p))
         .collect();
     let (mut live, remembered): (Vec<&PaneEntry>, Vec<&PaneEntry>) = terminals
         .into_iter()

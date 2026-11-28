@@ -262,8 +262,8 @@ class HerdDockerTest {
         assertEquals(0, count("Open wake"))
         assertEquals(true, find("Terminals").fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected))
         find("Containers, 2 running").performClick()
-        find("Muffit sessions, 1").performClick()
-        assertEquals(listOf(HOST to Area.Containers, HOST to Area.Muffit), picked)
+        find("Background sessions, 1").performClick()
+        assertEquals(listOf(HOST to Area.Containers, HOST to Area.Background), picked)
     }
 
     @Test
@@ -296,7 +296,7 @@ class HerdDockerTest {
 
     @Test
     fun theMuffitListHoldsTheBackgroundSessionsAndNothingElse() = runComposeUiTest {
-        setContent { Portrait(Folds().showing(HOST, Area.Muffit)) }
+        setContent { Portrait(Folds().showing(HOST, Area.Background)) }
         assertEquals(1, count("Open wake"))
         assertEquals(0, count("Open build"))
         assertEquals(0, count("Open pg shell"), "a container shell is a terminal, not a muffit session")
@@ -371,7 +371,7 @@ class HerdDockerTest {
         assertEquals(1, count("Open inside"), "the rail lists the adopted node's terminals too")
         assertEquals(0, count("Open wake"))
         assertEquals(0, count("Container worker,"))
-        folds = Folds().showing(HOST, Area.Muffit)
+        folds = Folds().showing(HOST, Area.Background)
         waitForIdle()
         assertEquals(1, count("Open wake"))
         assertEquals(0, count("Open build"))

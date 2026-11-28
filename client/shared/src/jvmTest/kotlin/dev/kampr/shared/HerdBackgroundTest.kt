@@ -55,6 +55,6 @@ class HerdBackgroundTest {
                 }
             }
         }
-        onNodeWithContentDescription("Muffit sessions, 1").assertExists()
+        onNodeWithContentDescription("Background sessions, 1").assertExists()
     }
 }

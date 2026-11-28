@@ -74,7 +74,7 @@ fun GroupBody(group: NodeGroup, ctx: HerdRowsCtx, modifier: Modifier = Modifier)
 
             Area.Containers -> ContainerSection(group, ctx)
 
-            Area.Muffit -> for (pane in group.background) PaneItem(pane, ctx)
+            Area.Background -> for (pane in group.background) PaneItem(pane, ctx)
         }
         // The terminals area is the host's whole reach, so every adopted node's rows come with it;
         // the other areas keep only the strays, the ones whose container row is gone.

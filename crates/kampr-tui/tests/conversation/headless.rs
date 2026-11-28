@@ -2,6 +2,7 @@
 //! conversation without a terminal", docs/25), from the keyboard.
 
 use super::*;
+use kampr_tui::app::View;
 use kampr_tui::manage::Target;
 
 type Events = tokio::sync::broadcast::Receiver<Event>;
@@ -131,6 +132,38 @@ async fn a_claude_with_no_terminal_is_started_or_resumed_from_the_host_menu() {
     assert_eq!(
         manages(&conn.heard().await),
         [json!({ "t": "manage", "op": "claude.resume", "node": NODE, "id": "s-old" })]
+    );
+}
+
+// A Claude with no terminal and a muffit session have no grid to watch: each is its conversation,
+// and is listed with the host's background sessions rather than among its terminals.
+#[tokio::test]
+async fn a_pane_with_no_terminal_opens_on_its_conversation_and_is_listed_in_the_background() {
+    let mut fake = Fake::start().await;
+    let client = Arc::new(fake.client());
+    let mut events = client.events();
+    let conn = fake.accept().await;
+    let headless = json!({ "id": "01JNODE/c:k1", "node_id": NODE, "agent": "claude", "cwd": "/srv/app",
+        "agent_status": "idle", "rows": 0, "converses": true });
+    let muffit = json!({ "id": "01JNODE/m:s1", "node_id": NODE, "agent": "muffit", "provider": "muffit",
+        "agent_status": "idle", "rows": 0, "converses": true });
+    let shell = json!({ "id": "01JNODE/w1:p1", "node_id": NODE, "workspace": "pissant",
+        "agent_status": "idle", "rows": 24 });
+    let mut app = ready(
+        &conn,
+        &mut events,
+        &client,
+        node(json!({ "claude": true })),
+        json!([headless, muffit, shell]),
+    )
+    .await;
+    assert_eq!(app.view("01JNODE/c:k1"), View::Conversation);
+    assert_eq!(app.view("01JNODE/m:s1"), View::Conversation);
+    assert_eq!(app.view("01JNODE/w1:p1"), View::Terminal);
+    let screen = painted(&mut app, 120, 30);
+    assert!(
+        screen.contains("◉ 2"),
+        "both belong in the background list:\n{screen}"
     );
 }
 

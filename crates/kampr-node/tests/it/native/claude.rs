@@ -21,7 +21,7 @@ struct Headless {
 
 impl Drop for Headless {
     fn drop(&mut self) {
-        kampr_testkit::stop_keepers(&self.home.join("claude-keep"));
+        kampr_testkit::stop_keepers(&self.h.root());
     }
 }
 
@@ -395,6 +395,41 @@ async fn a_terminal_claude_at_rest_continues_without_its_terminal_unasked() {
     resumed_headless(&f, &mut client, &ack, &terminal, id).await;
 }
 
+// A Claude opened and not yet spoken to has no transcript to resume, and nothing to lose either:
+// it continues as a new conversation where it was opened.
+#[tokio::test]
+async fn a_terminal_claude_not_yet_spoken_to_continues_as_a_new_conversation() {
+    let f = Headless::start().await;
+    let id = "47474747-4747-4747-8747-474747474747";
+    let claude = fake_claude(&f.h.work(), "idle");
+    let unspoken: String = std::fs::read_to_string(&claude)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.contains("$project/$id.jsonl"))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    std::fs::write(&claude, unspoken).unwrap();
+    let mut client = f.h.client().await;
+    let terminal = terminal_claude(&f, &mut client, &claude, id).await;
+
+    let ack = client
+        .manage(json!({ "op": "claude.from_terminal", "at": terminal }))
+        .await;
+    assert_eq!(ack["ok"], json!(true), "{ack}");
+    let pane = ack["id"].as_str().expect("the headless pane").to_string();
+    assert!(pane.starts_with(&format!("{NODE}/c:")), "{pane}");
+    client.gone(&terminal).await;
+    pumped(&mut client, "a new headless child starting", || {
+        f.launches()
+            .iter()
+            .any(|argv| argv.iter().any(|a| a == "--session-id") && !resumes(argv, id))
+    })
+    .await;
+    client
+        .pane(&pane, |p| p["cwd"] == json!(f.h.work().display().to_string()))
+        .await;
+}
+
 /// A Claude mid-turn is refused with what would stop, and once the operator says stop it, Escape
 /// reaches its terminal before it is hung up on. This one goes idle on Escape, as Claude does.
 #[tokio::test]
@@ -551,6 +586,38 @@ async fn a_stored_conversation_is_listed_for_its_directory_and_resumed_once() {
     let ended = client.manage(json!({ "op": "claude.end", "at": pane })).await;
     assert_eq!(ended["ok"], json!(true), "{ended}");
     client.gone(&pane).await;
+}
+
+// `close` is the verb every client already sends a pane it is done with.
+#[tokio::test]
+async fn closing_a_headless_pane_ends_its_conversation() {
+    let f = Headless::start().await;
+    let mut client = f.h.client().await;
+    let pane = f.create(&mut client, None).await;
+    pumped(&mut client, "the child starting", || !f.launches().is_empty()).await;
+
+    let closed = client.manage(json!({ "op": "close", "at": pane })).await;
+    assert_eq!(closed["ok"], json!(true), "{closed}");
+    client.gone(&pane).await;
+}
+
+// A node lists every live pipe-mode session under its root as a headless Claude, so a root it was
+// not configured with puts another node's conversations, or the operator's, in its herd.
+#[tokio::test]
+async fn a_headless_conversation_is_kept_under_the_nodes_own_session_root() {
+    let f = Headless::start().await;
+    let mut client = f.h.client().await;
+    let pane = f.create(&mut client, None).await;
+    let keeper = pane.rsplit_once("/c:").expect("a headless pane").1;
+    assert!(
+        f.h.root().join(keeper).exists(),
+        "not under the configured root {}",
+        f.h.root().display()
+    );
+    assert!(
+        !f.home.join("claude-keep").join(keeper).exists(),
+        "kept under the process-wide default root"
+    );
 }
 
 #[tokio::test]

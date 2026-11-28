@@ -921,7 +921,18 @@ impl App {
     /// shell does: a client that answers a terminal with a transcript is a worse herdr. The
     /// conversation is one keystroke away — `prefix shift+v` — and the choice sticks per pane.
     pub fn view(&self, pane: &str) -> View {
+        if !self.has_terminal(pane) {
+            return View::Conversation;
+        }
         self.views.get(pane).copied().unwrap_or(View::Terminal)
+    }
+
+    pub fn has_terminal(&self, pane: &str) -> bool {
+        self.client
+            .state()
+            .herd
+            .pane(pane)
+            .is_none_or(crate::kind::has_terminal)
     }
 
     /// The panes on screen: every pane of the focused pane's tab, which is kampr's own mosaic —

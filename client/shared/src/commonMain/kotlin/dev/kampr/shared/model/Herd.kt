@@ -4,7 +4,7 @@ import androidx.compose.runtime.Immutable
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
-import dev.kampr.shared.wire.isMuffit
+import dev.kampr.shared.wire.hasTerminal
 import dev.kampr.shared.wire.workspaceIdOf
 
 @Immutable
@@ -38,11 +38,11 @@ data class Herd(
 data class NodeGroup(val node: NodeInfo, val panes: List<PaneInfo>, val children: List<NodeGroup> = emptyList()) {
     // A shell into one of this node's containers is listed here and, in the containers area,
     // nested under that container as well: the terminals area is every terminal the host can open.
-    val terminals: List<PaneInfo> get() = panes.filterNot { it.isMuffit }
+    val terminals: List<PaneInfo> get() = panes.filter { it.hasTerminal }
 
-    // Muffit sessions no terminal is showing: a daggit's wake, one the web UI or the + sheet
-    // started in the background (docs/18).
-    val background: List<PaneInfo> get() = panes.filter { it.isMuffit }
+    // Conversations no terminal is showing: a muffit daggit's wake, a muffit session the web UI or
+    // the + sheet started in the background (docs/18), and a headless Claude (docs/21).
+    val background: List<PaneInfo> get() = panes.filterNot { it.hasTerminal }
 }
 
 // The pane a `managed` ack's `id` stands for, once the herd patch carrying it has arrived.
@@ -63,7 +63,7 @@ fun Herd.createdPane(id: String): PaneInfo? {
 
 // Herdr's workspace is in its pane ids and a Kampr session's is not: one in no workspace has none,
 // rather than the `<node>/n` a herdr id's grammar would make of it.
-val PaneInfo.workspaceKey: String? get() = workspaceId ?: if (provider == null) workspaceIdOf(id) else null
+val PaneInfo.workspaceKey: String? get() = workspaceId ?: if (provider == null && hasTerminal) workspaceIdOf(id) else null
 
 enum class AgentStatus { Idle, Working, Blocked, Done, Unknown }
 

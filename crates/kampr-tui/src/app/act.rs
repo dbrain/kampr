@@ -806,6 +806,10 @@ impl App {
 
     fn toggle_view(&mut self) {
         let Some(pane) = self.focus.clone() else { return };
+        if !self.has_terminal(&pane) {
+            self.note("this pane has no terminal");
+            return;
+        }
         let next = match self.view(&pane) {
             View::Terminal => View::Conversation,
             View::Conversation => View::Terminal,

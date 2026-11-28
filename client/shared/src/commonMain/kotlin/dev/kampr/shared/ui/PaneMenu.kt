@@ -32,7 +32,7 @@ import dev.kampr.shared.theme.Kampr
 import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.PaneInfo
 import dev.kampr.shared.wire.ServerMsg
-import dev.kampr.shared.wire.isMuffit
+import dev.kampr.shared.wire.hasTerminal
 
 // Herdr's sidebar menu is two items long and both of them are about the row itself (#426). Kampr's
 // rows are panes rather than workspaces, so the verbs are a pane's — and the list stays that short
@@ -61,7 +61,7 @@ fun PaneMenu(
     val title = paneTitle(pane)
     var refusal by remember { mutableStateOf<String?>(null) }
     var step by remember(pane.id) { mutableStateOf(MenuStep.Verbs) }
-    val native = pane.isNative || pane.isMuffit
+    val native = pane.isNative || !pane.hasTerminal
     val actions = if (native) nativeActions(pane, desk) else emptyList()
     val closing = if (native) actions.firstOrNull { it.confirm } else NativeAction("close", "Close $title", ManageOp.Close(pane.id), true)
     val kind = if (native) "session" else "pane"
@@ -74,7 +74,7 @@ fun PaneMenu(
 
     val verbs: @Composable ColumnScope.() -> Unit = {
         MenuRow("Open", onOpen, KamprIcons.open, label = "Open $title")
-        if (!pane.isMuffit) MenuRow("Rename…", { step = MenuStep.Rename }, KamprIcons.pencil, label = "Rename $title")
+        if (pane.hasTerminal) MenuRow("Rename…", { step = MenuStep.Rename }, KamprIcons.pencil, label = "Rename $title")
         actions.filterNot { it.confirm }.forEach { action ->
             MenuRow(action.verb.replaceFirstChar(Char::uppercase), { onManage(action.op) }, KamprIcons.desk, label = action.spoken)
         }

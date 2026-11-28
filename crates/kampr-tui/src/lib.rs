@@ -18,6 +18,7 @@ pub mod image;
 pub mod input;
 pub mod invite;
 pub mod keymap;
+pub mod kind;
 pub mod manage;
 pub mod mosaic;
 pub mod mouse;
@@ -324,7 +325,7 @@ static SECTIONS: &[Section] = &[
             ("prefix w", "walk the sidebar — up/down, enter opens, esc leaves"),
             (
                 "in the sidebar: [ / ]",
-                "a host's list: ›_ terminals · ▣ containers · ◉ muffit · click a tab too",
+                "a host's list: ›_ terminals · ▣ containers · ◉ background · click a tab too",
             ),
             (
                 "in the sidebar: . or m",

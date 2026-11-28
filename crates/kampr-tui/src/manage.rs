@@ -1213,19 +1213,10 @@ fn pane_rows(entry: &PaneEntry, matched: Matched) -> Vec<Row> {
 
 const HANDOVERS: [&str; 2] = ["claude.to_terminal", "claude.from_terminal"];
 
-/// A headless Claude's pane id is `c:<keeper>` on its node (`kampr-claude`'s `provider::PREFIX`).
-fn headless(entry: &PaneEntry) -> bool {
-    entry.provider.is_none()
-        && entry
-            .id
-            .split_once('/')
-            .is_some_and(|(_, local)| local.starts_with("c:"))
-}
-
 /// The hand-overs docs/21 names: a headless Claude to a terminal and back, and its end.
 fn claude_rows(herd: &Herd, entry: &PaneEntry) -> Vec<Row> {
     let at = entry.id.as_str();
-    if headless(entry) {
+    if crate::kind::headless(entry) {
         return vec![
             Row {
                 key: Some('t'),

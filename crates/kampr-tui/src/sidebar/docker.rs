@@ -1,4 +1,5 @@
 use super::{Area, Hosts, Row, Tab, host, push_pane, spread};
+use crate::kind::has_terminal;
 use crate::theme::Theme;
 use kampr_client::NodeGroup;
 use kampr_core::wire::{ContainerEntry, NodeEntry, PaneEntry};
@@ -64,15 +65,6 @@ fn build<'a>(
     Some(Branch { group, children })
 }
 
-fn muffit(pane: &PaneEntry) -> bool {
-    pane.provider.as_deref() == Some("muffit")
-}
-
-/// Every terminal this host can open; muffit sessions have their own list.
-pub(super) fn terminal(pane: &PaneEntry) -> bool {
-    !muffit(pane)
-}
-
 pub(super) fn shell(node: &NodeEntry, pane: &PaneEntry) -> bool {
     node.containers
         .iter()
@@ -85,7 +77,7 @@ fn shells<'a>(branch: &Branch<'a>, container: &ContainerEntry) -> Vec<&'a PaneEn
         .panes
         .iter()
         .copied()
-        .filter(|p| !muffit(p) && p.container.as_deref() == Some(container.name.as_str()))
+        .filter(|p| has_terminal(p) && p.container.as_deref() == Some(container.name.as_str()))
         .collect()
 }
 
@@ -117,7 +109,7 @@ pub(super) fn tabs(branch: &Branch<'_>) -> Vec<Tab> {
     let panes = &branch.group.panes;
     let mut tabs = vec![Tab {
         area: Area::Terminals,
-        count: panes.iter().filter(|p| terminal(p)).count(),
+        count: panes.iter().filter(|p| has_terminal(p)).count(),
     }];
     if !node.containers.is_empty() || node.docker == Some(false) {
         tabs.push(Tab {
@@ -125,10 +117,10 @@ pub(super) fn tabs(branch: &Branch<'_>) -> Vec<Tab> {
             count: node.containers.iter().filter(|c| shellable(c)).count(),
         });
     }
-    let background = panes.iter().filter(|p| muffit(p)).count();
+    let background = panes.iter().filter(|p| !has_terminal(p)).count();
     if background > 0 {
         tabs.push(Tab {
-            area: Area::Muffit,
+            area: Area::Background,
             count: background,
         });
     }
@@ -143,7 +135,7 @@ pub(super) fn background<Q: Fn(&str) -> Option<String>>(
     branch: &Branch<'_>,
     look: &Look<'_, Q>,
 ) {
-    for pane in branch.group.panes.iter().copied().filter(|p| muffit(p)) {
+    for pane in branch.group.panes.iter().copied().filter(|p| !has_terminal(p)) {
         push_pane(rows, pane, None, false, false, look.questions);
     }
 }

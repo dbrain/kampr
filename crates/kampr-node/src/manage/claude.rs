@@ -18,6 +18,17 @@ pub fn is_claude_op(op: &str) -> bool {
     op.starts_with("claude.") && !op.starts_with("claude.hooks.")
 }
 
+/// `close` is what every client sends a pane it is done with, a headless one included.
+pub fn is_claude_close(op: &ManageOp, node_id: &str) -> bool {
+    op.op == "close"
+        && op
+            .at
+            .as_deref()
+            .and_then(|at| at.strip_prefix(node_id))
+            .and_then(|rest| rest.strip_prefix('/'))
+            .is_some_and(|local| local.starts_with(kampr_claude::provider::PREFIX))
+}
+
 fn refused(r: Refusal) -> ManageError {
     ManageError::BadRequest(r.message)
 }
@@ -68,7 +79,7 @@ impl Manager<'_> {
                     .map(|keeper| pane(&keeper))
                     .map_err(refused)
             }
-            "claude.end" => {
+            "claude.end" | "close" => {
                 let local = self.local_of(op, kampr_claude::provider::PREFIX)?;
                 source.end(&local, Ending::End).await.map_err(refused)?;
                 Ok(json!({ "ok": true }))
@@ -153,14 +164,12 @@ impl Manager<'_> {
         if !stops.is_empty() && !confirmed(op) {
             return Err(busy(&stops));
         }
-        if marker.transcript.is_none() {
-            return Err(ManageError::BadRequest(format!(
-                "{} has no conversation yet; start a new one without a terminal instead",
-                marker.session
-            )));
-        }
         source.binary().await.map_err(refused)?;
-        let claim = source.claim(&marker.session).map_err(refused)?;
+        // A Claude not yet spoken to has no transcript for `-r` to open, and nothing to carry over.
+        let claim = match marker.transcript {
+            Some(_) => Some(source.claim(&marker.session).map_err(refused)?),
+            None => None,
+        };
         if !stops.is_empty() {
             self.interrupt_terminal(native, &local).await;
         }
@@ -176,11 +185,18 @@ impl Manager<'_> {
                 .map_err(|e| ManageError::BadRequest(format!("{e:#}")))?;
         }
         hang_up(marker.pid, !own).await?;
-        source
-            .resume_claimed(&claim, marker.cwd.as_deref(), None)
-            .await
-            .map(|keeper| pane(&keeper))
-            .map_err(refused)
+        let continued = match claim {
+            Some(claim) => source.resume_claimed(&claim, marker.cwd.as_deref(), None).await,
+            None => {
+                source
+                    .create(NewSession {
+                        cwd: marker.cwd.clone(),
+                        prompt: None,
+                    })
+                    .await
+            }
+        };
+        continued.map(|keeper| pane(&keeper)).map_err(refused)
     }
 }
 

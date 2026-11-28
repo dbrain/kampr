@@ -49,19 +49,19 @@ fun shortCount(n: Int): String = if (n > 99) "9+" else n.toString()
 private fun NodeGroup.count(area: Area): Int? = when (area) {
     Area.Terminals -> null
     Area.Containers -> node.containers.count { it.state == "running" }
-    Area.Muffit -> background.size
+    Area.Background -> background.size
 }
 
 private fun areaIcon(area: Area): Icon = when (area) {
     Area.Terminals -> KamprIcons.shell
     Area.Containers -> KamprIcons.docker
-    Area.Muffit -> KamprIcons.muffit
+    Area.Background -> KamprIcons.chat
 }
 
 private fun areaSpoken(area: Area, count: Int?): String = when (area) {
     Area.Terminals -> "Terminals"
     Area.Containers -> "Containers, ${count ?: 0} running"
-    Area.Muffit -> "Muffit sessions, ${count ?: 0}"
+    Area.Background -> "Background sessions, ${count ?: 0}"
 }
 
 // Which of a host's lists is under it. Nothing is drawn for a host that only has terminals: a

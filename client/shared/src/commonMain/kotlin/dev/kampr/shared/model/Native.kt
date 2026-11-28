@@ -4,6 +4,8 @@ import dev.kampr.shared.wire.ManageOp
 import dev.kampr.shared.wire.NativeExit
 import dev.kampr.shared.wire.NodeInfo
 import dev.kampr.shared.wire.PaneInfo
+import dev.kampr.shared.wire.hasTerminal
+import dev.kampr.shared.wire.isHeadlessClaude
 import dev.kampr.shared.wire.isMuffit
 
 private const val NATIVE = "native"
@@ -14,7 +16,7 @@ val PaneInfo.isNative: Boolean get() = provider == NATIVE
 // machine that has ever named its herdr version can host a session as well as one whose herdr is up.
 val NodeInfo.hasDesk: Boolean get() = herdrOn && (online || herdrVersion != null)
 
-fun NodeInfo.serves(pane: PaneInfo?): Boolean = if (pane?.isNative == true || pane?.isMuffit == true) isReachable else online
+fun NodeInfo.serves(pane: PaneInfo?): Boolean = if (pane?.isNative == true || pane?.hasTerminal == false) isReachable else online
 
 fun exitPhrase(exit: NativeExit): String = when {
     exit.signal != null -> "killed by signal ${exit.signal}"
@@ -26,11 +28,16 @@ fun exitPhrase(exit: NativeExit): String = when {
 // worth a label; only a session that has ended says anything.
 fun nativeFacts(pane: PaneInfo): List<String> = when {
     pane.isMuffit -> listOf("muffit")
+    pane.isHeadlessClaude -> listOf("no terminal")
     pane.isNative -> listOfNotNull(pane.exited?.let(::exitPhrase))
     else -> emptyList()
 }
 
-fun nativeSpoken(pane: PaneInfo): String? = if (pane.isMuffit) "Muffit session" else nativeFacts(pane).firstOrNull()
+fun nativeSpoken(pane: PaneInfo): String? = when {
+    pane.isMuffit -> "Muffit session"
+    pane.isHeadlessClaude -> "Claude with no terminal"
+    else -> nativeFacts(pane).firstOrNull()
+}
 
 // `confirm` is whether the press only asks: closing hangs the program up and forgetting deletes its
 // log, and neither can be taken back. Showing it on the desk adds a herdr pane and loses nothing.
@@ -40,6 +47,7 @@ data class NativeAction(val verb: String, val spoken: String, val op: ManageOp, 
 fun nativeActions(pane: PaneInfo, desk: Boolean): List<NativeAction> {
     val title = paneTitle(pane)
     if (pane.isMuffit) return listOf(NativeAction("close", "Close $title", ManageOp.NativeClose(pane.id), true))
+    if (pane.isHeadlessClaude) return listOf(NativeAction("end", "End $title", ManageOp.ClaudeEnd(pane.id), true))
     if (!pane.isNative) return emptyList()
     if (pane.exited != null) {
         return listOf(NativeAction("forget", "Forget $title and its output", ManageOp.NativeForget(pane.id), true))

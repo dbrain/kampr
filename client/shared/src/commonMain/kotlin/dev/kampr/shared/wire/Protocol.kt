@@ -282,12 +282,16 @@ data class ProgramRow(
 // the grid tells a screen reader — asks this one question, because they had drifted apart: a
 // harness that had opened and not yet been prompted was given a tab by one of them and told by
 // another that this node could not read it.
-val PaneInfo?.talks: Boolean get() = this != null && (converses || hasConversation || isMuffit)
+val PaneInfo?.talks: Boolean get() = this != null && (converses || hasConversation || !hasTerminal)
 
 val PaneInfo.isMuffit: Boolean get() = provider == MUFFIT
 
 // A Claude with no terminal (docs/21): its node names it `c:<keeper id>` and gives no provider.
 val PaneInfo.isHeadlessClaude: Boolean get() = provider == null && id.substringAfter('/').startsWith("c:")
+
+// A muffit session or a headless Claude: its conversation is the whole pane, it has no grid to
+// read, size or wait on, and it belongs to its node rather than to herdr.
+val PaneInfo.hasTerminal: Boolean get() = !isMuffit && !isHeadlessClaude
 
 // A Kampr session running Claude, which its node can continue without the terminal.
 val PaneInfo.isTerminalClaude: Boolean get() = provider == "native" && agent == "claude"

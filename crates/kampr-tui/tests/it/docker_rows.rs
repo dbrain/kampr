@@ -153,7 +153,7 @@ fn a_host_lists_its_terminals_by_default_and_offers_a_switch_for_the_lists_it_ha
                     count: 2
                 },
                 Tab {
-                    area: Area::Muffit,
+                    area: Area::Background,
                     count: 1
                 },
             ],
@@ -162,7 +162,7 @@ fn a_host_lists_its_terminals_by_default_and_offers_a_switch_for_the_lists_it_ha
         "the containers count is the running ones"
     );
     assert_eq!(
-        drawn(&herd, &showing(&[("01JA", Area::Muffit)])),
+        drawn(&herd, &showing(&[("01JA", Area::Background)])),
         ["host front", "pane 01JA/m1"]
     );
 }
@@ -306,7 +306,7 @@ fn a_muffit_session_stays_out_of_the_terminals_list() {
         ]
     );
     assert_eq!(
-        drawn(&herd, &showing(&[("01JA", Area::Muffit)])),
+        drawn(&herd, &showing(&[("01JA", Area::Background)])),
         ["host front", "pane 01JA/m1"]
     );
 }
@@ -365,7 +365,7 @@ fn the_terminals_tab_counts_the_container_shells() {
                     count: 1
                 },
                 Tab {
-                    area: Area::Muffit,
+                    area: Area::Background,
                     count: 1
                 },
             ],

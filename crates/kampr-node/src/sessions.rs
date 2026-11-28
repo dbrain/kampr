@@ -346,7 +346,12 @@ fn claude_source(
     if !config.claude.headless {
         return (None, None);
     }
-    let root = match kampr_keep::root() {
+    // The native root, which is where a headless Claude's pipe-mode session is skipped from.
+    let root = match config.native.resolve().and_then(|native| {
+        kampr_keep::make_private_dir(&native.root)
+            .map(|()| native.root)
+            .map_err(Into::into)
+    }) {
         Ok(root) => root,
         Err(e) => {
             warn!(error = %format!("{e:#}"), "headless Claude sessions are unavailable on this node");

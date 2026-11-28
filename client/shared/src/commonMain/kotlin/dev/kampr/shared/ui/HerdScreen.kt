@@ -204,7 +204,7 @@ private fun NodeGroup.rows(folds: Folds): Int {
     val listed = when (folds.area(this)) {
         Area.Terminals -> terminals.size
         Area.Containers -> node.containers.size
-        Area.Muffit -> background.size
+        Area.Background -> background.size
     }
     return listed + 1 + children.sumOf { it.rows(folds) }
 }

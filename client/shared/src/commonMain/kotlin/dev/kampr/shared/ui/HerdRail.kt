@@ -150,7 +150,7 @@ private fun RailGroup(group: NodeGroup, ctx: HerdRowsCtx) {
             for (p in section.panes) pane(p)
         }
 
-        Area.Muffit -> for (p in group.background) pane(p)
+        Area.Background -> for (p in group.background) pane(p)
 
         Area.Containers -> for (container in group.listedContainers(ctx.folds.open(node, Fold.Stopped), ctx.now)) {
             RailContainer(node, container, ctx.now)

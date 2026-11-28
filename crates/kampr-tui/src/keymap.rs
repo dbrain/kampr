@@ -115,7 +115,7 @@ pub enum Action {
     /// Tiled, side by side, stacked: kampr's own arrangement, for a mosaic with no tree to mirror.
     Arrange,
     Docker(crate::docker::Op),
-    /// The list under the navigator's host: terminals, containers or muffit.
+    /// The list under the navigator's host: terminals, containers or background sessions.
     CycleArea(i8),
     HostMenu,
 }

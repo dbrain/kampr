@@ -391,7 +391,7 @@ impl Manager<'_> {
                 reply: self.docker_op(op).await?,
                 settle: None,
             }),
-            _ if claude::is_claude_op(&op.op) => Ok(Managed {
+            _ if claude::is_claude_op(&op.op) || claude::is_claude_close(op, self.node_id) => Ok(Managed {
                 reply: self.claude_op(op).await?,
                 settle: None,
             }),

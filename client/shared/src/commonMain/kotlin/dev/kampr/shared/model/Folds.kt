@@ -11,13 +11,13 @@ enum class Fold(val key: String, val openByDefault: Boolean) {
 enum class Area(val key: String) {
     Terminals("terminals"),
     Containers("docker"),
-    Muffit("muffit"),
+    Background("background"),
 }
 
 fun NodeGroup.areas(): List<Area> = listOfNotNull(
     Area.Terminals,
     Area.Containers.takeIf { node.containers.isNotEmpty() || node.docker == false },
-    Area.Muffit.takeIf { background.isNotEmpty() },
+    Area.Background.takeIf { background.isNotEmpty() },
 )
 
 // Per device and per node: what the operator has opened, and which list they last picked.

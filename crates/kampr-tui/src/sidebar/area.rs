@@ -7,7 +7,7 @@ pub enum Area {
     #[default]
     Terminals,
     Containers,
-    Muffit,
+    Background,
 }
 
 impl Area {
@@ -15,7 +15,7 @@ impl Area {
         match self {
             Self::Terminals => "›_",
             Self::Containers => "▣",
-            Self::Muffit => "◉",
+            Self::Background => "◉",
         }
     }
 }
