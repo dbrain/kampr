@@ -501,6 +501,7 @@ fun TriageList(
     compact: Boolean,
     onOpen: (String) -> Unit,
     onApprove: ((String, String?) -> Unit)?,
+    onDismiss: (TriageItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) return
@@ -552,6 +553,7 @@ fun TriageList(
                     "Needs you"
                 },
                 onOpen = { onOpen(item.pane.id) },
+                onDismiss = { onDismiss(item) },
                 onApprove = onApprove?.takeIf { item.approvable }?.let { approve -> { approve(item.pane.id, item.questionId) } },
             )
         }
@@ -573,6 +575,7 @@ fun BlockedNotice(
     question: String?,
     compact: Boolean,
     onOpen: () -> Unit,
+    onDismiss: () -> Unit,
     onApprove: (() -> Unit)?,
     label: String? = if (compact) "Needs you · 1" else "Needs you",
 ) {
@@ -596,8 +599,12 @@ fun BlockedNotice(
                 )
             }
         }
+        val dismiss = "Dismiss, until ${paneTitle(pane)} asks something else"
         if (compact) {
-            KText(paneTitle(pane), tokens.type.bodyStrong, tokens.color.text, overflow = ELIDE_MIDDLE)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                KText(paneTitle(pane), tokens.type.bodyStrong, tokens.color.text, Modifier.weight(1f), overflow = ELIDE_MIDDLE)
+                GlyphAction(KamprIcons.cross, dismiss, tokens.color.mute, POINTER_TOUCH, chip = 22.dp, onClick = onDismiss)
+            }
             KText(question ?: "Waiting for an answer", tokens.type.captionSmall, tokens.color.dim)
         } else {
             Row(
@@ -609,6 +616,7 @@ fun BlockedNotice(
                     KText(paneTitle(pane), tokens.type.paneTitle, tokens.color.text, overflow = ELIDE_MIDDLE)
                     KText(question ?: "Waiting for an answer", tokens.type.caption, tokens.color.dim)
                 }
+                GlyphAction(KamprIcons.cross, dismiss, tokens.color.mute, LANDSCAPE_TOUCH, onClick = onDismiss)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
                 PrimaryAction(

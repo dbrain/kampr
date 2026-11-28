@@ -7,12 +7,14 @@ import androidx.compose.runtime.setValue
 import dev.kampr.shared.model.Area
 import dev.kampr.shared.model.ConnectionStatus
 import dev.kampr.shared.model.ContainerWatch
+import dev.kampr.shared.model.Dismissed
 import dev.kampr.shared.model.Fold
 import dev.kampr.shared.model.Folds
 import dev.kampr.shared.model.Herd
 import dev.kampr.shared.model.KamprStore
 import dev.kampr.shared.model.ResumeOffers
 import dev.kampr.shared.model.SeenDone
+import dev.kampr.shared.model.TriageItem
 import dev.kampr.shared.model.anyAdoptionFailing
 import dev.kampr.shared.model.closed
 import dev.kampr.shared.model.createdPane
@@ -150,6 +152,7 @@ private const val KEY_CONFIRM = "confirm.risky"
 private const val KEY_LAST_PANE = "pane.last"
 private const val KEY_AGENT_VIEW = "pane.agent.view"
 private const val KEY_FOLDS = "herd.folds"
+private const val KEY_DISMISSED = "triage.dismissed"
 
 private const val RECENT_ADDRESSES = 5
 
@@ -241,6 +244,19 @@ class AppState(
     fun showArea(node: String, area: Area) {
         folds = folds.showing(node, area)
         prefs.set(KEY_FOLDS, folds.encode())
+    }
+
+    var dismissed: Dismissed by mutableStateOf(Dismissed.decode(prefs.get(KEY_DISMISSED)))
+        private set
+
+    fun triage(): List<TriageItem> = store.triage().filterNot(dismissed::hides)
+
+    fun dismiss(item: TriageItem) = keepDismissed(dismissed.with(item))
+
+    private fun keepDismissed(next: Dismissed) {
+        if (next == dismissed) return
+        dismissed = next
+        prefs.set(KEY_DISMISSED, next.encode().ifEmpty { null })
     }
 
     // Survives a reload because the browser is where this client is most often left open: an
@@ -930,6 +946,7 @@ class AppState(
                 followLaunchedAgent(it)
                 openWhenItArrives(it)
                 reconcileNotifications(it)
+                keepDismissed(dismissed.prune(it))
                 askResumes(it)
             }
         }

@@ -45,6 +45,7 @@ fun HerdPortrait(
     triage: List<TriageItem>,
     onOpenPane: (String) -> Unit,
     onApprove: ((String, String?) -> Unit)?,
+    onDismiss: (TriageItem) -> Unit = NO_DISMISS,
     onResync: () -> Unit = {},
     scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
@@ -75,7 +76,7 @@ fun HerdPortrait(
             }
             if (triage.isNotEmpty()) {
                 Box(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 14.dp)) {
-                    TriageList(triage, compact = false, onOpen = onOpenPane, onApprove = onApprove)
+                    TriageList(triage, compact = false, onOpen = onOpenPane, onApprove = onApprove, onDismiss = onDismiss)
                 }
             }
             if (groups.isEmpty()) {
@@ -113,6 +114,7 @@ fun HerdLandscape(
     triage: List<TriageItem>,
     onOpenPane: (String) -> Unit,
     onApprove: ((String, String?) -> Unit)?,
+    onDismiss: (TriageItem) -> Unit = NO_DISMISS,
     onResync: () -> Unit = {},
     scroll: ScrollState = rememberScrollState(),
     modifier: Modifier = Modifier,
@@ -170,7 +172,7 @@ fun HerdLandscape(
                             Column(Modifier.width(plan.width)) {
                                 if (column === columns.first() && triage.isNotEmpty()) {
                                     Box(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
-                                        TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+                                        TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null, onDismiss = onDismiss)
                                     }
                                 }
                                 for (group in column) {
@@ -188,6 +190,8 @@ fun HerdLandscape(
 }
 
 private val COLUMN_GAP = 10.dp
+
+private val NO_DISMISS: (TriageItem) -> Unit = {}
 
 private fun List<NodeGroup>.balancedColumns(count: Int, folds: Folds): List<List<NodeGroup>> {
     val columns = List(count) { mutableListOf<NodeGroup>() }
@@ -221,6 +225,7 @@ fun HerdSidebar(
     deviceDetail: String,
     onOpenPane: (String) -> Unit,
     onSettings: () -> Unit,
+    onDismiss: (TriageItem) -> Unit = NO_DISMISS,
     onResync: () -> Unit = {},
     collapsed: Boolean = false,
     onCollapsed: (Boolean) -> Unit = {},
@@ -299,7 +304,7 @@ fun HerdSidebar(
             }
             if (triage.isNotEmpty()) {
                 Box(Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp)) {
-                    TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null)
+                    TriageList(triage, compact = true, onOpen = onOpenPane, onApprove = null, onDismiss = onDismiss)
                 }
             }
             if (groups.isEmpty()) {
