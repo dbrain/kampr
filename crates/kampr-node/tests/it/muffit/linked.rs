@@ -138,6 +138,48 @@ async fn the_terminal_running_the_tui_is_the_session_s_pane() {
     client.pane(&terminal, |p| p["agent"] != "muffit").await;
 }
 
+/// The operator opens a shell and only then types `muffit` in it, so the pane is already watched
+/// when the TUI links it: the watch has to change to muffit's conversation, controls and all.
+#[tokio::test]
+async fn a_tui_started_in_a_watched_terminal_brings_the_session_s_controls() {
+    let fake = Fake::start(vec![]).await;
+    fake.set_transcript("t1", vec![text(1, "user", "hello")]);
+    let h = Harness::start(&fake).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = h.client().await;
+    let (terminal, pid) = client.terminal(dir.path()).await;
+    client.watch(&terminal).await;
+
+    let mut row = session("t1", "running", Some("from the tui"));
+    row["clients"] = tui(pid);
+    fake.insert(row);
+    client.pane(&terminal, |p| p["agent"] == "muffit").await;
+    eventually("the node watches the session", || {
+        fake.seen()
+            .into_iter()
+            .any(|s| s.path == "/sessions/t1/attach")
+            .then_some(())
+    })
+    .await;
+    fake.status(Value::Null, json!([]));
+    let controls = client
+        .frame("muffit's controls on the terminal", |f| {
+            f["t"] == "convo.controls" && f["pane"] == terminal
+        })
+        .await;
+    assert!(
+        controls["controls"]
+            .as_array()
+            .is_some_and(|c| c.iter().any(|c| c["id"] == "model")),
+        "{controls}"
+    );
+    client
+        .frame("muffit's facts on the terminal", |f| {
+            f["t"] == "convo.session" && f["pane"] == terminal && f["facts"]["model"] == "mock"
+        })
+        .await;
+}
+
 #[tokio::test]
 async fn a_node_that_goes_takes_the_terminals_it_started_with_it() {
     let fake = Fake::start(vec![]).await;

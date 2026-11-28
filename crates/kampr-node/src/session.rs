@@ -290,6 +290,8 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
     book_rx.borrow_and_update();
 
     let mut lost = crate::lost::LostFeed::subscribe(&node);
+    let mut links = node.subscribe_herd();
+    links.borrow_and_update();
     let mut changes = node.auth.device_changes();
     let store = crate::device_watch::store(&crate::config::Config::state_db(&node.state_dir));
     let mut store_rx = store.as_ref().map(|w| w.changes.clone());
@@ -339,6 +341,12 @@ pub(crate) async fn run_on_watched<O: Outgoing, I: Incoming>(
                 session.publish_book().await;
             }
             lost = lost.recv() => session.lost(&lost),
+            changed = links.changed() => {
+                if changed.is_err() {
+                    break;
+                }
+                session.relink().await;
+            }
         }
         if outbox.is_closed() {
             break;
@@ -379,6 +387,9 @@ struct PaneHandle {
     tasks: Vec<JoinHandle<()>>,
     scrollback: bool,
     conversation: bool,
+    /// Set only on a local terminal watched for its conversation, which [`Session::relink`] keeps
+    /// following.
+    linked: Option<Linked>,
     reflow: Option<u16>,
     convo: convo::Open,
     /// What this pane's conversation cost to open, on loan from the node for as long as this
@@ -389,6 +400,11 @@ struct PaneHandle {
     followed: convo::Followed,
     _hold: Option<Hold>,
 }
+
+/// The source's own pane a watched terminal's conversation is served from (a muffit TUI's
+/// session), or `None` for the one read off the terminal itself.
+#[derive(Clone, PartialEq)]
+struct Linked(Option<String>);
 
 /// What keeps a pane open across a handover, on whichever side of the mesh streams it. Dropping it
 /// is what releases the pane, so it lives in the [`PaneHandle`] that replaced the old one and goes
@@ -959,50 +975,13 @@ impl Session {
         let warm = self.node.convo_warmth.take(pane);
         let convo = warm.lock().unwrap().journal.clone();
         let followed = convo::followed();
-        let tui = conversation
-            .then(|| session.conversation(&local))
-            .flatten()
-            .filter(|convo| convo.terminal);
-        if let Some(convo) = tui {
-            self.conversations.open(&convo, pane, &self.wire).await;
-        } else if conversation {
-            let for_identity = self.node.journals();
-            let for_marker = self.node.journals();
-            let identity_session = session.clone();
-            let marker_session = session.clone();
-            let held = self
-                .held
-                .entry(pane.to_string())
-                .or_insert_with(convo::held)
-                .clone();
-            let ctx = ConvoCtx {
-                state_dir: self.node.state_dir.clone(),
-                journals: self.node.journals(),
-                panes: session.registry.clone(),
-                herd: self.node.subscribe_herd(),
-                identity: Box::new(move |local| convo::identity(&for_identity, &identity_session, local)),
-                describe: Box::new(move |local| convo::marker_of(&for_marker, &marker_session, local)),
-                wire: self.wire.clone(),
-                global: pane.to_string(),
-                local: local.clone(),
-                warm: warm.clone(),
-                held,
-                followed: followed.clone(),
-                relayed: self.caller == Caller::Hub,
-                hooks: self.node.hooks.clone(),
-            };
-            self.conversations
-                .open(
-                    &crate::conversations::ConversationRef {
-                        source: Arc::new(convo::PaneSource::new(ctx)),
-                        pane: local.clone(),
-                        terminal: true,
-                    },
-                    pane,
-                    &self.wire,
-                )
-                .await;
-        }
+        let linked = match conversation {
+            true => Some(Linked(
+                self.open_terminal_conversation(&session, &local, pane, &warm, &followed)
+                    .await,
+            )),
+            false => None,
+        };
         self.panes.insert(
             pane.to_string(),
             PaneHandle {
@@ -1011,6 +990,7 @@ impl Session {
                 tasks,
                 scrollback,
                 conversation,
+                linked,
                 reflow,
                 convo,
                 warm,
@@ -1019,6 +999,95 @@ impl Session {
                 _hold: hold,
             },
         );
+    }
+
+    /// Opens a watched terminal's conversation: the session its muffit TUI holds when it holds one,
+    /// else the one read off the terminal. Says which source's pane it opened, for [`Self::relink`].
+    async fn open_terminal_conversation(
+        &mut self,
+        session: &Arc<crate::sessions::SessionNode>,
+        local: &str,
+        pane: &str,
+        warm: &convo::Warmth,
+        followed: &convo::Followed,
+    ) -> Option<String> {
+        if let Some(convo) = session.conversation(local).filter(|convo| convo.terminal) {
+            self.conversations.open(&convo, pane, &self.wire).await;
+            return Some(convo.pane);
+        }
+        let for_identity = self.node.journals();
+        let for_marker = self.node.journals();
+        let identity_session = session.clone();
+        let marker_session = session.clone();
+        let held = self
+            .held
+            .entry(pane.to_string())
+            .or_insert_with(convo::held)
+            .clone();
+        let ctx = ConvoCtx {
+            state_dir: self.node.state_dir.clone(),
+            journals: self.node.journals(),
+            panes: session.registry.clone(),
+            herd: self.node.subscribe_herd(),
+            identity: Box::new(move |local| convo::identity(&for_identity, &identity_session, local)),
+            describe: Box::new(move |local| convo::marker_of(&for_marker, &marker_session, local)),
+            wire: self.wire.clone(),
+            global: pane.to_string(),
+            local: local.to_string(),
+            warm: warm.clone(),
+            held,
+            followed: followed.clone(),
+            relayed: self.caller == Caller::Hub,
+            hooks: self.node.hooks.clone(),
+        };
+        self.conversations
+            .open(
+                &crate::conversations::ConversationRef {
+                    source: Arc::new(convo::PaneSource::new(ctx)),
+                    pane: local.to_string(),
+                    terminal: true,
+                },
+                pane,
+                &self.wire,
+            )
+            .await;
+        None
+    }
+
+    /// A muffit TUI is usually started in a terminal somebody is already watching, and leaves it
+    /// while they still are, so a watched terminal's conversation follows the link as the herd
+    /// changes rather than keeping whatever it was at the watch.
+    async fn relink(&mut self) {
+        let watched: Vec<(String, Linked)> = self
+            .panes
+            .iter()
+            .filter_map(|(pane, handle)| Some((pane.clone(), handle.linked.clone()?)))
+            .collect();
+        for (pane, linked) in watched {
+            let Some((session, local)) = self.node.resolve(&pane) else {
+                continue;
+            };
+            let now = session
+                .conversation(&local)
+                .filter(|convo| convo.terminal)
+                .map(|convo| convo.pane);
+            if Linked(now) == linked {
+                continue;
+            }
+            if let Some(old) = self.conversations.take(&pane) {
+                old.stop();
+            }
+            let Some(handle) = self.panes.get(&pane) else {
+                continue;
+            };
+            let (warm, followed) = (handle.warm.clone(), handle.followed.clone());
+            let opened = self
+                .open_terminal_conversation(&session, &local, &pane, &warm, &followed)
+                .await;
+            if let Some(handle) = self.panes.get_mut(&pane) {
+                handle.linked = Some(Linked(opened));
+            }
+        }
     }
 
     /// A conversation with no terminal beside it: it is followed whether or not the watch asked for
@@ -1051,6 +1120,7 @@ impl Session {
                 tasks: Vec::new(),
                 scrollback,
                 conversation,
+                linked: None,
                 reflow: None,
                 convo: crate::convo::open(),
                 warm: crate::convo::warmth(),
@@ -1130,6 +1200,7 @@ impl Session {
                 tasks,
                 scrollback,
                 conversation,
+                linked: None,
                 reflow,
                 convo: convo::open(),
                 // A pane on another host is followed by the node that owns it — this side only
@@ -4175,6 +4246,7 @@ mod tests {
                     tasks,
                     scrollback: false,
                     conversation: false,
+                    linked: None,
                     reflow: None,
                     convo: convo::open(),
                     warm: convo::warmth(),
