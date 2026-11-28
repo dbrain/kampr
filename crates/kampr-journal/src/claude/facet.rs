@@ -142,12 +142,14 @@ fn manual_title(transcript: &Path) -> Option<String> {
 /// finished them all, because a prompt delivered in the ordinary way leaves a `dequeue` rather
 /// than a `remove` — every one of which carries a null `content`, which is why the head has to be
 /// taken by position.
-/// The harness handing itself the result of its own background work. **909 of the 992 `enqueue`
-/// records on this machine are these**, and none of them is a thing a person typed — so a queue
-/// that keeps them attributes the harness's plumbing to the operator, and buries the conversation
-/// under it on a view pinned to its end (#363).
+/// The harness handing itself the result of its own background work: a `<task-notification>`,
+/// and in code mode an `<event>` per script outcome — 5,937 of 6,083 `enqueue` records on this
+/// machine on 2026-11-28, against 15 a person typed. A queue that keeps them attributes the
+/// harness's plumbing to the operator, and buries the conversation under it on a view pinned to
+/// its end (#363).
 fn plumbing(text: &str) -> bool {
-    text.trim_start().starts_with("<task-notification>")
+    let text = text.trim_start();
+    text.starts_with("<task-notification>") || text.starts_with("<event ")
 }
 
 /// A prompt the harness has taken off the queue and answered, proved by the record it wrote for

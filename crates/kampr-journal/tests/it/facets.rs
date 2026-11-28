@@ -339,6 +339,34 @@ fn a_prompt_queued_after_the_facets_were_collected_is_folded_onto_them_rather_th
     );
 }
 
+/// Code mode hands every script's outcome back to the harness as an `<event>` envelope it enqueues
+/// beside the operator's prompts, and a long `Poll` leaves one waiting for minutes, drawn as a
+/// "queued" card in the operator's voice. Both readers of the queue are asked.
+#[test]
+fn the_harness_handing_itself_an_event_is_not_a_queued_prompt() {
+    let plumbing = [
+        "<event nonce=\"K6aCtKPM\" kind=\"repl-eval\" eval=\"238\" status=\"settled\">\n<result>OK</result>\n</event>",
+        "<event nonce=\"T0hWnZAt\" kind=\"repl-status\">\n#3 running\n</event>",
+        "<task-notification>\n<task-id>b88dc5bqu</task-id>\n</task-notification>",
+    ];
+    let mut records = vec![prompt("go and read the log")];
+    records.extend(
+        plumbing
+            .iter()
+            .map(|text| enqueue(text, "2026-11-28T05:22:34.892Z")),
+    );
+    records.push(enqueue("and copy the config across", "2026-11-28T05:22:40.000Z"));
+    let scratch = scratch_claude("code-mode-events", &records);
+
+    let whole = claude().facets(&scratch.transcript, None);
+    assert_eq!(queued_texts(&whole), ["and copy the config across"]);
+
+    let folded = feed(&scratch)
+        .moved(&scratch.transcript, None)
+        .expect("a prompt is queued");
+    assert_eq!(queued_texts(&folded), ["and copy the config across"]);
+}
+
 #[test]
 fn facets_that_have_not_moved_are_not_published_a_second_time() {
     let scratch = scratch_claude(
