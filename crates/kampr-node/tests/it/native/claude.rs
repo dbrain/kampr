@@ -425,8 +425,10 @@ async fn a_terminal_claude_not_yet_spoken_to_continues_as_a_new_conversation() {
             .any(|argv| argv.iter().any(|a| a == "--session-id") && !resumes(argv, id))
     })
     .await;
+    // The fake records `pwd -P`, which on macOS is under /private/tmp.
+    let cwd = std::fs::canonicalize(f.h.work()).unwrap();
     client
-        .pane(&pane, |p| p["cwd"] == json!(f.h.work().display().to_string()))
+        .pane(&pane, |p| p["cwd"] == json!(cwd.display().to_string()))
         .await;
 }
 
